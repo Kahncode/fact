@@ -49,7 +49,7 @@ What a neighbouring task does instead.
 - **status**
   - `planned`: written, not yet approved to run.
   - `ready`: approved. It may start once every `depends_on` task is `done`.
-  - `done`: merged. Set to `done` in the task's own commit, so `main` always shows what is finished. While a task is running, its status lives in fact's DB, not in the file.
+  - `done`: merged. While bootstrapping locally, `do-task` deletes a finished task's file instead of setting this, and a dependency whose file is gone counts as done. Set to `done` in the task's own commit, so `main` always shows what is finished. While a task is running, its status lives in fact's DB, not in the file.
 - **complexity** picks the model:
   - `trivial`: mechanical edits, Sonnet.
   - `standard`: normal feature work, Sonnet.

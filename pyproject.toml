@@ -56,6 +56,7 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/*" = ["S101", "INP001"] # asserts; tests dirs are not packages
+".claude/skills/*" = ["INP001", "T201"] # standalone scripts that print
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests"]
