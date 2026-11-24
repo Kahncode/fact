@@ -4,8 +4,8 @@ Print the next runnable task file (quick and dirty, stdlib only).
 A task is done when its file is gone (deleted on completion) or its status is `done`.
 Candidates are tasks that are not done and whose depends_on are all done, in milestone/number order.
 
-    uv run python .claude/skills/do-task/next_task.py          # the next task path
-    uv run python .claude/skills/do-task/next_task.py --all    # every runnable task
+    uv run python .claude/skills/next-task/next_task.py          # the next task path
+    uv run python .claude/skills/next-task/next_task.py --all    # every runnable task
 """
 
 import re

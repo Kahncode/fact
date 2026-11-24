@@ -17,7 +17,7 @@ The Claude Code skills that fact's agent steps will call (review, update context
 
 - `CLAUDE.md`
 - The skill files Samuel provides
-- `.claude/skills/do-task/SKILL.md`, for the format
+- `.claude/skills/next-task/SKILL.md`, for the format
 
 ## Do
 
