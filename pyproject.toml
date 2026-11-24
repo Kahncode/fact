@@ -1,0 +1,64 @@
+[project]
+name = "fact"
+version = "0.1.0"
+description = "fact: a software factory that turns tasks into reviewed GitHub PRs"
+requires-python = ">=3.15"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["core", "api", "worker", "sdk", "cli"]
+
+[dependency-groups]
+dev = [
+    "black>=26.10.1",
+    "ruff>=0.17.6",
+    "pre-commit>=4.7.0",
+    "detect-secrets>=1.5.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "fact-core",
+    "fact-api",
+    "fact-worker",
+    "fact-sdk",
+    "fact-cli",
+]
+
+[tool.uv.sources]
+fact-core = { workspace = true }
+fact-api = { workspace = true }
+fact-worker = { workspace = true }
+fact-sdk = { workspace = true }
+fact-cli = { workspace = true }
+
+[tool.black]
+line-length = 120
+target-version = ['py315']
+skip-string-normalization = false
+
+[tool.ruff]
+line-length = 120
+target-version = "py315"
+fix = true
+lint.fixable = ["ALL"]
+lint.select = ["ALL"]
+lint.ignore = ["D100", "D101", "D102", "D103", "D104", "D107", "D200", "D202", "D212", "D203", # Docstring rules for public modules, classes, functions.
+    "COM812", "RET505", # Code style customizations
+    "E501", # Line too long (handled by Black)
+    "FIX", "TD", # Fixme and TODO comments
+    "CPY",
+    "TC001", "TC002", "TC003"] # typing-only imports: conflict with FastAPI/pydantic runtime annotations
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/*" = ["S101", "INP001"] # asserts; tests dirs are not packages
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests"]
+addopts = "--import-mode=importlib" # same test file names across packages
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

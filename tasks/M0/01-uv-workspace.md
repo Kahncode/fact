@@ -3,7 +3,7 @@ id: M0-01
 title: "uv workspace and dev tooling"
 type: chore
 complexity: standard
-status: planned
+status: done
 depends_on: []
 human_actions: []
 ---
@@ -35,8 +35,8 @@ The repository becomes a uv workspace on Python 3.15 with five empty packages (`
 
 ## Acceptance criteria
 
-- [ ] `uv sync` succeeds from a fresh clone on Python 3.15.
-- [ ] `uv run python -c "import fact.core, fact.api, fact.worker, fact.sdk, fact.cli"` succeeds.
-- [ ] `uv run ruff check .`, `uv run black --check .` and `uv run pytest` pass, and pytest collects the five import tests.
-- [ ] `uv run pre-commit run --all-files` passes.
-- [ ] No `.sh`, `.bat` or Makefile in the repository.
+- [x] `uv sync` succeeds from a fresh clone on Python 3.15.
+- [x] `uv run python -c "import fact.core, fact.api, fact.worker, fact.sdk, fact.cli"` succeeds.
+- [x] `uv run ruff check .`, `uv run black --check .` and `uv run pytest` pass, and pytest collects the five import tests.
+- [x] `uv run pre-commit run --all-files` passes.
+- [x] No `.sh`, `.bat` or Makefile in the repository.

@@ -1,0 +1,16 @@
+[project]
+name = "fact-cli"
+version = "0.1.0"
+description = "fact cli package"
+requires-python = ">=3.15"
+dependencies = ["fact-core"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fact"]
+
+[tool.uv.sources]
+fact-core = { workspace = true }
