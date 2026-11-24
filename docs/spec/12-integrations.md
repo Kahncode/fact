@@ -1,0 +1,65 @@
+# Integrations
+
+The issue tracker is where work starts and where its status is reported; GitHub is where code lands and humans review. Task ingestion is modular: markdown task files in the repository bootstrap fact until GitHub Issues is live; GitHub Issues is the first tracker, Linear the second, and others plug in behind the same interface.
+
+**Task source interface**: `list_ready()`, `get(issue)`, `comment(issue, text)`, `set_labels(issue, add, remove)`, `write_context(issue, section)`, `link_prs(issue, prs)`, `close(issue)`. Issue keys carry their source, for example `gh:acme/app#123` or `lin:APP-123`, and branch names use a safe form such as `fact/gh-123`.
+
+**Where a project's issues live** (set in `.fact/project.yaml`):
+
+- Single-repository project: that repository's own GitHub issues.
+- Multi-repository project: a repository you point at to hold the tasks, by default the project's home config repository.
+- Or a Linear team or project.
+
+**GitHub Issues (first task source)**
+
+- Trigger: open issues labelled `fact:ready` in the project's task repository. v0 polls every 30 s with the GitHub App's token; webhooks come once fact is hosted.
+- Status: GitHub issues are only open or closed, so progress shows as labels (`fact:running`, `fact:needs-human`) plus comments with the run and PR links.
+- Factory context: written into the issue body between marker comments, so your own text stays untouched.
+- Closing: the factory closes the issue itself once the whole change set is merged, because the task repository can differ from the code repositories.
+- Access: the fact GitHub App covers issues, PRs and checks.
+
+**Linear (second task source)**
+
+- Trigger: the factory picks up only issues labelled `fact:ready`, in a Linear team or project mapped to a factory project. Issues without it can be written, planned and refined freely. v0 polls the Linear API every 30 s; webhooks come with hosting. Triage then picks the project's workflow for the issue.
+- On start: comment with the run link; move the issue to In Progress.
+- On PRs opened: comment with the PR links; move to In Review.
+- On merge of the whole change set: move to Done.
+- On failure or a waiting gate: comment saying what is needed.
+
+**Labels**, with the same names in every task source (label groups in Linear, plain labels in GitHub):
+
+| Group | Labels | Set by | Meaning |
+| --- | --- | --- | --- |
+| fact | `fact:ready` | You (or the planner, when you say so) | The factory may pick this issue up |
+| fact | `fact:running`, `fact:needs-human` | The factory | A run is in progress; a run is waiting on you |
+| Type | `type:incident`, `type:bug`, `type:feature`, `type:chore` | You or the planner | Picks the workflow in triage; one per issue |
+
+Removing `fact:ready` from an issue with a run in progress does not stop the run; dropping it in the UI does.
+
+**GitHub**
+
+- Auth: a fact GitHub App from v0, installed on your repositories (contents, pull requests and issues read and write; checks and metadata read). PRs and comments are authored by `fact[bot]`, so you can review and approve them yourself.
+- Branch `fact/<ISSUE-KEY>` in every touched repo; the factory never pushes to a default branch.
+- PR description: the issue, the spec, what changed, test results, the run link, cost, and links to the sibling PRs.
+- CI: poll the checks API until all checks finish; failures go back to the implement step with the logs.
+- Comments: a PR comment that mentions the factory sends a signal to the run, which starts an address-comment session.
+- Merge: done by the factory, with no agent, when the change set is classified auto\_merge and CI is green; otherwise you merge. The factory's own repo always needs your merge.
+
+**GitHub App setup (v0)**
+
+| Setting | Value |
+| --- | --- |
+| Homepage URL | `https://github.com/Kahncode/fact` |
+| Callback URL, OAuth during installation, device flow | Callback URL http://localhost:8000/github/callback (a placeholder GitHub requires; unused); OAuth during installation and device flow off |
+| Webhook | Off in v0, which polls the same events through the API; on once fact is hosted (or locally through a smee.io forwarding channel) |
+| Contents | Read and write |
+| Pull requests | Read and write |
+| Issues | Read and write |
+| Checks, Commit statuses, Actions | Read-only |
+| Metadata | Read-only (mandatory) |
+| Workflows | Read and write (agents may change any file, including `.github/workflows/`) |
+| Everything else, organization and account permissions | No access |
+| Events | Subscribed now, delivered once the webhook is on: Issues, Issue comment, Label, Sub issues (if listed), Pull request, Pull request review, Pull request review comment, Pull request review thread, Check run, Check suite, Status, Workflow run, Push |
+| Installable by | Only this account |
+
+After creating it: generate a private key (kept outside any repository), note the App ID, and install it on selected repositories only (Kahncode/fact first). The worker reads `FACT_GITHUB_APP_ID` and `FACT_GITHUB_APP_PRIVATE_KEY_PATH` from `.env`.
