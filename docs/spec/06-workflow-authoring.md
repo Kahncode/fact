@@ -1,0 +1,114 @@
+# Workflow authoring
+
+Workflows are Python code built from a small library of reusable steps. Prompts and settings are data, so many changes need no code change at all.
+
+**Three layers, changed at three speeds**
+
+| Layer | Lives in | Example change | Takes effect |
+| --- | --- | --- | --- |
+| Config and prompts | `.fact/project.yaml` and `.fact/prompts/` in the project's home repository; `.fact/repo.yaml` in each repository | Better implement prompt, new test command, cheaper model | Next step that reads it, even in a running run |
+| Step library | `fact/steps/` in the factory repo (activities, exposed as `fact.sdk`) | New `run_e2e` step, better PR description | New activity attempts once the worker restarts |
+| Workflow code | `.fact/workflows/` in the project's home repository | Add a review stage, change a loop | New runs only; runs in flight finish on their pinned version |
+
+**Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `human_gate`, `notify`, `issue_update`.
+
+**Stage manifest**: each workflow class declares its stages as a static list (id, label, kind, and loop-back edges). The UI draws the expected graph from it and lays the run's real steps over it. Temporal itself has no static graph of a code workflow, so this is how R12 is met.
+
+**Changing a workflow**
+
+1. Open an issue against the factory project; the factory itself can do the work.
+2. The PR's CI runs unit tests plus Temporal replay tests against recorded histories of recent runs.
+3. You merge. `fact upgrade` starts a worker on the new version.
+4. New runs use the new version. Runs in flight stay pinned to the old worker until they finish, then it stops.
+
+In v0, if nothing is in flight, the upgrade is a plain restart.
+
+### Per-project workflows and triage
+
+Each project has its own catalog of workflows, and a triage step picks one for every incoming issue. An incident fix and a feature in the same project can follow different paths.
+
+**Workflows are Python, one or more per project.** A project's workflows live in `.fact/workflows/*.py` in the project's home repository, never in the factory repo, and are built from the factory's step library. A decorator records each workflow's stages so the UI can draw it.
+
+**Where projects live.** Each project has a home repository with a `.fact/` folder: `project.yaml` (its repositories and merge order, task source, runner pool, budgets, merge policy, triage rules), `workflows/*.py` and `prompts/`. The factory repo holds only the factory, its step library (`fact.sdk`) and a registry in `fact.yaml` mapping each project to its home repository.
+
+- **Single-repository project**: the home is that repository.
+- **Multi-repository project**: the home is a small dedicated config repository (for example `<product>-fact`) by default, so changing a workflow never needs a PR on product code. Pointing the home at one of its repositories, such as the backend, is also allowed.
+- **Per-repository commands** (setup, lint, test, build) live in each repository's own `.fact/repo.yaml`, so they change together with that repository's code.
+- **Loading and pinning**: each project gets its own workflow worker and task queue (`wf-<project>`), which loads its workflows from a checkout of the home repository at a fixed SHA. A run is pinned to that SHA plus the factory version. Activities still run in the control and sandbox zones.
+- **Changing a project's workflows** is a PR on its home repository, which the factory can make itself like any other change.
+- **Trust**: project workflow code runs in a factory worker, so only projects you own get workflow code; a client project could later be limited to configuration only.
+
+**Versions are pinned, with no upgrades.** A run always finishes on the workflow version it started on. To move a run to newer code, you drop it in the UI and restart it on the latest version. Dropping keeps the run's branches and PRs in every repository, so the new run picks up where the old one left off: it starts from those branches, reuses the open PRs, and gets a handoff note with the spec, the last step reached and a summary of the old run's transcripts. Each worker version keeps running until its last run finishes or is dropped, and the UI lists versions with their run counts.
+
+**Long human waits are fine.** A gate is a Temporal wait on a signal or update. It can last weeks, costs nothing while waiting, and survives restarts. The only cost is that its worker version has to keep running until the run ends.
+
+**Planning comes first.** Refresh, grilling, triage, the plan and the subtask breakdown all happen in the Planning phase (below). An execution workflow starts only once its issue holds an approved, or auto-approved, plan.
+
+**Example: two workflows in one project**
+
+| Stage | `feature` | `incident-fix` |
+| --- | --- | --- |
+| Plan approval gate | Yes | Skipped |
+| Implement → tests | Yes | Yes |
+| Deploy preview | No | Yes: the project's preview command (for example a staging deploy or a preview build) |
+| Gate | Approve spec | "Verified on preview", with the preview link |
+| PRs → CI → review → merge | Yes | Yes, with a higher notification priority |
+
+Preview deploys are never left to an agent: each project configures them as steps with its own conditions (some projects get previews from external tools when a dev branch is pushed). They will be designed when the first project needs them.
+
+### Steps and acceptance
+
+Checks are run by the factory with the project's own frameworks, never reported by an agent, and each failure is fed to a new agent session in the same sandbox. Everything up to a clean, reviewed change happens before any PR is opened.
+
+```python
+@workflow.defn
+class Standard(FactWorkflow):
+    stages = ["implement", "checks", "review", "update_context", "classify", "open_prs", "ci", "merge"]
+
+    @workflow.run
+    async def run(self, issue: Issue) -> RunResult:
+        await self.agent("implement", prompt="implement.md")
+        await self.until_green(["lint", "test"], fix_prompt="fix_checks.md", max_attempts=3)
+
+        review = await self.agent("review", prompt="review.md")
+        if review.findings:
+            await self.agent("address_review", prompt="address_review.md", context=review)
+            await self.until_green(["lint", "test"], fix_prompt="fix_checks.md", max_attempts=3)
+
+        await self.agent("update_context", prompt="update_context.md")
+        route = await self.classify()               # "auto_merge" or "human_review"
+        prs = await self.open_change_set(label=route)
+        await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
+
+        # Open until merged or closed; each @fact comment starts a new session
+        async for comment in self.comments_until_merged(prs, auto_merge=(route == "auto_merge")):
+            await self.agent("address_comment", prompt="address_comment.md", context=comment)
+            await self.until_green(["lint", "test"], fix_prompt="fix_checks.md", max_attempts=3)
+            await self.push(prs)
+            await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
+```
+
+- **Checks**: `until_green` runs the project's lint and test commands (for example `ruff`, `pytest`) as shell steps in the run sandbox. On failure, the output goes to a fresh fix session; it repeats up to `max_attempts`, then the run pauses and notifies you.
+- **Sessions**: each agent role (implement, fix, review, address review, update context, address comment) is its own session, in the same sandbox and on the same branches.
+
+  **Update context**: after the review and before classifying, an agent session updates the repository's context files (`CLAUDE.md` or `AGENTS.md`, `docs/`) to match what the change did, as part of the same branch. Context lives entirely in the repositories for now.
+- **Classify**: rules first (project policy, paths touched, diff size; the factory's own repo is always `human_review`), then an LLM classifier for what the rules leave open. The result is a label on every PR of the change set.
+- **Merge**: in v0 you always merge; the classification (high or low risk, from the review agent and the rules) is shown as a label and in the inbox. From a later version, a project can opt in to automatic merges for low-risk change sets: with no agent involved, fact checks that CI passed on the exact head commit, then merges in the recorded repository order.
+- **Comments**: a PR comment that mentions the factory sends a signal to the run, which stays open until its PRs merge or close. The fact GitHub App sees every comment; v0 finds them by polling with the App's token (no public URL needed), webhooks come once fact is hosted. Comments may use `/fact` or @fact.
+
+### Review evidence and extra gates
+
+Every PR carries the evidence a reviewer needs, built by the factory from run data rather than written by an agent, and extra gates plug in as more checks with capped fix loops.
+
+| Item | What it is | Phase |
+| --- | --- | --- |
+| Scripted PR description | Title and summary written by the agent as a step output; the rest (issue, refreshed context, check results, run link, sibling PRs) filled in from run data by a template | v0 |
+| Cost comment | A PR comment with time and cost per step and per harness and model | v0 |
+| Review checklist per project | `.fact/prompts/review.md` with the project's rules; always includes "does the change meet the issue's acceptance criteria" | v0 |
+| Head-SHA guard | Before an automatic merge, confirm CI passed on exactly the commit being merged | v0 |
+| Screenshots | For UI projects, a Playwright screenshot of every screen the change touches, attached to the PR and stored in object storage | Later |
+| Preview link | A running preview of the change linked from the PR, using the project's preview deploy command | Later (v0 only for `incident-fix`) |
+| Architecture diff | A generated before-and-after diagram of the components the change touches | Later |
+| Static analysis | SonarCloud (or similar) findings read from the PR's checks, fed to a fix session, at most 3 passes | Later |
+
+All evidence files go to object storage; the PR and the run graph link to them.
