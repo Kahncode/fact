@@ -1,0 +1,17 @@
+[project]
+name = "fact-worker"
+version = "0.1.0"
+description = "fact worker package"
+requires-python = ">=3.15"
+dependencies = ["fact-core", "fact-sdk"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fact"]
+
+[tool.uv.sources]
+fact-core = { workspace = true }
+fact-sdk = { workspace = true }
