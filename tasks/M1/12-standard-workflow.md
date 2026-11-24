@@ -33,7 +33,7 @@ fact has a first real workflow. `fact.sdk` gives workflow authors a base class w
     - `open_change_set(title, summary)`.
 
     The helpers call activities by name (so `fact.sdk` does not import the worker), with the right task queue, timeouts from the input, and no Temporal retries for agent steps (retry only infrastructure errors on shell and control steps). Attempt numbers are tracked per stage.
-- A `mark_task_done` control activity: `FileTaskSource.mark_done` on the worktree, then a commit `<id>: mark done`. PRs are squash-merged, so the PR becomes one commit.
+- A `mark_task_done` control activity: `FileTaskSource.mark_done` on the worktree, then a commit `chore(<id>): mark done`. PRs are squash-merged, so the PR becomes one commit.
 - Control activities `record_run_started` and `record_run_finished`, calling the runs API.
 - `.fact/workflows/standard.py`, a `Standard` workflow with stages `prepare`, `implement`, `checks`, `open_pr`. If the checks loop is exhausted, the run ends with outcome `needs_human` and no PR. M2 turns that into a gate.
 - Tests with `WorkflowEnvironment.start_time_skipping()` and fake activities registered under the real names:

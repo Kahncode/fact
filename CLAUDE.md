@@ -27,6 +27,7 @@ Some of these folders appear only as the M0 tasks create them.
 - Temporal workflow code is deterministic: no I/O, clock or randomness in workflows. All side effects go in activities.
 - Never put logs, transcripts or diffs in Temporal payloads. Store them in the artifact store and pass references.
 - Secrets live only in `.env` (git-ignored). Never commit keys or tokens.
+- Commit messages and PR titles follow Conventional Commits: `type(scope): subject`.
 - Tests go in the same commit as the code they test.
 
 ## Before you commit

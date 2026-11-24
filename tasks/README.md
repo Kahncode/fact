@@ -65,7 +65,7 @@ The `do-task` skill runs a task with Claude Code. From late M1, `fact run task:<
 3. Read `CLAUDE.md`, the task, and only what its "Read first" lists.
 4. Implement until every acceptance criterion holds and lint, format and tests pass.
 5. Update the context (`CLAUDE.md`, `docs/spec/`, READMEs) where the change made it wrong. Set `status: done`.
-6. Commit and open a PR titled `<id>: <title>`. PRs are squash-merged, so each task lands on `main` as one commit with its context update. A person merges it.
+6. Commit and open a PR titled `<type>(<id>): <title>` (conventional commits; `feature`→`feat`, `chore`→`chore`, `bug`→`fix`). PRs are squash-merged, so each task lands on `main` as one commit with its context update. A person merges it.
 
 ## How to split work
 
