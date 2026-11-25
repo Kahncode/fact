@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "fact: pin main",
+      "detail": "Fetch origin and pin origin/main as the factory version (fact use main)",
+      "type": "process",
+      "command": "uv",
+      "args": ["run", "fact", "use", "main"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "panel": "shared", "clear": true }
+    }
+  ]
+}

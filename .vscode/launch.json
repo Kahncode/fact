@@ -2,6 +2,33 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "fact dev (pinned main)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "fact.cli.main",
+      "args": ["dev", "--pinned"],
+      "preLaunchTask": "fact: pin main",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": false,
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    {
+      "name": "fact dev (local)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "fact.cli.main",
+      "args": ["dev"],
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true,
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    {
       "name": "Task loop",
       "type": "debugpy",
       "request": "launch",
