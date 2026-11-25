@@ -51,7 +51,7 @@ def test_api_url_maps_wildcard_hosts_to_loopback(host: str, url: str) -> None:
 
 def test_home_expansion_and_derived_paths() -> None:
     s = Settings()
-    assert s.data_dir == Path.home() / "fact"
+    assert s.data_dir == Path.home() / ".fact"
     assert s.db_path == s.data_dir / "fact.db"
     assert s.temporal_db_path == s.data_dir / "temporal.db"
     assert s.artifacts_dir == s.data_dir / "artifacts"

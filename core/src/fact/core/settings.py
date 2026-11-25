@@ -174,7 +174,7 @@ class Settings(BaseSettings):
     env: AppEnv = AppEnv.LOCAL
     log_level: LogLevel | None = None  # None: DEBUG in local and dev, INFO elsewhere
     log_gcp: bool = False  # JSON logs shaped for Google Cloud Logging
-    data_dir: Path = Path("~/fact")
+    data_dir: Path = Path("~/.fact")
     commit_author_name: str = "fact"
     commit_author_email: str = "fact"
     github_app_id: str | None = None  # App ID or Client ID; both are accepted as the JWT issuer

@@ -8,7 +8,7 @@ A runner pool decides where a run's sandbox lives and a harness decides which co
 
 | Profile | Isolation | When | Phase |
 | --- | --- | --- | --- |
-| `local-worktree` | Git worktrees in `~/fact/workspaces/<run>`; runs as your user | Trusted repos, permission checks left on | v0 |
+| `local-worktree` | Git worktrees in `~/.fact/workspaces/<run>`; runs as your user | Trusted repos, permission checks left on | v0 |
 | `local-docker` | Container with the workspace mounted and only the secrets it needs | Any step that runs an agent with permission checks off | v1 |
 | `remote` | Sandbox provider or an SSH box | Parallel runs, off-laptop | Later |
 

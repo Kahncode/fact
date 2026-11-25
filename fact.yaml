@@ -1,7 +1,7 @@
 # fact global settings and project registry. Defaults are written out; override per environment in
 # fact.<env>.yaml, or with FACT_* environment variables (nesting with "__", e.g. FACT_TEMPORAL__ADDRESS).
 # env comes from FACT_ENV (local, test, dev, prod); default local.
-data_dir: ~/fact
+data_dir: ~/.fact
 temporal:
   address: localhost:7233
   namespace: default
