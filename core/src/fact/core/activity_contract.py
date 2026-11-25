@@ -8,7 +8,7 @@ under these names and takes these inputs. Everything here crosses the Temporal b
 from typing import Literal
 
 from fact.core.enums import RunOutcome, StepOutcome
-from fact.core.types import Complexity, RouteOverride, Task, WorkspaceHandle
+from fact.core.types import Complexity, PRRef, RouteOverride, Task, WorkspaceHandle
 from pydantic import BaseModel, ConfigDict, Field
 
 CONTROL_QUEUE = "control"  # holds the GitHub App and the API; workspace, PR and bookkeeping steps
@@ -21,6 +21,7 @@ AGENT_STEP = "agent_step"
 SHELL_STEP = "shell_step"
 OPEN_CHANGE_SET = "open_change_set"
 MARK_TASK_DONE = "mark_task_done"
+POST_COST_COMMENT = "post_cost_comment"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 
@@ -89,6 +90,11 @@ class MarkTaskDoneInput(_Input):
     task: Task
     handle: WorkspaceHandle
     home_repo: str | None = None  # full name in `handle.repos` holding `.fact/` and the tasks; None: the first
+
+
+class PostCostCommentInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # each gets the run's cost comment, created or updated in place
 
 
 class RunStartedInput(_Input):

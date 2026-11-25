@@ -10,7 +10,7 @@ Workflows are Python code built from a small library of reusable steps. Prompts 
 | Step library | Activities in `fact.worker`; workflow helpers in `fact.sdk` call them by name through `fact.core.activity_contract` | New `run_e2e` step, better PR description | New activity attempts once the worker restarts |
 | Workflow code | `.fact/workflows/` in the project's home repository | Add a review stage, change a loop | New runs only; runs in flight finish on their pinned version |
 
-**Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `human_gate`, `notify`, `issue_update`. Bookkeeping activities that are not reported as steps: `mark_task_done`, `record_run_started`, `record_run_finished`, `teardown_workspace`. `FactWorkflow.execute` tears the workspace down when the run ends `pr_opened`, `merged`, `closed` or `abandoned`, once its work is pushed. Any other end leaves it on disk for a person, still holding its branch and unpushed commits; nothing removes it automatically. `prepare` runs once per run: called again it returns the same workspace, so a run's branches and PR never change.
+**Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `human_gate`, `notify`, `issue_update`. Bookkeeping activities that are not reported as steps: `mark_task_done`, `post_cost_comment`, `record_run_started`, `record_run_finished`, `teardown_workspace`. `FactWorkflow.execute` tears the workspace down when the run ends `pr_opened`, `merged`, `closed` or `abandoned`, once its work is pushed. Any other end leaves it on disk for a person, still holding its branch and unpushed commits; nothing removes it automatically. `prepare` runs once per run: called again it returns the same workspace, so a run's branches and PR never change.
 
 **Stage manifest**: each workflow class declares its stages as a static list (id, label, kind, and loop-back edges). The UI draws the expected graph from it and lays the run's real steps over it. Temporal itself has no static graph of a code workflow, so this is how R12 is met. In code: `@stages([Stage(id, label, kind, loops_to=...)])` from `fact.sdk.workflow`.
 
@@ -112,7 +112,7 @@ Every PR carries the evidence a reviewer needs, built by the factory from run da
 | Item | What it is | Phase |
 | --- | --- | --- |
 | Scripted PR description | Title and summary written by the agent as a step output; the rest (issue, refreshed context, check results, run link, sibling PRs) filled in from run data by a template | v0 |
-| Cost comment | A PR comment with time and cost per step and per harness and model | v0 |
+| Cost comment | A PR comment with time and cost per step and per harness and model, updated in place (marker `<!-- fact:cost -->`); `post_cost_comment` right after `open_change_set` | v0 |
 | Review checklist per project | `.fact/prompts/review.md` with the project's rules; always includes "does the change meet the issue's acceptance criteria" | v0 |
 | Head-SHA guard | Before an automatic merge, confirm CI passed on exactly the commit being merged | v0 |
 | Screenshots | For UI projects, a Playwright screenshot of every screen the change touches, attached to the PR and stored in object storage | Later |
