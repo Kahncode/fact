@@ -2,8 +2,8 @@
 Standard: from a task to a PR.
 
 Prepare the workspace, implement, loop lint and test with fix sessions until green, mark the task done on the branch,
-open the PR. If the checks never go green, or the implement agent reports itself blocked, the run ends `needs_human`
-with no PR (M2 turns that into a gate).
+open the PR and comment the run's cost on it. If the checks never go green, or the implement agent reports itself
+blocked, the run ends `needs_human` with no PR (M2 turns that into a gate).
 """
 
 from temporalio import workflow
@@ -46,4 +46,5 @@ class Standard(FactWorkflow):
             return RunResult(outcome=RunOutcome.NEEDS_HUMAN, summary=limit_text(summary, SUMMARY_BYTES))
         await self.mark_task_done()
         prs = await self.open_change_set(*self.pr_text(implemented.summary))
+        await self.post_cost_comment(prs)
         return RunResult(outcome=RunOutcome.PR_OPENED, prs=prs, summary=", ".join(pr.url for pr in prs))

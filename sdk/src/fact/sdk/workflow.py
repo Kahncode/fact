@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ActivityError, ApplicationError, FailureError
+from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         CONTROL_QUEUE,
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
+        POST_COST_COMMENT,
         PREPARE_WORKSPACE,
         RECORD_RUN_FINISHED,
         RECORD_RUN_STARTED,
@@ -31,13 +32,14 @@ with workflow.unsafe.imports_passed_through():
         Check,
         CheckResult,
         MarkTaskDoneInput,
-        OpenChangeSetInput,
+        PostCostCommentInput,
         RunFinishedInput,
         RunStartedInput,
         ShellStepInput,
     )
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+    from fact.sdk.change_set import change_set_input, default_title, text_output
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
     from fact.sdk.stages import Stage, stages
@@ -49,7 +51,6 @@ NO_RETRY = RetryPolicy(maximum_attempts=1)  # agent sessions are resumed only by
 INFRA_RETRY = RetryPolicy(  # shell and control steps: only infrastructure errors raise, and those may pass on retry
     initial_interval=timedelta(seconds=5), maximum_interval=timedelta(minutes=2), maximum_attempts=5
 )
-COMMIT_TYPES = {"feature": "feat", "chore": "chore", "bug": "fix"}
 # the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
@@ -210,27 +211,18 @@ class FactWorkflow:
         return await self._control(MARK_TASK_DONE, spec, bool)
 
     async def open_change_set(self, title: str, summary: str) -> list[PRRef]:
-        run = self.input
-        if not run.repos:
-            msg = "the run has no repositories"
-            raise ApplicationError(msg, non_retryable=True)
-        spec = OpenChangeSetInput(
-            run_id=run.run_id,
-            task=run.task,
-            handle=self.handle,
-            branch=self.handle.branches.get(run.repos[0].full_name, run.repos[0].branch),
-            title=title,
-            summary=summary,
-            check_results=self.check_results,
-            run_url=run.run_url,
-        )
+        spec = change_set_input(self.input, self.handle, title, summary, self.check_results)
         return await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
+
+    async def post_cost_comment(self, prs: Sequence[PRRef]) -> None:
+        """Comment the run's time and cost per step and per model on each PR, or update it; best effort."""
+        if prs:
+            await self._record(POST_COST_COMMENT, PostCostCommentInput(run_id=self.input.run_id, prs=list(prs)))
 
     def pr_text(self, fallback_summary: str = "") -> tuple[str, str]:
         """PR title and summary: what an agent wrote to its outputs, else a conventional title from the task."""
         task = self.input.task
-        title = self.pr_title or f"{COMMIT_TYPES.get(task.type, 'feat')}({task.id}): {task.title}"
-        return title, self.pr_summary or fallback_summary or task.title
+        return self.pr_title or default_title(task), self.pr_summary or fallback_summary or task.title
 
     async def _run_checks(self, checks: Sequence[Check], stage_id: str) -> list[tuple[CheckResult, StepResult]]:
         results: list[tuple[CheckResult, StepResult]] = []
@@ -283,16 +275,13 @@ class FactWorkflow:
         except ActivityError as exc:
             workflow.logger.warning("teardown failed for run %s: %s", self._handle.run_id, exc.cause or exc)
 
-    async def _record(self, name: str, arg: RunStartedInput | RunFinishedInput) -> None:
-        """Run bookkeeping is best effort: an API outage must not fail a run that did its work."""
+    async def _record(self, name: str, arg: RunStartedInput | RunFinishedInput | PostCostCommentInput) -> None:
+        """Bookkeeping and evidence are best effort: an API or GitHub outage must not fail a run that did its work."""
         try:
             await self._control(name, arg, type(None))
         except ActivityError as exc:
             workflow.logger.warning("%s failed for run %s: %s", name, arg.run_id, exc.cause or exc)
 
     def _remember_pr_text(self, result: StepResult) -> None:
-        title, summary = result.outputs.get("title"), result.outputs.get("summary")
-        if isinstance(title, str) and title.strip():
-            self.pr_title = title.strip()
-        if isinstance(summary, str) and summary.strip():
-            self.pr_summary = summary.strip()
+        self.pr_title = text_output(result, "title") or self.pr_title
+        self.pr_summary = text_output(result, "summary") or self.pr_summary

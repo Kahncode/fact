@@ -17,6 +17,7 @@ from fact.core.activity_contract import (
     CONTROL_QUEUE,
     MARK_TASK_DONE,
     OPEN_CHANGE_SET,
+    POST_COST_COMMENT,
     PREPARE_WORKSPACE,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
@@ -26,6 +27,7 @@ from fact.core.activity_contract import (
     AgentStepInput,
     MarkTaskDoneInput,
     OpenChangeSetInput,
+    PostCostCommentInput,
     RunFinishedInput,
     RunStartedInput,
     ShellStepInput,
@@ -136,6 +138,10 @@ class FakeActivities:
         self._call(OPEN_CHANGE_SET, spec)
         return [PR]
 
+    @activity.defn(name=POST_COST_COMMENT)
+    async def post_cost_comment(self, spec: PostCostCommentInput) -> None:
+        self._call(POST_COST_COMMENT, spec)
+
     def of(self, name: str) -> list:
         return [arg for n, arg in self.calls if n == name]
 
@@ -149,6 +155,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.teardown_workspace,
         fakes.mark_task_done,
         fakes.open_change_set,
+        fakes.post_cost_comment,
     ]
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(
@@ -208,6 +215,7 @@ async def test_green_path(tmp_path: Path) -> None:
         SHELL_STEP,
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
+        POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         TEARDOWN_WORKSPACE,
     ]
@@ -222,6 +230,8 @@ async def test_green_path(tmp_path: Path) -> None:
     assert pr_spec.summary == "implement done"
     assert pr_spec.run_url == RUN_URL
     assert [(c.name, c.outcome) for c in pr_spec.check_results] == [("lint", "passed"), ("test", "passed")]
+    (cost_spec,) = fakes.of(POST_COST_COMMENT)
+    assert (cost_spec.run_id, cost_spec.prs) == ("run-1", [PR])
     assert _finished(fakes) == RunOutcome.PR_OPENED
 
     if os.environ.get(RECORD_VAR):
@@ -354,6 +364,13 @@ async def test_interrupted_twice_fails_the_run() -> None:
     assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1
     assert _finished(fakes) == RunOutcome.FAILED
     assert fakes.of(TEARDOWN_WORKSPACE) == []
+
+
+async def test_cost_comment_failure_does_not_fail_the_run() -> None:
+    fakes = FakeActivities(broken=POST_COST_COMMENT)
+    result, _ = await _run(fakes, "run-cost-broken")
+    assert result.outcome == RunOutcome.PR_OPENED
+    assert _finished(fakes) == RunOutcome.PR_OPENED
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:

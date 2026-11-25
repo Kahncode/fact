@@ -2,7 +2,7 @@
 
 Temporal workers and activities: runners (where a run's sandbox lives) and harnesses (which coding agent runs in it).
 
-Task queue names, activity names and activity input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `OpenChangeSetInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`) live in `fact.core.activity_contract`, so workflow code in `fact.sdk` never imports this package; the worker modules re-export the old names. `python -m fact.worker` registers `prepare_workspace`, `teardown_workspace`, `open_change_set` and the control activities below on the `control` queue, and `shell_step` and `agent_step` on `sandbox` (at most `concurrency.sandboxes` at once, via `max_concurrent_activities`). It also runs one workflow worker per registered project; see below.
+Task queue names, activity names and activity input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `OpenChangeSetInput`, `PostCostCommentInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`) live in `fact.core.activity_contract`, so workflow code in `fact.sdk` never imports this package; the worker modules re-export the old names. `python -m fact.worker` registers `prepare_workspace`, `teardown_workspace`, `open_change_set`, `post_cost_comment` and the control activities below on the `control` queue, and `shell_step` and `agent_step` on `sandbox` (at most `concurrency.sandboxes` at once, via `max_concurrent_activities`). It also runs one workflow worker per registered project; see below.
 
 ## Workflow loading and versioning
 
@@ -75,6 +75,10 @@ No `env` is passed to the harness yet, so only a Claude Code login found through
 4. Reuses the open PR from `<owner>:<branch>` into the default branch (only its body is replaced) or creates one.
 
 A missing GitHub App, a refusal, and GitHub 401, 404 or 422 are non-retryable `ApplicationError`s; other errors retry. `python -m fact.worker` builds one `GitHubApp` per process when configured and logs `github_app_unavailable` otherwise (then this activity fails and commits use the settings identity).
+
+## Cost comment
+
+`post_cost_comment(PostCostCommentInput)` (`fact.worker.activities.cost_comment.CostCommentActivities(github, api_base_url, http_client)`, `control` queue, not reported as a step; M1-16) reads `GET /api/v1/runs/{run_id}` with its steps and puts the run's time and cost on each PR in `prs`. `cost_comment.render_cost_comment` writes a markdown table of every step (stage, attempt, harness / model, wall-time duration or `running`, human wait, tokens in/out, cost) with a totals row, then a table per harness and model. The comment starts with `<!-- fact:cost -->`: `upsert_comment` pages through the PR's issue comments and updates the one carrying the marker, or creates it. A missing GitHub App, an unknown run (API 4xx) and GitHub 401, 404 or 422 are non-retryable. `FactWorkflow.post_cost_comment(prs)` treats any failure as a warning: the PR is already open. `Standard` calls it right after `open_change_set`, so the comment covers every step except `open_pr`, which is still being recorded.
 
 ## Control activities
 
