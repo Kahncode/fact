@@ -7,12 +7,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from fact.core.activity_contract import AGENT_STEP, AgentStepInput
+from fact.core.activity_contract import AGENT_INTERRUPTED, AGENT_STEP, AgentStepInput
 from fact.core.enums import StepKind, StepOutcome
 from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
 from fact.worker.harnesses import Harness, HarnessError, HarnessRequest, HarnessResult
-from fact.worker.prompts import PromptError, output_schema, render_prompt
+from fact.worker.prompts import PromptError, output_schema, render_prompt, render_resume
 from fact.worker.reporting import TRANSCRIPT_NAME, StepContext, StepReporter
 from fact.worker.routing import choose
 from temporalio import activity
@@ -27,7 +27,7 @@ MAX_TURNS_REASONS = frozenset({"error_max_turns"})  # harness stop reasons meani
 
 class _Progress:
     """
-    Counts assistant turns from the harness's message stream, for heartbeats.
+    Counts assistant turns from the harness's message stream, for heartbeats, and keeps the session id.
 
     Claude Code can send one `assistant` message per content block, all with the same `message.id`, so a turn is a
     distinct id; a message without one counts on its own.
@@ -35,9 +35,12 @@ class _Progress:
 
     def __init__(self) -> None:
         self.turns = 0
+        self.session_id: str | None = None
         self._last_id: object = None
 
     def on_message(self, message: dict[str, Any]) -> None:
+        if isinstance(sid := message.get("session_id"), str):
+            self.session_id = sid
         if message.get("type") != "assistant":
             return
         inner = message.get("message")
@@ -51,7 +54,8 @@ async def _heartbeats(stage_id: str, progress: _Progress) -> None:
     while True:
         await asyncio.sleep(HEARTBEAT_S)
         if activity.in_activity():
-            activity.heartbeat(f"{stage_id}: {progress.turns} turns")
+            # The session id lets the workflow resume the session if this worker dies (see AGENT_INTERRUPTED).
+            activity.heartbeat(f"{stage_id}: {progress.turns} turns", progress.session_id)
 
 
 def _denied(result: HarnessResult) -> str:
@@ -116,14 +120,22 @@ class AgentActivities:
         reporter = self._reporter.step(
             spec.run_id, spec.stage_id, StepKind.AGENT, spec.attempt, harness=route.harness, model=route.model
         )
-        async with reporter as step:
-            await self._run(spec, route, step)
+        progress = _Progress()
+        try:
+            async with reporter as step:
+                await self._run(spec, route, step, progress)
+        except asyncio.CancelledError:
+            details = activity.cancellation_details() if activity.in_activity() else None
+            if details is None or not details.worker_shutdown:
+                raise
+            msg = f"the worker stopped during the {spec.stage_id} session"
+            raise ApplicationError(msg, progress.session_id, type=AGENT_INTERRUPTED, non_retryable=True) from None
         if step.result is None:
             msg = "step ended without a result"
             raise RuntimeError(msg)
-        return step.result
+        return step.result.model_copy(update={"session_id": progress.session_id})
 
-    async def _run(self, spec: AgentStepInput, route: Route, step: StepContext) -> None:
+    async def _run(self, spec: AgentStepInput, route: Route, step: StepContext, progress: _Progress) -> None:
         harness = self._harness(route.harness)
         prompt, schema = self._prompt(spec)
         root = Path(spec.handle.root)
@@ -137,9 +149,11 @@ class AgentActivities:
             max_turns=defaults.max_turns,
             permission_mode=defaults.permission_mode,
             output_schema=schema,
+            resume_session_id=spec.resume_session_id,
         )
         step.log(f"{spec.stage_id}: {route.harness} / {route.model}, prompt {spec.prompt_name!r}, cwd {root}")
-        progress = _Progress()
+        if spec.resume_session_id:
+            step.log(f"resuming session {spec.resume_session_id}: {spec.context}")
         beat = asyncio.create_task(_heartbeats(spec.stage_id, progress))
         try:
             result = await harness.run(request, transcript, progress.on_message)
@@ -180,7 +194,11 @@ class AgentActivities:
             raise ApplicationError(msg, non_retryable=True)
         repo = Path(repos[name])
         try:
-            prompt = render_prompt(repo, spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id)
-            return prompt, output_schema(repo, spec.prompt_name)
+            schema = output_schema(repo, spec.prompt_name)  # a resumed session still owes the original answer
+            if spec.resume_session_id:
+                prompt = render_resume(spec.context)
+            else:
+                prompt = render_prompt(repo, spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id)
         except PromptError as exc:
             raise _non_retryable(exc) from exc
+        return prompt, schema

@@ -2,7 +2,7 @@
 
 This project's workflow code (`*.py`), loaded by its workflow worker from a checkout of this repository. Each workflow subclasses `FactWorkflow` from `fact.sdk.workflow`, declares its stages with `@stages([...])` and imports shared types from `fact.sdk.types`.
 
-- `standard.py`: `Standard` (Temporal type `standard`). Prepare the workspace, run `implement`, loop lint and test with `fix_checks` sessions (at most 3) until green, mark the task done on the branch, open the PR. Outcomes: `pr_opened`; `needs_human` (the implement agent reported itself blocked, or checks never went green; no PR); `failed` (implement errored or hit its turn limit).
+- `standard.py`: `Standard` (Temporal type `standard`). Prepare the workspace, run `implement`, loop lint and test with `fix_checks` sessions (at most 3) until green, mark the task done on the branch, open the PR. `agent` resumes a session once when the worker stopped during it or the agent reports a temporary, retryable block (see `fact.sdk.sessions`). Outcomes: `pr_opened`; `needs_human` (the implement agent reported itself blocked, or checks never went green; no PR); `failed` (implement errored or hit its turn limit).
 
 Workflow code is replayed by Temporal: no I/O, clock or settings reads; timeouts come from `RunInput.limits`. A change to a workflow must keep the recorded histories replaying: `uv run pytest worker/tests/test_standard_workflow.py`, and re-record after an intended change with `FACT_RECORD_HISTORIES=1`.
 

@@ -7,7 +7,7 @@ Workflow code is replayed: it must do no I/O and read no clock; the helpers only
 """
 
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import timedelta
 from typing import Any, ClassVar
 
@@ -35,45 +35,20 @@ with workflow.unsafe.imports_passed_through():
         RunStartedInput,
         ShellStepInput,
     )
-    from fact.core.enums import RunOutcome, StepKind, StepOutcome
+    from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec, limit_text
+    from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
+    from fact.sdk.stages import Stage, stages
+
+__all__ = ["FactWorkflow", "Stage", "failure_context", "stages"]
 
 HEARTBEAT_TIMEOUT = timedelta(minutes=2)  # agent and shell steps heartbeat every 30 s
-NO_RETRY = RetryPolicy(maximum_attempts=1)  # an agent session is never re-run behind the workflow's back
+NO_RETRY = RetryPolicy(maximum_attempts=1)  # agent sessions are resumed only by `FactWorkflow.agent`, deliberately
 INFRA_RETRY = RetryPolicy(  # shell and control steps: only infrastructure errors raise, and those may pass on retry
     initial_interval=timedelta(seconds=5), maximum_interval=timedelta(minutes=2), maximum_attempts=5
 )
 CONTEXT_MAX_BYTES = 32 * 1024  # failure context handed to a fix session
 COMMIT_TYPES = {"feature": "feat", "chore": "chore", "bug": "fix"}
-
-
-@dataclass(frozen=True)
-class Stage:
-    """One node of a workflow's expected graph; `loops_to` is the stage a failure here loops back to."""
-
-    id: str
-    label: str
-    kind: StepKind
-    loops_to: str | None = None
-
-
-def stages[T: type](manifest: Sequence[Stage]) -> Callable[[T], T]:
-    """Class decorator: store the workflow's stage manifest on the class, for the UI to draw."""
-    items = tuple(manifest)
-    ids = [s.id for s in items]
-    if len(set(ids)) != len(ids):
-        msg = f"duplicate stage ids in {ids}"
-        raise ValueError(msg)
-    for stage in items:
-        if stage.loops_to is not None and stage.loops_to not in ids:
-            msg = f"stage {stage.id!r} loops to unknown stage {stage.loops_to!r}"
-            raise ValueError(msg)
-
-    def decorate(cls: T) -> T:
-        cls.stage_manifest = items  # type: ignore[attr-defined]
-        return cls
-
-    return decorate
 
 
 class FactWorkflow:
@@ -143,7 +118,34 @@ class FactWorkflow:
         return self._handle
 
     async def agent(self, stage_id: str, prompt: str, context: str = "") -> StepResult:
-        """Run one fresh agent session on `.fact/prompts/<prompt>.md`. Never retried: branch on its outcome."""
+        """
+        Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.
+
+        The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
+        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried.
+        """
+        resume: str | None = None
+        for resumes in range(MAX_RESUMES + 1):
+            last = resumes == MAX_RESUMES
+            try:
+                result = await self._agent_session(stage_id, prompt, context, resume)
+            except ActivityError as exc:
+                resume = interrupted_session(exc)
+                if resume is None or last:
+                    raise
+                workflow.logger.warning("%s: worker stopped during the session; resuming %s", stage_id, resume)
+                context = INTERRUPTED
+                continue
+            reason = retry_reason(result)
+            if reason is None or last:
+                break
+            workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
+            await workflow.sleep(RESUME_DELAY)
+            resume, context = result.session_id, f"you reported a temporary problem: {reason}"
+        self._remember_pr_text(result)
+        return result
+
+    async def _agent_session(self, stage_id: str, prompt: str, context: str, resume: str | None) -> StepResult:
         run = self.input
         spec = AgentStepInput(
             run_id=run.run_id,
@@ -155,8 +157,9 @@ class FactWorkflow:
             context=context,
             complexity=run.complexity,
             home_repo=run.home_repo,
+            resume_session_id=resume,
         )
-        result = await workflow.execute_activity(
+        return await workflow.execute_activity(
             AGENT_STEP,
             spec,
             result_type=StepResult,
@@ -165,8 +168,6 @@ class FactWorkflow:
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=NO_RETRY,
         )
-        self._remember_pr_text(result)
-        return result
 
     async def until_green(
         self,

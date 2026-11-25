@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fact.core.activity_contract import AGENT_INTERRUPTED
 from fact.core.enums import StepOutcome
 from fact.core.settings import RoutingSettings, Settings
 from fact.core.types import Route, RouteOverride, StepResult, Task, Usage, WorkspaceHandle
@@ -16,6 +17,7 @@ from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, O
 from fact.worker.prompts import BASE_OUTPUT_SCHEMA
 from fact.worker.reporting import StepReporter
 from httpx import AsyncClient
+from temporalio.activity import ActivityCancellationDetails
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -243,7 +245,7 @@ async def test_prompt_schema_adds_fields_to_the_answer(env: Env) -> None:
     await env.run(harness)
     schema = harness.requests[0].output_schema
     assert schema is not None
-    assert set(schema["properties"]) == {"status", "summary", "blocker", "title"}
+    assert set(schema["properties"]) == {"status", "summary", "blocker", "retryable", "title"}
     assert schema["required"] == ["status", "summary", "title"]
 
 
@@ -292,7 +294,7 @@ async def test_heartbeats_carry_turn_count(env: Env, monkeypatch: pytest.MonkeyP
     activity_env.on_heartbeat = lambda *details: beats.append(details)
     await activity_env.run(env.activities(FakeHarness(delay=0.3)).agent_step, env.input())
     assert beats
-    assert beats[-1] == ("implement: 2 turns",)
+    assert beats[-1] == ("implement: 2 turns", "s-1")  # the session id from the init message
 
 
 async def test_cancel_keeps_the_transcript(env: Env) -> None:
@@ -305,6 +307,35 @@ async def test_cancel_keeps_the_transcript(env: Env) -> None:
     step = await env.step()
     assert step["outcome"] == "failed_error"
     assert step["transcript_ref"] == f"runs/{env.handle.run_id}/implement/1/transcript.jsonl"
+
+
+async def test_worker_shutdown_fails_as_interrupted_with_the_session(env: Env) -> None:
+    activity_env = ActivityEnvironment()
+    task = asyncio.create_task(activity_env.run(env.activities(FakeHarness(delay=30)).agent_step, env.input()))
+    await asyncio.sleep(0.3)
+    activity_env.cancel(ActivityCancellationDetails(worker_shutdown=True))
+    with pytest.raises(ApplicationError) as info:
+        await task
+    assert info.value.type == AGENT_INTERRUPTED
+    assert list(info.value.details) == ["s-1"]
+    assert info.value.non_retryable
+    assert (await env.step())["outcome"] == "failed_error"
+
+
+async def test_result_carries_the_session_id(env: Env) -> None:
+    assert (await env.run(FakeHarness())).session_id == "s-1"
+
+
+async def test_resume_sends_the_resume_prompt_and_keeps_the_schema(env: Env) -> None:
+    prompts = Path(env.handle.repos[HOME]) / ".fact" / "prompts"
+    (prompts / "implement.schema.json").write_text('{"properties": {"title": {"type": "string"}}}', encoding="utf-8")
+    harness = FakeHarness()
+    await env.run(harness, resume_session_id="s-0", context="the fact worker running it stopped.")
+    (request,) = harness.requests
+    assert request.resume_session_id == "s-0"
+    assert request.prompt.startswith("Your previous session on this task stopped before it finished: the fact worker")
+    assert request.output_schema is not None
+    assert "title" in request.output_schema["properties"]
 
 
 def test_turns_count_distinct_message_ids() -> None:

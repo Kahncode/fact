@@ -19,6 +19,7 @@ Every agent session ends with a structured answer, a JSON object the harness val
 - `status` (required): `done` makes the step `passed`; `blocked` makes it `needs_human`. A session that ends without a structured answer is `failed_error`.
 - `summary` (required): markdown, the step's summary.
 - `blocker`: when blocked, what stopped the agent and what would unblock it.
+- `retryable`: when blocked, whether a later attempt with nothing changed by a person would likely succeed (a temporary problem). `FactWorkflow.agent` then resumes the session once, after a delay.
 
 `<name>.schema.json` next to a prompt adds fields to that answer: an object with `properties` and an optional `required` list. Larger data belongs in a file the workflow stores as an artifact.
 

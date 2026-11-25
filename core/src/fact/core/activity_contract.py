@@ -25,6 +25,11 @@ RECORD_RUN_FINISHED = "record_run_finished"
 
 Check = Literal["lint", "test", "build", "setup"]
 
+# `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
+# session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
+# `(progress, session_id)`.
+AGENT_INTERRUPTED = "AgentInterrupted"
+
 
 def workflow_queue(project: str) -> str:
     """Task queue (and worker deployment name) of a project's workflow worker."""
@@ -46,6 +51,7 @@ class AgentStepInput(_Input):
     complexity: Complexity = "standard"
     override: RouteOverride | None = None
     home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
+    resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
 
 
 class ShellStepInput(_Input):

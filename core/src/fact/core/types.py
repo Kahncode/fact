@@ -75,6 +75,7 @@ class StepResult(_Model):
     log_ref: ArtifactRef | None = None
     transcript_ref: ArtifactRef | None = None
     usage: Usage = Field(default_factory=Usage)
+    session_id: str | None = None  # agent steps: the harness session, to resume it
 
     @field_validator("summary")
     @classmethod

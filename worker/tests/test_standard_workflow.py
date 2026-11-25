@@ -12,6 +12,7 @@ from types import ModuleType
 
 import pytest
 from fact.core.activity_contract import (
+    AGENT_INTERRUPTED,
     AGENT_STEP,
     CONTROL_QUEUE,
     MARK_TASK_DONE,
@@ -31,6 +32,7 @@ from fact.core.activity_contract import (
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.settings import REPO_ROOT
 from fact.core.types import PRRef, RepoCheckout, RunInput, RunResult, StepResult, Task, WorkspaceHandle, WorkspaceSpec
+from fact.sdk.sessions import MAX_RESUMES
 from fact.worker.loader import sandbox_runner
 from temporalio import activity
 from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
@@ -69,6 +71,7 @@ class FakeActivities:
 
     test_failures: int = 0
     implement_outcome: StepOutcome = StepOutcome.PASSED
+    implement_script: list[StepResult | Exception] = field(default_factory=list)  # first implement sessions, in order
     broken: str | None = None  # name of an activity that raises a non-retryable error
     calls: list[tuple[str, object]] = field(default_factory=list)
 
@@ -96,6 +99,11 @@ class FakeActivities:
     async def agent_step(self, spec: AgentStepInput) -> StepResult:
         self._call(AGENT_STEP, spec)
         implementing = spec.prompt_name == "implement"
+        if implementing and self.implement_script:
+            scripted = self.implement_script.pop(0)
+            if isinstance(scripted, Exception):
+                raise scripted
+            return scripted
         outputs = {"title": "feat(M1-99): add the widget"} if implementing else {}
         outcome = self.implement_outcome if implementing else StepOutcome.PASSED
         return StepResult(outcome=outcome, summary=f"{spec.prompt_name} done", outputs=outputs)
@@ -270,6 +278,54 @@ async def test_blocked_implement_needs_a_human_without_a_pr() -> None:
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
+
+
+RETRYABLE = StepResult(
+    outcome=StepOutcome.NEEDS_HUMAN,
+    summary="rate limited",
+    outputs={"status": "blocked", "retryable": True, "blocker": "API rate limit"},
+    session_id="s-1",
+)
+INTERRUPTED = ApplicationError("worker stopped", "s-1", type=AGENT_INTERRUPTED, non_retryable=True)
+
+
+async def test_retryable_block_resumes_the_session_once() -> None:
+    fakes = FakeActivities(implement_script=[RETRYABLE])
+    result, _ = await _run(fakes, "run-retryable")
+
+    assert result.outcome == RunOutcome.PR_OPENED
+    first, second = fakes.of(AGENT_STEP)
+    assert (first.attempt, first.resume_session_id) == (1, None)
+    assert (second.stage_id, second.attempt, second.prompt_name) == ("implement", 2, "implement")
+    assert second.resume_session_id == "s-1"
+    assert "API rate limit" in second.context
+
+
+async def test_retryable_block_twice_needs_a_human() -> None:
+    fakes = FakeActivities(implement_script=[RETRYABLE, RETRYABLE])
+    result, _ = await _run(fakes, "run-retryable-twice")
+
+    assert result.outcome == RunOutcome.NEEDS_HUMAN
+    assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1  # one resume, never more
+    assert fakes.of(OPEN_CHANGE_SET) == []
+
+
+async def test_interrupted_worker_resumes_the_session() -> None:
+    fakes = FakeActivities(implement_script=[INTERRUPTED])
+    result, _ = await _run(fakes, "run-interrupted")
+
+    assert result.outcome == RunOutcome.PR_OPENED
+    _, resumed = fakes.of(AGENT_STEP)
+    assert (resumed.attempt, resumed.resume_session_id) == (2, "s-1")
+    assert "worker" in resumed.context
+
+
+async def test_interrupted_twice_fails_the_run() -> None:
+    fakes = FakeActivities(implement_script=[INTERRUPTED, INTERRUPTED])
+    with pytest.raises(WorkflowFailureError):
+        await _run(fakes, "run-interrupted-twice")
+    assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1
+    assert _finished(fakes) == RunOutcome.FAILED
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:

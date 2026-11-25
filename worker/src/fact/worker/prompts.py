@@ -27,6 +27,13 @@ BASE_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "summary": {"type": "string", "description": "A few lines of markdown: what you did and why."},
         "blocker": {"type": "string", "description": "When blocked: what stopped you and what would unblock it."},
+        "retryable": {
+            "type": "boolean",
+            "description": (
+                "When blocked: true only if the cause was temporary and outside your control (network, rate limit, a"
+                " flaky service) and a later attempt with nothing changed by a person would likely succeed."
+            ),
+        },
     },
     "required": ["status", "summary"],
 }
@@ -105,3 +112,14 @@ def output_schema(repo_root: Path, name: str) -> dict[str, Any]:
         "properties": {**props, **BASE_OUTPUT_SCHEMA["properties"]},
         "required": base_required + [r for r in required if r not in base_required],
     }
+
+
+RESUME_TEMPLATE = """Your previous session on this task stopped before it finished: $context
+
+The workspace is as you left it. Check its state first (`git status` and `git log` in each repository you touched),
+then continue the task from where you stopped. End with the structured answer, as before."""
+
+
+def render_resume(reason: str) -> str:
+    """Render the prompt that resumes an agent session, saying why it stopped."""
+    return Template(RESUME_TEMPLATE).substitute(context=reason)

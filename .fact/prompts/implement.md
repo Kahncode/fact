@@ -38,3 +38,4 @@ End with the structured answer:
 - `title`: the pull request title, a conventional commit subject for the whole change such as `feat($task_id): <what it adds>`.
 - `summary`: a few lines of markdown for the pull request: what changed, why, and anything a reviewer should check.
 - `blocker`: when blocked, what stopped you and what would unblock it.
+- `retryable`: when blocked, `true` only if the cause was temporary and outside your control (network, rate limit, a flaky service) and trying again later, with nothing changed by a person, would likely succeed. Permissions, a missing tool, an unclear or too large task are never retryable.
