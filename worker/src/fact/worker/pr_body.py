@@ -3,10 +3,10 @@
 from pathlib import Path
 from string import Template
 
-from fact.core.activity_contract import CheckResult
+from fact.core.activity_contract import CheckResult, CriterionResult
 from fact.core.types import Task
 
-__all__ = ["CheckResult", "render_pr_body", "task_link"]
+__all__ = ["CheckResult", "CriterionResult", "render_pr_body", "task_link"]
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "pr_body.md"
 
@@ -29,6 +29,19 @@ def _checks(results: list[CheckResult]) -> str:
     return "\n".join(lines)
 
 
+def _cell(text: str) -> str:
+    """One markdown table cell: pipes escaped, line breaks folded."""
+    return " ".join(text.replace("|", "\\|").split()) or "-"
+
+
+def _criteria(task: Task, reviewed: list[CriterionResult]) -> str:
+    """Render the review's verdict per criterion as a table, else the task's criteria as an unchecked list."""
+    if not reviewed:
+        return "\n".join(f"- [ ] {c}" for c in task.acceptance_criteria) or "(none listed)"
+    rows = [f"| {_cell(c.text)} | {'✅ met' if c.met else '❌ not met'} | {_cell(c.evidence)} |" for c in reviewed]
+    return "\n".join(["| Criterion | Review | Evidence |", "| --- | --- | --- |", *rows])
+
+
 def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     *,
     summary: str,
@@ -37,12 +50,12 @@ def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     default_branch: str,
     check_results: list[CheckResult],
     run_url: str,
+    criteria: list[CriterionResult] | None = None,
 ) -> str:
-    criteria = "\n".join(f"- [ ] {c}" for c in task.acceptance_criteria) or "(none listed)"
     values = {
         "summary": summary.strip() or "(no summary)",
         "task": task_link(task, repo_url, default_branch),
-        "acceptance_criteria": criteria,
+        "acceptance_criteria": _criteria(task, criteria or []),
         "checks": _checks(check_results),
         "run_link": f"[fact run]({run_url})" if run_url else "fact run: (no link)",
     }

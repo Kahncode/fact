@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         AgentStepInput,
         Check,
         CheckResult,
+        CriterionResult,
         MarkTaskDoneInput,
         PostCostCommentInput,
         RunFinishedInput,
@@ -135,12 +136,13 @@ class FactWorkflow:
                 return step
         return None
 
-    async def agent(self, stage_id: str, prompt: str, context: str = "") -> StepResult:
+    async def agent(self, stage_id: str, prompt: str, context: str = "", *, pr_text: bool = True) -> StepResult:
         """
         Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.
 
         The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
-        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried.
+        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried. With `pr_text`
+        off, the session's `title` and `summary` are not taken for the PR (a review describes no change).
         """
         resume: str | None = None
         for resumes in range(MAX_RESUMES + 1):
@@ -160,7 +162,8 @@ class FactWorkflow:
             workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
             await workflow.sleep(RESUME_DELAY)
             resume, context = result.session_id, f"you reported a temporary problem: {reason}"
-        self._remember_pr_text(result)
+        if pr_text:
+            self._remember_pr_text(result)
         return result
 
     async def _agent_session(self, stage_id: str, prompt: str, context: str, resume: str | None) -> StepResult:
@@ -218,8 +221,9 @@ class FactWorkflow:
         spec = MarkTaskDoneInput(run_id=run.run_id, task=run.task, handle=self.handle, home_repo=run.home_repo)
         return await self._control(MARK_TASK_DONE, spec, bool)
 
-    async def open_change_set(self, title: str, summary: str) -> list[PRRef]:
-        spec = change_set_input(self.input, self.handle, title, summary, self.check_results)
+    async def open_change_set(self, title: str, summary: str, criteria: Sequence[CriterionResult] = ()) -> list[PRRef]:
+        """Push and open the PR; `criteria`, from a review, replace the task's plain list in its description."""
+        spec = change_set_input(self.input, self.handle, title, summary, self.check_results, criteria=list(criteria))
         return await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
 
     async def post_cost_comment(self, prs: Sequence[PRRef]) -> None:

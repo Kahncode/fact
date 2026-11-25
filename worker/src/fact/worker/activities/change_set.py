@@ -94,6 +94,7 @@ class ChangeSetActivities:
                 default_branch=repo.default_branch,
                 check_results=spec.check_results,
                 run_url=spec.run_url,
+                criteria=spec.criteria,
             )
             pr = await open_or_update_pr(client, repo, branch=branch, title=spec.title, body=body)
         step.log(f"{'opened' if pr.created else 'updated'} PR #{pr.number}: {pr.url}")

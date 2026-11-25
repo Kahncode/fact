@@ -1,6 +1,6 @@
 """Shared run, step and task types and outcomes, re-exported from `fact.core` for workflow authors."""
 
-from fact.core.activity_contract import Check, CheckResult
+from fact.core.activity_contract import Check, CheckResult, CriterionResult
 from fact.core.enums import RunOutcome, StepKind, StepOutcome
 from fact.core.types import (
     SUMMARY_MAX_BYTES,
@@ -28,6 +28,7 @@ __all__ = [
     "Check",
     "CheckResult",
     "Complexity",
+    "CriterionResult",
     "PRRef",
     "RepoCheckout",
     "Route",
