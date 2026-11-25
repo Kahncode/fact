@@ -3,7 +3,7 @@ id: M1-16
 title: "Cost comment on the PR (first task run by fact)"
 type: feature
 complexity: trivial
-status: planned
+status: done
 depends_on: [M1-15]
 human_actions: 
   - "Run this task with fact itself: fact use main, fact dev --pinned, fact run task:M1-16"
