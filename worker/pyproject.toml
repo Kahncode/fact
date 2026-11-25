@@ -3,7 +3,12 @@ name = "fact-worker"
 version = "0.1.0"
 description = "fact worker package"
 requires-python = ">=3.15"
-dependencies = ["fact-core", "fact-sdk"]
+dependencies = [
+    "fact-core",
+    "fact-sdk",
+    "httpx",
+    "temporalio>=1.36.1",
+]
 
 [build-system]
 requires = ["hatchling"]

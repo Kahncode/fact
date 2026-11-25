@@ -2,8 +2,8 @@
 
 The factory's own repo is its first project, so the running factory must never be the code an agent is editing.
 
-- The factory runs from a release checkout (`~/fact/release`, at a tag). Agents only ever work in worktrees under `~/fact/workspaces/`.
-- Changes to the factory land through a normal run and a human-merged PR, then `fact upgrade` moves the release checkout and starts the new worker version. Runs in flight finish on the old one.
+- The factory runs from a pinned checkout: `fact use <ref>` makes a detached worktree of the factory repo at `<data_dir>/pinned/factory/<sha>` and marks it current, and `fact dev --pinned` runs the API and worker from it. Agents only ever work in worktrees under `<data_dir>/workspaces/`; the runner refuses a workspace inside `pinned_dir` or the running factory checkout.
+- Changes to the factory land through a normal run and a human-merged PR, then `fact use <ref>` and a restart of `fact dev --pinned` start the new worker version. Runs in flight stay pinned to the version they started on and finish on the old one (see `06-workflow-authoring.md` for how pinned versions behave across a restart).
 - Changes to the factory always need a human merge, even if other projects later allow auto-merge.
 
 **Guardrails for every project**

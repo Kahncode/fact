@@ -3,7 +3,16 @@ name = "fact-core"
 version = "0.1.0"
 description = "fact core package"
 requires-python = ">=3.15"
-dependencies = []
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "alembic>=1.20.1",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.16.3",
+    "pyjwt[crypto]>=2.15.1",
+    "pyyaml>=6.0.4",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "structlog>=26.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]

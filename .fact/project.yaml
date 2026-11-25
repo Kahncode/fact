@@ -1,0 +1,9 @@
+name: fact
+repositories:
+  - full_name: Kahncode/fact
+    role: factory
+task_source:
+  kind: files
+  path: tasks
+workflows:
+  default: standard

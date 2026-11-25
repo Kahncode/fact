@@ -228,9 +228,15 @@ __marimo__/
 /redoc.html
 /swagger.html
 
-# Ignore alembic's log/config to avoid local overrides
-alembic.ini
+# alembic.ini is tracked (core/alembic.ini); keep local variants out
+alembic.local.ini
 
 # fact
 *.db
 node_modules/
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/skills
+.claude/skills.*
+.claude/agents
+.claude/agents.*

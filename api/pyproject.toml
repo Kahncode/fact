@@ -3,7 +3,12 @@ name = "fact-api"
 version = "0.1.0"
 description = "fact api package"
 requires-python = ">=3.15"
-dependencies = ["fact-core"]
+dependencies = [
+    "fact-core",
+    "fastapi[standard]",
+    "temporalio>=1.36.1",
+    "uvicorn[standard]",
+]
 
 [build-system]
 requires = ["hatchling"]

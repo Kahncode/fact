@@ -2,7 +2,9 @@
 
 A runner pool decides where a run's sandbox lives and a harness decides which coding agent runs in it; both sit behind small interfaces so new ones plug in without touching workflows.
 
-**Runner interface**: `prepare(workspace_spec) -> handle`, `exec(handle, cmd, env, timeout) -> stream`, `teardown(handle)`, `capabilities()`.
+**Runner interface** (`fact.worker.runners.base.Runner`): `prepare(workspace_spec) -> handle`, `exec(handle, argv, cwd, env, timeout) -> stream`, `teardown(handle)`, `capabilities()`. `argv` is an argument list, never a shell string. `cwd` is relative to the workspace root and must stay inside it. The stream yields `ExecLine` items (merged stdout and stderr) and then exactly one `ExecExit` (`exit_code`, `timed_out`; exit code -1 on timeout). `teardown` is safe to call twice.
+
+**`local-worktree` (built, M1-06)**: keeps a bare mirror per repository at `repos_dir/<owner>/<repo>` (fetched on every prepare) and adds one worktree per repository at `workspaces_dir/<run_id>/<repo name>`, so repo names in one run must be distinct. The task branch is resumed from `origin/<branch>` when it exists, otherwise cut from `origin/<default_branch>`. `prepare` writes `WORKSPACE.md` (folder, repository, role, branch) in the run folder and sets the commit author from `commit_author_name` and `commit_author_email`. Commands run with a minimal environment (`PATH`, `HOME`, `USERPROFILE`, `SYSTEMROOT` plus what the caller passes). On timeout or cancel the whole process tree is killed; on Windows a descendant of an already-dead leader cannot be reached by `taskkill /T`. Run ids, repository names and branch names are validated, and teardown derives the run folder from the run id, not from the handle.
 
 | Profile | Isolation | When | Phase |
 | --- | --- | --- | --- |
@@ -29,6 +31,7 @@ A runner pool decides where a run's sandbox lives and a harness decides which co
 - Out: session id, final message, exit status, tokens in and out, cost in USD, transcript path.
 - Claude Code: `claude -p --output-format stream-json`, which streams messages and reports cost. Codex: `codex exec --json`, with tokens priced from a table when no cost is reported.
 - v0 calls the CLIs as subprocesses so all harnesses look the same. Temporal's Claude Agent SDK plugin is evaluated during M1.
+- **Claude Code adapter (built, M1-08)**: `fact.worker.harnesses.ClaudeCodeHarness` sends the prompt on stdin, writes every stream-json line to the transcript, and takes the result from the final `result` message: `stop_reason` is its `subtype` (`success`, `error_max_turns`, ...) or `no_result` when none arrived, and tokens in include cache writes and reads. It runs with a minimal environment, so credentials come only through the request's `env`.
 
 **Long agent steps**: the activity heartbeats every 30 s with progress, has a start-to-close timeout per step, and kills the agent process on cancel. Budgets apply per step and per run; going over pauses the run and notifies you.
 
@@ -41,6 +44,7 @@ Every agent step runs on a harness and model chosen at run time, never hard-code
 - **Overrides**, highest first: a step-level choice the planner wrote for this task, then the task's level through the routing table, then the workflow's default for that step, then the project's default.
 - **Availability**: if the chosen harness is over its cap, out of budget or (from v0.1) outside its usage window, the step waits; it falls back to the next entry in its routing list only where the table allows it.
 - Every step records the harness and model it actually used, so cost and success can be compared across them later.
+- **Built (M1-09)**: `fact.worker.routing.choose` resolves harness and model separately: each comes from the first entry that sets it among the step override, `<level>.<stage>`, `<level>.*`, `*.<stage>`, else `routing.default` in `fact.yaml`. Workflow and project defaults are not wired in yet.
 
 v0 ships the Claude Code adapter and the routing table with Claude models only; the Codex, OpenCode and Pi adapters follow the same contract.
 

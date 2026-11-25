@@ -3,7 +3,10 @@ name = "fact-sdk"
 version = "0.1.0"
 description = "fact sdk package"
 requires-python = ">=3.15"
-dependencies = ["fact-core"]
+dependencies = [
+    "fact-core",
+    "temporalio>=1.36.1",
+]
 
 [build-system]
 requires = ["hatchling"]

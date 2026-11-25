@@ -31,8 +31,12 @@ The issue tracker is where work starts and where its status is reported; GitHub 
 | Group | Labels | Set by | Meaning |
 | --- | --- | --- | --- |
 | fact | `fact:ready` | You (or the planner, when you say so) | The factory may pick this issue up |
+| fact | `fact:planned` | The planner | A planned subtask; becomes `fact:ready` when the parent plan is approved (see `08-planning.md`) |
 | fact | `fact:running`, `fact:needs-human` | The factory | A run is in progress; a run is waiting on you |
 | Type | `type:incident`, `type:bug`, `type:feature`, `type:chore` | You or the planner | Picks the workflow in triage; one per issue |
+| Complexity | `complexity:trivial`, `complexity:standard`, `complexity:complex` | You or the planner | How large or risky the change is; the default is standard |
+
+`uv run fact github labels sync <owner/repo>` creates these labels on a repository (and fixes colour, description and case of existing ones; it never deletes labels).
 
 Removing `fact:ready` from an issue with a run in progress does not stop the run; dropping it in the UI does.
 
@@ -62,4 +66,4 @@ Removing `fact:ready` from an issue with a run in progress does not stop the run
 | Events | Subscribed now, delivered once the webhook is on: Issues, Issue comment, Label, Sub issues (if listed), Pull request, Pull request review, Pull request review comment, Pull request review thread, Check run, Check suite, Status, Workflow run, Push |
 | Installable by | Only this account |
 
-After creating it: generate a private key (kept outside any repository), note the App ID, and install it on selected repositories only (Kahncode/fact first). The worker reads `FACT_GITHUB_APP_ID` and `FACT_GITHUB_APP_PRIVATE_KEY_PATH` from `.env`.
+After creating it: generate a private key (kept outside any repository), note the App ID, and install it on selected repositories only (Kahncode/fact first). The worker reads `FACT_GITHUB_APP_ID` (the App ID or the Client ID; GitHub accepts either as the JWT issuer) and `FACT_GITHUB_APP_PRIVATE_KEY_PATH` (a relative path resolves from the folder holding `fact.yaml`) from `.env`. Installation tokens are minted per repository and can reach only that repository. `uv run fact github check <owner/repo>` verifies the setup.

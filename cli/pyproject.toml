@@ -3,7 +3,14 @@ name = "fact-cli"
 version = "0.1.0"
 description = "fact cli package"
 requires-python = ">=3.15"
-dependencies = ["fact-core"]
+dependencies = [
+    "fact-core",
+    "httpx>=0.28.1",
+    "typer>=0.29.2",
+]
+
+[project.scripts]
+fact = "fact.cli.main:app"
 
 [build-system]
 requires = ["hatchling"]

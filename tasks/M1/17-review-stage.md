@@ -4,7 +4,7 @@ title: "Agent review and address-review stages"
 type: feature
 complexity: standard
 status: planned
-depends_on: [M1-16, M0-11]
+depends_on: [M1-16]
 human_actions: []
 ---
 
@@ -18,11 +18,15 @@ Before any PR, a separate review session checks the change against the task's ac
 - `docs/spec/06-workflow-authoring.md` (Steps and acceptance; review checklist row)
 - `docs/spec/08-planning.md` ("Acceptance criteria are the contract")
 - `.fact/workflows/standard.py`, `.fact/prompts/`
-- `.claude/skills/review/SKILL.md`
+- `.agents/skills/review/SKILL.md`
 
 ## Do
 
-- `.fact/prompts/review.md` uses the review skill and must not change code. It writes `.fact-out/review.json` with:
+- Extend the `review` skill (`.agents/skills/review/SKILL.md`, and the `code-reviewer` agent it delegates to), keeping the interactive behaviour (no argument: review the current changes, numbered CRITICAL, WARNING or INFO findings):
+  - optional inputs: the task file or a list of acceptance criteria, and a diff range; with criteria it also answers each one as met or not met, with evidence;
+  - optional output path: writes the `review.json` below, mapping CRITICAL to high, WARNING to medium, INFO to low;
+  - never changes code.
+- `.fact/prompts/review.md` uses the review skill, passing it the task file's acceptance criteria and the output path, and must not change code. It writes `.fact-out/review.json` with:
   - `criteria`: a list of `{text, met, evidence}`;
   - `findings`: a list of `{severity: low|medium|high, file, line, message}`.
 - `.fact/prompts/address_review.md`: fix the findings and unmet criteria in `$context`, then commit.
@@ -42,4 +46,5 @@ Before any PR, a separate review session checks the change against the task's ac
 ## Acceptance criteria
 
 - [ ] `uv run pytest` passes.
+- [ ] `/review` with no argument still prints numbered findings with severities; given a task file and an output path it writes valid `review.json`.
 - [ ] Run by fact, this task's PR shows the criteria table.

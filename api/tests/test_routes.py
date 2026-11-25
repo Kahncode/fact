@@ -1,0 +1,70 @@
+"""Every API route must be listed here with the tests that cover it, so a new route cannot ship untested."""
+
+import importlib.util
+from collections.abc import Iterator
+from pathlib import Path
+
+from fact.api.app import create_app
+from fact.core.settings import Settings
+
+# (path, method) -> tests as "module.test_name" inside api/tests; None marks a route deliberately left untested.
+TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
+    ("/health", "GET"): ["test_app.test_health"],
+    ("/api/v1/projects", "GET"): ["test_app.test_projects_lists_fact_with_repository"],
+    ("/api/v1/runs", "POST"): ["test_runs.test_create_and_get_run", "test_runs.test_create_run_errors"],
+    ("/api/v1/runs", "GET"): ["test_runs.test_list_runs_filters"],
+    ("/api/v1/runs/start", "POST"): [
+        "test_run_start.test_refuses_unfinished_dependencies",
+        "test_run_start.test_unknown_task_and_project",
+        "test_run_start.test_temporal_down_is_503",
+        "test_run_start.test_start_runs_the_project_workflow",
+        "test_run_start.test_start_refused_by_temporal_keeps_the_number",
+        "test_run_start.test_id_taken_in_temporal_moves_to_the_next",
+    ],
+    ("/api/v1/runs/{run_id}", "GET"): ["test_runs.test_create_and_get_run"],
+    ("/api/v1/runs/{run_id}", "PATCH"): ["test_runs.test_patch_run"],
+    ("/api/v1/runs/{run_id}/steps", "POST"): ["test_runs.test_steps_lifecycle_and_order"],
+    ("/api/v1/steps/{step_id}", "PATCH"): ["test_runs.test_steps_lifecycle_and_order"],
+    ("/api/v1/runs/{run_id}/events", "POST"): ["test_runs.test_events_batch"],
+    ("/api/v1/artifacts/{key:path}", "PUT"): ["test_artifacts.test_upload_download"],
+    ("/api/v1/artifacts/{key:path}", "GET"): ["test_artifacts.test_upload_download"],
+}
+
+
+def iter_route_keys() -> Iterator[tuple[str, str]]:
+    """Yield `(path, method)` for every API route. HEAD and OPTIONS are implicit and skipped."""
+    for route in create_app(Settings()).routes:
+        # FastAPI wraps included routers lazily, so `app.routes` has no flat APIRoute objects.
+        # Only routers we include count: the built-in /docs and /openapi.json routes are skipped.
+        contexts = route.effective_route_contexts() if hasattr(route, "effective_route_contexts") else []
+        for ctx in contexts:
+            for method in sorted(ctx.methods or ()):
+                if method not in {"HEAD", "OPTIONS"}:
+                    yield ctx.path, method
+
+
+def _load_test_module(name: str) -> object:
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / f"{name}.py")
+    assert spec
+    assert spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_all_routes_have_tests() -> None:
+    app_keys = set(iter_route_keys())
+    assert app_keys, "no routes found: FastAPI may have changed how included routers are exposed"
+    listed = set(TESTED_ROUTES)
+    assert app_keys - listed == set(), f"Routes missing from TESTED_ROUTES: {sorted(app_keys - listed)}"
+    assert listed - app_keys == set(), f"TESTED_ROUTES lists routes not in the app: {sorted(listed - app_keys)}"
+
+
+def test_listed_tests_exist() -> None:
+    for (path, method), tests in TESTED_ROUTES.items():
+        assert tests, f"{method} {path} needs at least one test, or [None] to mark it untested"
+        for name in filter(None, tests):
+            module_name, func_name = name.rsplit(".", 1)
+            func = getattr(_load_test_module(module_name), func_name, None)
+            assert callable(func), f"{name} (for {method} {path}) is not a callable"
+            assert func_name.startswith("test_"), f"{name} (for {method} {path}) is not named test_*"

@@ -6,7 +6,7 @@ complexity: trivial
 status: planned
 depends_on: [M1-15]
 human_actions: 
-  - "Run this task with fact itself: fact release main, fact dev --release, fact run task:M1-16"
+  - "Run this task with fact itself: fact use main, fact dev --pinned, fact run task:M1-16"
   - "Write everything that broke or felt wrong into tasks/backlog.md"
 ---
 

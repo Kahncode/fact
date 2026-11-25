@@ -1,6 +1,6 @@
 # Summary
 
-The factory is a local service that turns tracker issues (GitHub Issues first, Linear next) into reviewed GitHub PRs, across one or more repos per project, with Temporal running every workflow durably. v0 runs on one machine, and its first project is the factory itself.
+The factory is a service that turns tracker issues (GitHub Issues first, Linear next) into reviewed GitHub PRs, across one or more repos per project, with Temporal running every workflow durably. v0 runs on one machine; remote hosting and more users come later. Its first project is the factory's own repo.
 
 **Goals for v0**
 

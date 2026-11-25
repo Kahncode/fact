@@ -1,0 +1,204 @@
+"""
+Load each project's workflows from its home repository, pinned to one SHA.
+
+For a project: sync the home repository's mirror, resolve its default branch's SHA, check that SHA out as a detached
+worktree at `pinned_dir/projects/<project>/<sha>` (reused when it is already there), and import
+`.fact/workflows/*.py` under module names unique to the project and SHA. The modules are found by a meta path finder,
+so the workflow sandbox can import them again by name.
+"""
+
+import importlib
+import importlib.abc
+import importlib.machinery
+import importlib.util
+import inspect
+import re
+import shutil
+import sys
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from types import ModuleType
+
+from fact.core.activity_contract import workflow_queue
+from fact.core.logging import get_logger
+from fact.core.settings import REPO_ROOT
+from fact.sdk.workflow import FactWorkflow
+from fact.worker.git_push import run_git
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
+
+log = get_logger(__name__)
+
+WORKFLOWS_SUBDIR = Path(".fact") / "workflows"
+SHORT_SHA = 12  # the factory part of a version id; the home SHA stays whole, recorded apart as `home_sha`
+UNKNOWN_FACTORY = "unknown"  # the factory is not a git checkout
+_PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+# Imported outside the sandbox and shared with it: the SDK (and the core types it uses), pydantic, rich (logging).
+SANDBOX_PASSTHROUGH = ("fact", "pydantic", "pydantic_core", "rich")
+
+SyncMirror = Callable[[str], Awaitable[Path]]
+
+
+class WorkflowLoadError(Exception):
+    """A project's workflows could not be checked out or imported; the message names the project or file."""
+
+
+@dataclass(frozen=True)
+class ProjectWorkflows:
+    project: str
+    home: str  # owner/repo
+    home_sha: str
+    checkout: Path
+    version: str  # `<factory SHA>+<home SHA>`: the worker deployment build id
+    workflows: tuple[type[FactWorkflow], ...]
+
+    @property
+    def task_queue(self) -> str:
+        return workflow_queue(self.project)
+
+    @property
+    def deployment_name(self) -> str:
+        return self.task_queue
+
+
+def version_id(factory_sha: str, home_sha: str) -> str:
+    """Return `<factory SHA, 12 chars>+<home SHA>`, which fits the 64-char `worker_version` column."""
+    return f"{factory_sha[:SHORT_SHA]}+{home_sha}"
+
+
+def home_sha_of(version: str) -> str | None:
+    """Return the home SHA part of a version id, or None if `version` is not one."""
+    _, plus, home = version.partition("+")
+    return home if plus and home else None
+
+
+def sandbox_runner() -> SandboxedWorkflowRunner:
+    return SandboxedWorkflowRunner(
+        restrictions=SandboxRestrictions.default.with_passthrough_modules(*SANDBOX_PASSTHROUGH)
+    )
+
+
+async def _git(args: list[str], cwd: Path) -> str:
+    code, lines = await run_git(args, cwd)
+    if code != 0:
+        msg = f"git {' '.join(args)} failed ({code}) in {cwd}: {' '.join(lines)}"
+        raise WorkflowLoadError(msg)
+    return "\n".join(lines).strip()
+
+
+async def factory_sha(root: Path = REPO_ROOT) -> str:
+    """Return the factory checkout's HEAD SHA, or `unknown` when it is not a git checkout."""
+    code, lines = await run_git(["rev-parse", "--verify", "HEAD"], root)
+    sha = lines[0].strip() if code == 0 and lines else ""
+    if not _SHA.match(sha):
+        log.warning("factory_sha_unknown", root=str(root))
+        return UNKNOWN_FACTORY
+    return sha
+
+
+async def default_branch_sha(mirror: Path) -> str:
+    """
+    Return the SHA of the remote default branch in a bare mirror.
+
+    `origin/HEAD` (kept current by `sync_mirror`) names the branch; a mirror without it falls back to its own HEAD,
+    which `clone --bare` set to the default branch at the time.
+    """
+    code, lines = await run_git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}"], mirror)
+    if code == 0 and lines:
+        return lines[0].strip()
+    branch = await _git(["symbolic-ref", "--short", "HEAD"], mirror)
+    return await _git(["rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"], mirror)
+
+
+async def pinned_checkout(mirror: Path, pinned_dir: Path, project: str, sha: str) -> Path:
+    """Create, or reuse, a detached worktree of `sha` at `pinned_dir/projects/<project>/<sha>`."""
+    path = pinned_dir / "projects" / project / sha
+    if (path / ".git").exists():
+        code, lines = await run_git(["rev-parse", "HEAD"], path)
+        if code == 0 and lines and lines[0].strip() == sha:
+            return path
+        log.warning("pinned_checkout_replaced", project=project, path=str(path))
+    if path.exists():
+        shutil.rmtree(path)
+    await _git(["worktree", "prune"], mirror)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    await _git(["worktree", "add", "--detach", str(path), sha], mirror)
+    return path
+
+
+class _WorkflowFinder(importlib.abc.MetaPathFinder):
+    """Finds the loaded workflow modules by their unique names, in the host and inside the workflow sandbox."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, Path] = {}
+
+    def find_spec(
+        self, fullname: str, path: Sequence[str] | None = None, target: ModuleType | None = None  # noqa: ARG002
+    ) -> importlib.machinery.ModuleSpec | None:
+        file = self.files.get(fullname)
+        return importlib.util.spec_from_file_location(fullname, file) if file else None
+
+
+_FINDER = _WorkflowFinder()
+
+
+def _ident(text: str) -> str:
+    return re.sub(r"\W", "_", text)
+
+
+def module_name(project: str, sha: str, file: Path) -> str:
+    return f"fact_workflows_{_ident(project)}_{sha[:SHORT_SHA]}_{_ident(file.stem)}"
+
+
+def _import(name: str, file: Path) -> ModuleType:
+    if _FINDER not in sys.meta_path:
+        sys.meta_path.append(_FINDER)
+    if _FINDER.files.get(name, file) != file:
+        msg = f"{file}: its module name {name} is taken by {_FINDER.files[name]}; rename one of them"
+        raise WorkflowLoadError(msg)
+    _FINDER.files[name] = file
+    try:
+        return importlib.import_module(name)
+    except Exception as exc:
+        sys.modules.pop(name, None)
+        del _FINDER.files[name]
+        msg = f"{file}: {type(exc).__name__}: {exc}"
+        raise WorkflowLoadError(msg) from exc
+
+
+def _workflow_classes(module: ModuleType) -> list[type[FactWorkflow]]:
+    """`FactWorkflow` subclasses defined in `module` and decorated with `@workflow.defn` themselves."""
+    return [
+        cls
+        for _, cls in inspect.getmembers(module, inspect.isclass)
+        if issubclass(cls, FactWorkflow)
+        and cls.__module__ == module.__name__
+        and "__temporal_workflow_definition" in vars(cls)
+    ]
+
+
+def load_workflows(project: str, checkout: Path, sha: str) -> tuple[type[FactWorkflow], ...]:
+    """Import every `.fact/workflows/*.py` of the checkout (sorted, `_`-prefixed files skipped)."""
+    found: list[type[FactWorkflow]] = []
+    for file in sorted((checkout / WORKFLOWS_SUBDIR).glob("*.py")):
+        if file.name.startswith("_"):
+            continue
+        found.extend(_workflow_classes(_import(module_name(project, sha, file), file)))
+    return tuple(found)
+
+
+async def load_project(
+    project: str, home: str, sync_mirror: SyncMirror, pinned_dir: Path, factory: str
+) -> ProjectWorkflows:
+    """Pin `project` to its home repository's default-branch SHA and load its workflows from that checkout."""
+    if not _PROJECT.match(project):
+        msg = f"invalid project name {project!r}"
+        raise WorkflowLoadError(msg)
+    mirror = await sync_mirror(home)
+    sha = await default_branch_sha(mirror)
+    checkout = await pinned_checkout(mirror, pinned_dir, project, sha)
+    workflows = load_workflows(project, checkout, sha)
+    names = [cls.__name__ for cls in workflows]
+    log.info("project_workflows_loaded", project=project, home_sha=sha, workflows=names, checkout=str(checkout))
+    return ProjectWorkflows(project, home, sha, checkout, version_id(factory, sha), workflows)

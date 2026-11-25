@@ -1,0 +1,35 @@
+# fact global settings and project registry. Defaults are written out; override per environment in
+# fact.<env>.yaml, or with FACT_* environment variables (nesting with "__", e.g. FACT_TEMPORAL__ADDRESS).
+# env comes from FACT_ENV (local, test, dev, prod); default local.
+data_dir: ~/fact
+temporal:
+  address: localhost:7233
+  namespace: default
+api:
+  host: 127.0.0.1
+  port: 8000
+concurrency:
+  sandboxes: 2
+  planners: 1
+projects:
+  - name: fact
+    home: Kahncode/fact
+    path: .
+# Harness and model per agent step: rules are "<complexity>.<stage>" with "*" wildcards. Most specific wins:
+# a step override, then <complexity>.<stage>, <complexity>.*, *.<stage>, then default. Unset fields fall through.
+routing:
+  default:
+    harness: claude-code
+    model: sonnet
+  rules:
+    complex.implement:
+      model: opus
+    "*.review":
+      model: opus
+# Limits per step kind: timeout_minutes is the activity's start-to-close timeout; max_turns caps agent turns.
+step_defaults:
+  agent:
+    timeout_minutes: 60
+    max_turns: 100
+  shell:
+    timeout_minutes: 15

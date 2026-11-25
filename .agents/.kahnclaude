@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "layout": "agents",
+  "source": "I:/workspace/claude/kahnclaude",
+  "commit": "f76fc926de3347254ac23903804915b4145bad84",
+  "installed_at": "2026-11-24T18:24:46+00:00",
+  "updated_at": "2026-11-24T19:24:48+00:00",
+  "projection": "junction",
+  "agents": [
+    "backend/api-dev.md",
+    "backend/backend-dev.md",
+    "backend/supabase-dev.md",
+    "core/code-archaeologist.md",
+    "core/code-reviewer.md",
+    "core/documenter.md",
+    "core/performance-optimizer.md",
+    "core/tech-lead-orchestrator.md",
+    "core/test-writer.md",
+    "frontend/frontend-dev.md",
+    "frontend/react-component-dev.md",
+    "frontend/react-nextjs-dev.md",
+    "frontend/tailwind-css-dev.md",
+    "python/devops-cicd-dev.md",
+    "python/fastapi-dev.md",
+    "python/python-dev.md",
+    "python/security-dev.md"
+  ],
+  "notes": "Python 3.15/uv workspace, FastAPI, Temporal, SQLAlchemy, Typer; core + python + backend (api-dev, backend-dev, supabase-dev) + frontend agents; excluded mobile. Migrated next-task, plan-tasks to .agents/skills. 2026-11-24: updated document, learn skills, documenter agent (README sync), settings Read(*)."
+}

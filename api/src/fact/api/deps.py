@@ -1,0 +1,14 @@
+from collections.abc import AsyncIterator
+
+from fact.core.artifacts import LocalArtifactStore
+from fastapi import Request
+from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
+    async with request.app.state.sessions() as session:
+        yield session
+
+
+def get_artifacts(request: Request) -> LocalArtifactStore:
+    return request.app.state.artifacts

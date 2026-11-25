@@ -6,7 +6,7 @@ flowchart LR
     C -- fail, max 3 --> F[fix_checks] --> C
     C -- pass --> R[review]
     R -- findings --> AR[address_review] --> C2{lint + test}
-    R -- clean --> U[update_context]
+    R -- clean --> U[learn]
     C2 --> U
     U --> CL[classify] --> P[open PRs] --> CI{CI}
     CI -- fail, max 2 --> FC[fix_ci] --> CI

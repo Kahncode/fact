@@ -1,0 +1,98 @@
+# ruff: noqa: PLR2004, SLF001
+import subprocess
+import sys
+import time
+
+import pytest
+from fact.cli import supervisor
+from fact.cli.supervisor import Child, ChildSpec, run_all
+
+SLEEPER = [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"]
+# Ignores the interrupt (SIGINT, or Ctrl-Break on Windows), so only terminate/kill end it.
+STUBBORN = [
+    sys.executable,
+    "-c",
+    (
+        "import signal, time; "
+        "signal.signal(getattr(signal, 'SIGBREAK', signal.SIGINT), signal.SIG_IGN); "
+        "print('ready', flush=True); time.sleep(60)"
+    ),
+]
+
+
+def _popen(argv: list[str]) -> subprocess.Popen[str]:
+    kwargs: dict = (
+        {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if supervisor.IS_WINDOWS else {"start_new_session": True}
+    )
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True, **kwargs)  # noqa: S603
+    assert proc.stdout is not None
+    proc.stdout.readline()  # wait until the child has installed its handlers
+    return proc
+
+
+def test_prefixes_output_and_stops_all_when_one_exits(capsys: pytest.CaptureFixture[str]) -> None:
+    quitter = [sys.executable, "-c", "import time; time.sleep(1); print('bye'); raise SystemExit(3)"]
+    started = time.monotonic()
+
+    code = run_all([ChildSpec("sleeper", SLEEPER), ChildSpec("q", quitter)])
+
+    assert code == 3
+    assert time.monotonic() - started < 30  # the sleeper was stopped, not waited for
+    out = capsys.readouterr().out.splitlines()
+    assert "sleeper | up" in out
+    assert "q       | bye" in out
+    assert "fact    | q exited with code 3; stopping the others" in out
+
+
+def test_ctrl_c_stops_children_and_returns_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[Child] = []
+    real_first_exit = supervisor.first_exit
+
+    def interrupt_once_running(children: list[Child]) -> tuple[str, int] | None:
+        if len(children) == 2:
+            started.extend(children)
+            raise KeyboardInterrupt
+        return real_first_exit(children)
+
+    monkeypatch.setattr(supervisor, "first_exit", interrupt_once_running)
+
+    assert run_all([ChildSpec("a", SLEEPER), ChildSpec("b", SLEEPER)]) == 130
+    assert [c.proc.poll() is not None for c in started] == [True, True]
+
+
+def test_stop_escalates_for_a_child_ignoring_interrupt() -> None:
+    proc = _popen(STUBBORN)
+    started = time.monotonic()
+
+    supervisor.stop_all([Child("stubborn", proc)], timeout=0.5)
+
+    assert proc.poll() is not None
+    assert time.monotonic() - started < 10
+
+
+def test_port_wait_aborts_when_a_process_exits(capsys: pytest.CaptureFixture[str]) -> None:
+    early_exit = [sys.executable, "-c", "pass"]
+    code = run_all([ChildSpec("a", early_exit), ChildSpec("b", SLEEPER, wait_for=("127.0.0.1", 1))])
+    assert code == 1
+    assert "error: a exited while waiting for 127.0.0.1:1" in capsys.readouterr().out
+
+
+def test_port_wait_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor, "_port_open", lambda *_: False)
+    with pytest.raises(supervisor.PortTimeoutError, match="did not open"):
+        supervisor._wait_for_port("127.0.0.1", 1, [], timeout=0.3)
+
+
+def test_signal_death_maps_to_shell_exit_code() -> None:
+    class Dead:
+        def poll(self) -> int:
+            return -9
+
+    assert supervisor.first_exit([Child("x", Dead())]) == ("x", 137)  # type: ignore[arg-type]
+
+
+def test_child_env_is_added(capsys: pytest.CaptureFixture[str]) -> None:
+    show = [sys.executable, "-c", "import os; print(os.environ['FACT_TEST_VAR'])"]
+
+    assert run_all([ChildSpec("e", show, env={"FACT_TEST_VAR": "from-spec"})]) == 0
+    assert "e    | from-spec" in capsys.readouterr().out.splitlines()

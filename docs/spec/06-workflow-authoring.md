@@ -7,18 +7,18 @@ Workflows are Python code built from a small library of reusable steps. Prompts 
 | Layer | Lives in | Example change | Takes effect |
 | --- | --- | --- | --- |
 | Config and prompts | `.fact/project.yaml` and `.fact/prompts/` in the project's home repository; `.fact/repo.yaml` in each repository | Better implement prompt, new test command, cheaper model | Next step that reads it, even in a running run |
-| Step library | `fact/steps/` in the factory repo (activities, exposed as `fact.sdk`) | New `run_e2e` step, better PR description | New activity attempts once the worker restarts |
+| Step library | Activities in `fact.worker`; workflow helpers in `fact.sdk` call them by name through `fact.core.activity_contract` | New `run_e2e` step, better PR description | New activity attempts once the worker restarts |
 | Workflow code | `.fact/workflows/` in the project's home repository | Add a review stage, change a loop | New runs only; runs in flight finish on their pinned version |
 
-**Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `human_gate`, `notify`, `issue_update`.
+**Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `human_gate`, `notify`, `issue_update`. Bookkeeping activities that are not reported as steps: `mark_task_done`, `record_run_started`, `record_run_finished`.
 
-**Stage manifest**: each workflow class declares its stages as a static list (id, label, kind, and loop-back edges). The UI draws the expected graph from it and lays the run's real steps over it. Temporal itself has no static graph of a code workflow, so this is how R12 is met.
+**Stage manifest**: each workflow class declares its stages as a static list (id, label, kind, and loop-back edges). The UI draws the expected graph from it and lays the run's real steps over it. Temporal itself has no static graph of a code workflow, so this is how R12 is met. In code: `@stages([Stage(id, label, kind, loops_to=...)])` from `fact.sdk.workflow`.
 
 **Changing a workflow**
 
 1. Open an issue against the factory project; the factory itself can do the work.
 2. The PR's CI runs unit tests plus Temporal replay tests against recorded histories of recent runs.
-3. You merge. `fact upgrade` starts a worker on the new version.
+3. You merge. `fact use main`, then restarting `fact dev --pinned`, starts a worker on the new version (`fact upgrade` will do both later).
 4. New runs use the new version. Runs in flight stay pinned to the old worker until they finish, then it stops.
 
 In v0, if nothing is in flight, the upgrade is a plain restart.
@@ -39,6 +39,13 @@ Each project has its own catalog of workflows, and a triage step picks one for e
 - **Trust**: project workflow code runs in a factory worker, so only projects you own get workflow code; a client project could later be limited to configuration only.
 
 **Versions are pinned, with no upgrades.** A run always finishes on the workflow version it started on. To move a run to newer code, you drop it in the UI and restart it on the latest version. Dropping keeps the run's branches and PRs in every repository, so the new run picks up where the old one left off: it starts from those branches, reuses the open PRs, and gets a handoff note with the spec, the last step reached and a summary of the old run's transcripts. Each worker version keeps running until its last run finishes or is dropped, and the UI lists versions with their run counts.
+
+**How pinning is built (M1-13): Worker Deployment Versioning.** temporalio 1.36 and the Temporal server (the 1.32 dev server included) support Worker Deployment Versioning with a pinned behaviour, so fact uses it rather than only recording versions:
+
+- `python -m fact.worker` loads each registered project: it syncs the home repository's mirror (`repos_dir`), resolves the default branch's SHA, checks it out as a detached worktree at `pinned_dir/projects/<project>/<sha>` (reused when present) and imports `.fact/workflows/*.py` (files starting with `_` are skipped) under module names unique to the project and SHA. A project that fails to load is logged with the failing file and skipped; the others still start.
+- Each project is one worker deployment named `wf-<project>`, polled on task queue `wf-<project>`. The build id is the version id `<factory SHA, 12 chars>+<home SHA>` (it fits the 64-character `worker_version` column; a factory that is not a git checkout is `unknown`). The default behaviour is `PINNED`, and on start the worker makes its version the deployment's current one, so new runs go to it; startup fails if it cannot.
+- Every run records its version: `FactWorkflow.execute` reads the build id from `workflow.info().get_current_deployment_version()` and passes it to `record_run_started`, which stores `worker_version` and `home_sha`.
+- One worker process runs only the newest version. After a restart on new code, runs pinned to an older version wait for a worker of that version: drop and restart them. Running several versions side by side (`fact upgrade`) comes later.
 
 **Long human waits are fine.** A gate is a Temporal wait on a signal or update. It can last weeks, costs nothing while waiting, and survives restarts. The only cost is that its worker version has to keep running until the run ends.
 
@@ -63,7 +70,7 @@ Checks are run by the factory with the project's own frameworks, never reported 
 ```python
 @workflow.defn
 class Standard(FactWorkflow):
-    stages = ["implement", "checks", "review", "update_context", "classify", "open_prs", "ci", "merge"]
+    stages = ["implement", "checks", "review", "learn", "classify", "open_prs", "ci", "merge"]
 
     @workflow.run
     async def run(self, issue: Issue) -> RunResult:
@@ -75,7 +82,7 @@ class Standard(FactWorkflow):
             await self.agent("address_review", prompt="address_review.md", context=review)
             await self.until_green(["lint", "test"], fix_prompt="fix_checks.md", max_attempts=3)
 
-        await self.agent("update_context", prompt="update_context.md")
+        await self.agent("learn", prompt="learn.md")
         route = await self.classify()               # "auto_merge" or "human_review"
         prs = await self.open_change_set(label=route)
         await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
@@ -88,10 +95,12 @@ class Standard(FactWorkflow):
             await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
 ```
 
-- **Checks**: `until_green` runs the project's lint and test commands (for example `ruff`, `pytest`) as shell steps in the run sandbox. On failure, the output goes to a fresh fix session; it repeats up to `max_attempts`, then the run pauses and notifies you.
-- **Sessions**: each agent role (implement, fix, review, address review, update context, address comment) is its own session, in the same sandbox and on the same branches.
+The example is the target shape. What exists today (M1) is the shorter `Standard` in `.fact/workflows/standard.py`: prepare, implement, `until_green`, mark the task done, open the PR; stages come from `@stages`, and the run method delegates to `FactWorkflow.execute`.
 
-  **Update context**: after the review and before classifying, an agent session updates the repository's context files (`CLAUDE.md` or `AGENTS.md`, `docs/`) to match what the change did, as part of the same branch. Context lives entirely in the repositories for now.
+- **Checks**: `until_green` runs the project's lint and test commands (for example `ruff`, `pytest`) as shell steps in the run sandbox. On failure, the output goes to a fresh fix session (a new attempt of the `implement` stage); `max_attempts` caps the fix sessions, then the run pauses and notifies you. In M1 there is no gate yet: the run ends `needs_human` with no PR.
+- **Sessions**: each agent role (implement, fix, review, address review, learn, address comment) is its own session, in the same sandbox and on the same branches.
+
+  **Learn**: after the review and before classifying, an agent session runs the `learn` skill to update the repository's context files (`CLAUDE.md` or `AGENTS.md`, `docs/`) to match what the change did, as part of the same branch. Context lives entirely in the repositories for now.
 - **Classify**: rules first (project policy, paths touched, diff size; the factory's own repo is always `human_review`), then an LLM classifier for what the rules leave open. The result is a label on every PR of the change set.
 - **Merge**: in v0 you always merge; the classification (high or low risk, from the review agent and the rules) is shown as a label and in the inbox. From a later version, a project can opt in to automatic merges for low-risk change sets: with no agent involved, fact checks that CI passed on the exact head commit, then merges in the recorded repository order.
 - **Comments**: a PR comment that mentions the factory sends a signal to the run, which stays open until its PRs merge or close. The fact GitHub App sees every comment; v0 finds them by polling with the App's token (no public URL needed), webhooks come once fact is hosted. Comments may use `/fact` or @fact.

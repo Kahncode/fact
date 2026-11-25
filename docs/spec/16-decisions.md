@@ -22,11 +22,12 @@
 - **Auto-merge**: none in v0; you merge everything. The review agent and the rules still classify each change set as high or low risk.
 - **Concurrency defaults**: 2 execution sandboxes and 1 planner at a time on your PC.
 - **Claude Code**: runs headless under your logged-in subscription in v0. From v0.1, fact reads Claude Code's actual usage and windows and only schedules new agent steps when the window allows.
-- **Context**: lives in the repositories; every workflow has an update-context step after review.
+- **Context**: lives in the repositories; every workflow has a learn step after review.
 - **Scoring and benchmarks**: needed soon after v0 to measure whether changes to fact itself (prompts, workflows, models) make it better.
 - **Spec in the repository:** this spec is copied to docs/spec/ in M0; from then on the repository copy is the source of truth and agents keep it current.
 - **Bootstrap tasks:** until fact ingests GitHub Issues, tasks are markdown files in tasks/\<milestone>/, one file per commit with its context update, dependencies in front matter. Claude Code runs them until fact can.
 - **Planner:** its own milestone (M5). Until then Claude Code in the repository is the planner, with skills.
+- **Missing task files:** a dependency id whose task file is gone counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present (`FileTaskSource`, M1-02). Finished tasks can then be deleted without rewriting `depends_on`. Cost: `validate()` cannot catch typos below that bound; ids above it are errors. `validate()` runs as a CI test on the real `tasks/` folder.
 - **Human actions:** fact needs a way to request and track actions only a person can do, such as downloading the GitHub App private key. In the backlog.
 
 **Still open**

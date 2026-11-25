@@ -18,7 +18,7 @@ Every step attempt writes one row with its timing, tokens and cost, plus a log f
 | Tokens and cost (USD) | step attempt, run, project, day | From the harness; priced from a table when missing |
 | Attempts and loops | step, run | e.g. implement ran 3 times before tests passed |
 | Human touches | run | Gate answers, extra instructions, manual commits; the metric Warp tracks |
-| Outcome | run | merged, closed, abandoned, failed |
+| Outcome | run | pr_opened (M1, before a merge stage exists), needs_human (gave up, such as an exhausted checks loop), merged, closed, abandoned, failed |
 
 Logs and transcripts are kept forever for now, like rows; a retention setting can come later if storage grows.
 

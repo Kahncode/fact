@@ -49,12 +49,13 @@ What a neighbouring task does instead.
 - **status**
   - `planned`: written, not yet approved to run.
   - `ready`: approved. It may start once every `depends_on` task is `done`.
-  - `done`: merged. While bootstrapping locally, `next-task` deletes a finished task's file instead of setting this, and a dependency whose file is gone counts as done. Set to `done` in the task's own commit, so `main` always shows what is finished. While a task is running, its status lives in fact's DB, not in the file.
+  - `done`: merged. While bootstrapping locally, `next-task` deletes a finished task's file instead of setting this, and a dependency whose file is gone counts as done when its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present (so validation cannot catch typos below that bound; an id above it is an error). CI validates the task folder as a test. Set to `done` in the task's own commit, so `main` always shows what is finished. While a task is running, its status lives in fact's DB, not in the file.
 - **complexity** picks the model:
   - `trivial`: mechanical edits, Sonnet.
   - `standard`: normal feature work, Sonnet.
   - `complex`: design judgment or tricky concurrency, Opus.
 - **human_actions**: anything an agent cannot do, such as creating a key or installing a tool. The runner stops and asks before starting a task whose human actions aren't confirmed.
+- **resume** (optional, never written by hand): `"<start>..<end>"`, a commit range left unverified because a run of this task hit the Claude usage limit. `scripts/task_loop.py` restores the task file with this field and a `## Resume` section, and the task runs before any other runnable task to verify and finish that work.
 
 ## Running a task
 
