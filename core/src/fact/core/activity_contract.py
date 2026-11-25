@@ -74,6 +74,14 @@ class CheckResult(_Input):
     summary: str = ""
 
 
+class CriterionResult(_Input):
+    """One acceptance criterion as the review session judged it, with its evidence, for the PR description."""
+
+    text: str
+    met: bool
+    evidence: str = ""
+
+
 class OpenChangeSetInput(_Input):
     run_id: str
     task: Task
@@ -82,6 +90,7 @@ class OpenChangeSetInput(_Input):
     title: str  # PR title, written by the last agent session
     summary: str  # top of the PR description, written by the last agent session
     check_results: list[CheckResult] = Field(default_factory=list)
+    criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
     run_url: str = ""
 
 

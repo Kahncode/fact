@@ -1,0 +1,39 @@
+{
+  "properties": {
+    "criteria": {
+      "type": "array",
+      "description": "Every acceptance criterion of the task, in order, with your verdict.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "description": "The criterion, as written in the task." },
+          "met": { "type": "boolean", "description": "true only if the change meets it, with evidence." },
+          "evidence": {
+            "type": "string",
+            "description": "One or two lines: the test, file:line, command output or reason behind the verdict."
+          }
+        },
+        "required": ["text", "met", "evidence"]
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Problems in the change, most severe first; empty when there are none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "high: CRITICAL, medium: WARNING, low: INFO."
+          },
+          "file": { "type": "string", "description": "Path relative to the repository root; empty if none." },
+          "line": { "type": ["integer", "null"], "description": "Line in the file, or null." },
+          "message": { "type": "string", "description": "What is wrong, why it matters and the fix." }
+        },
+        "required": ["severity", "file", "line", "message"]
+      }
+    }
+  },
+  "required": ["criteria", "findings"]
+}

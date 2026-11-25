@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fact.core.settings import REPO_ROOT
 from fact.core.types import Task
-from fact.worker.prompts import PromptError, render, render_prompt
+from fact.worker.prompts import PromptError, output_schema, render, render_prompt
 
 TASK = Task(key="task:T-1", id="T-1", title="Add a thing", body="Body text", acceptance_criteria=["one", "two"])
 
@@ -61,7 +61,7 @@ def test_unsafe_name(tmp_path: Path, name: str) -> None:
         render_prompt(tmp_path, name, TASK, "", "/ws")
 
 
-@pytest.mark.parametrize("name", ["implement", "fix_checks"])
+@pytest.mark.parametrize("name", ["implement", "fix_checks", "review", "address_review"])
 def test_shipped_prompts_render(name: str) -> None:
     text = render_prompt(REPO_ROOT, name, TASK, "lint failed", "/ws")
     assert "T-1" in text
@@ -69,3 +69,18 @@ def test_shipped_prompts_render(name: str) -> None:
     assert "- one" in text
     assert "$" not in text  # no placeholder left unrendered
     assert "push" in text.lower()
+
+
+def test_review_answer_schema() -> None:
+    schema = output_schema(REPO_ROOT, "review")
+    assert {"status", "summary", "criteria", "findings"} <= set(schema["required"])
+    finding = schema["properties"]["findings"]["items"]
+    assert finding["properties"]["severity"]["enum"] == ["low", "medium", "high"]
+    assert schema["properties"]["criteria"]["items"]["required"] == ["text", "met", "evidence"]
+
+
+def test_review_prompt_never_changes_code() -> None:
+    text = render_prompt(REPO_ROOT, "review", TASK, "", "/ws")
+    assert "Never change code" in text
+    assert "`review` skill" in text
+    assert "/ws/review.json" in text

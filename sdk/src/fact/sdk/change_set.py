@@ -1,14 +1,20 @@
 """Pure helpers behind `FactWorkflow.open_change_set` and `pr_text`: no I/O, safe in workflow code."""
 
-from fact.core.activity_contract import CheckResult, OpenChangeSetInput
+from fact.core.activity_contract import CheckResult, CriterionResult, OpenChangeSetInput
 from fact.core.types import RunInput, StepResult, Task, WorkspaceHandle
 from temporalio.exceptions import ApplicationError
 
 COMMIT_TYPES = {"feature": "feat", "chore": "chore", "bug": "fix"}
 
 
-def change_set_input(
-    run: RunInput, handle: WorkspaceHandle, title: str, summary: str, check_results: list[CheckResult]
+def change_set_input(  # noqa: PLR0913 - the PR's parts, each from a different step
+    run: RunInput,
+    handle: WorkspaceHandle,
+    title: str,
+    summary: str,
+    check_results: list[CheckResult],
+    *,
+    criteria: list[CriterionResult] | None = None,
 ) -> OpenChangeSetInput:
     """Build the input of `open_change_set` for the run's first repository, on the branch the workspace checked out."""
     if not run.repos:
@@ -23,6 +29,7 @@ def change_set_input(
         title=title,
         summary=summary,
         check_results=check_results,
+        criteria=criteria or [],
         run_url=run.run_url,
     )
 

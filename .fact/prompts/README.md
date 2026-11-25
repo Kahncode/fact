@@ -27,3 +27,5 @@ Sessions run headless: nobody is asked for approval, so a tool call that would p
 
 - `implement.md` (+ `implement.schema.json`, adds `title`): implement the task to its acceptance criteria and commit locally; the `Standard` workflow uses `title` and `summary` for the PR.
 - `fix_checks.md`: fix the failing checks in `$context` and commit.
+- `review.md` (+ `review.schema.json`, adds `criteria` and `findings`): review the change with the `review` skill against the acceptance criteria, writing `$workspace/review.json`; never changes code. `criteria` is a list of `{text, met, evidence}`, `findings` a list of `{severity: low|medium|high, file, line, message}`; `fact.sdk.review.parse_review` turns a passed step whose answer does not parse into `failed_error`.
+- `address_review.md`: fix the unmet criteria and findings in `$context` (from `fact.sdk.review.review_context`) and commit.

@@ -2,7 +2,7 @@
 
 from fact.core.enums import StepOutcome
 from fact.core.types import Task
-from fact.worker.pr_body import CheckResult, render_pr_body
+from fact.worker.pr_body import CheckResult, CriterionResult, render_pr_body
 
 REPO_URL = "https://github.com/acme/widget"
 
@@ -57,3 +57,25 @@ def test_body_without_path_checks_or_run() -> None:
     assert "(none listed)" in body
     assert "(no checks ran)" in body
     assert "(no summary)" in body
+
+
+def test_reviewed_criteria_are_a_table() -> None:
+    criteria = [
+        CriterionResult(text="Tests pass", met=True, evidence="312 passed"),
+        CriterionResult(text="a | b", met=False, evidence="line one\nline two"),
+        CriterionResult(text="PR shows the table", met=True),
+    ]
+    body = render_pr_body(
+        summary="s",
+        task=_task(),
+        repo_url=REPO_URL,
+        default_branch="main",
+        check_results=[],
+        run_url="",
+        criteria=criteria,
+    )
+    assert "| Criterion | Review | Evidence |" in body
+    assert "| Tests pass | ✅ met | 312 passed |" in body
+    assert r"| a \| b | ❌ not met | line one line two |" in body
+    assert "| PR shows the table | ✅ met | - |" in body
+    assert "- [ ]" not in body
