@@ -127,15 +127,12 @@ async def test_mark_task_done_when_the_agent_deleted_the_file(worktree: Path, cl
     assert _git("rev-parse", "HEAD", cwd=worktree) == head
 
 
-async def test_mark_task_done_runs_the_repository_hooks(
-    worktree: Path, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("FACT_SECRET", "leak")
-    _hook(worktree, "pre-commit", 'echo "$FACT_SECRET" > hook-ran.txt')
+async def test_mark_task_done_runs_the_repository_hooks(worktree: Path, client: AsyncClient) -> None:
+    _hook(worktree, "pre-commit", "touch hook-ran.txt")
     _hook(worktree, "commit-msg", 'grep -q "^chore(" "$1"')
 
     await ControlActivities(BASE, client).mark_task_done(_spec(worktree))
-    assert (worktree / "hook-ran.txt").read_text(encoding="utf-8").strip() == ""  # ran, without the worker's env
+    assert (worktree / "hook-ran.txt").exists()
 
 
 async def test_mark_task_done_fails_when_a_hook_fails(worktree: Path, client: AsyncClient) -> None:

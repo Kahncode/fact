@@ -65,17 +65,17 @@ async def test_push_refuses_option_like_branch(worktree: Path, remote: Path) -> 
         await push_branch(worktree, remote.as_uri(), "--force", default_branch="main", token=None, log=print)
 
 
-async def test_pre_push_hook_does_not_run(worktree: Path, remote: Path, tmp_path: Path) -> None:
+async def test_pre_push_hook_runs(worktree: Path, remote: Path, tmp_path: Path) -> None:
     hooks = tmp_path / "hooks"
     hooks.mkdir()
     marker = tmp_path / "hook-ran"
     hook = hooks / "pre-push"
-    hook.write_text(f"#!/bin/sh\ntouch '{marker.as_posix()}'\nexit 1\n", encoding="utf-8", newline="\n")
+    hook.write_text(f"#!/bin/sh\ntouch '{marker.as_posix()}'\n", encoding="utf-8", newline="\n")
     hook.chmod(0o755)
     _git("config", "core.hooksPath", str(hooks), cwd=worktree)
     branch = await current_branch(worktree)
     await push_branch(worktree, remote.as_uri(), branch, default_branch="main", token=TOKEN, log=print)
-    assert not marker.exists()
+    assert marker.exists()  # git runs as it would for a person
 
 
 async def test_failed_push_raises(worktree: Path, tmp_path: Path) -> None:
@@ -117,19 +117,9 @@ def test_redactor_hides_token_and_header() -> None:
     assert redactor(None)("plain") == "plain"
 
 
-def test_push_config_without_token_has_no_header(tmp_path: Path) -> None:
-    env = push_config("https://github.com/a/b.git", None, tmp_path)
+def test_push_config_without_token_has_no_header() -> None:
+    env = push_config("https://github.com/a/b.git", None)
     pairs = {env[f"GIT_CONFIG_KEY_{i}"]: env[f"GIT_CONFIG_VALUE_{i}"] for i in range(int(env["GIT_CONFIG_COUNT"]))}
     assert not any("extraHeader" in key for key in pairs)
-    assert pairs["core.hooksPath"] == str(tmp_path)
-    assert pairs["credential.helper"] == ""
-    assert (pairs["protocol.allow"], pairs["protocol.https.allow"]) == ("never", "always")
-
-
-async def test_worktree_config_cannot_rewrite_push_to_ext(worktree: Path, remote: Path, tmp_path: Path) -> None:
-    marker = tmp_path / "ext-ran"
-    _git("config", "protocol.ext.allow", "always", cwd=worktree)
-    _git("config", f"url.ext::git --version >{marker.as_posix()} .insteadOf", remote.as_uri(), cwd=worktree)
-    with pytest.raises(PushError):
-        await push_branch(worktree, remote.as_uri(), "fact/task-m1-11", default_branch="main", token=TOKEN, log=print)
-    assert not marker.exists()
+    assert pairs["credential.helper"] == pairs["core.askPass"] == ""
+    assert (env["GIT_TERMINAL_PROMPT"], env["GIT_ASKPASS"]) == ("0", "")  # a rejected token fails, never prompts

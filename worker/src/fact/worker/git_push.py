@@ -7,7 +7,6 @@ redacted from every output line handed to the caller.
 """
 
 import base64
-import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -44,28 +43,17 @@ def redactor(token: str | None) -> Callable[[str], str]:
     return redact
 
 
-def push_config(url: str, token: str | None, hooks_dir: Path) -> dict[str, str]:
+def push_config(url: str, token: str | None) -> dict[str, str]:
     """
-    Environment for `git push`, overriding config the worktree could set.
+    Environment for `git push`: the token as an `http.<url>.extraHeader`, and no credential helper or prompt.
 
-    Environment config outranks every config file, so: no hooks, no credential helpers or askpass, no proxy, TLS
-    verification on, and only the push URL's protocol allowed (so `url.*.insteadOf` cannot rewrite to `ext::`). The
-    token header is scoped to `url`, so a rewrite to another host never receives it.
+    The token normally authenticates on its own. If GitHub rejects it, clearing the helpers and askpass (including
+    the `GIT_ASKPASS` that VS Code's terminal sets) makes the push fail, instead of prompting or pushing as the user.
     """
-    scheme = url.partition("://")[0].lower()
-    entries = [
-        ("core.hooksPath", str(hooks_dir)),
-        ("core.fsmonitor", "false"),
-        ("core.askPass", ""),
-        ("credential.helper", ""),  # an empty value resets the helper list
-        ("http.proxy", ""),
-        ("http.sslVerify", "true"),
-        ("protocol.allow", "never"),
-        (f"protocol.{scheme}.allow", "always"),
-    ]
+    entries = [("core.askPass", ""), ("credential.helper", "")]  # an empty value resets the helper list
     if token:
         entries.append((f"http.{url}.extraHeader", auth_header(token)))
-    env = {"GIT_CONFIG_COUNT": str(len(entries)), "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}
+    env = {"GIT_CONFIG_COUNT": str(len(entries)), "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": ""}
     for i, (key, value) in enumerate(entries):
         env[f"GIT_CONFIG_KEY_{i}"] = key
         env[f"GIT_CONFIG_VALUE_{i}"] = value
@@ -116,8 +104,7 @@ async def push_branch(  # noqa: PLR0913 - options are keyword-only
     """
     Push `branch` from `worktree` to `url`, given explicitly rather than through the worktree's `origin`.
 
-    Refuses the default branch. `push_config` and `--no-verify` keep worktree config and hooks from running code or
-    redirecting the token. Output lines go to `log`, redacted.
+    Refuses the default branch. Git runs with the user's config and hooks; output lines go to `log`, redacted.
     """
     if branch == default_branch:
         msg = f"refusing to push {branch!r}: it is the repository's default branch"
@@ -126,10 +113,9 @@ async def push_branch(  # noqa: PLR0913 - options are keyword-only
         msg = f"refusing to push invalid branch name {branch!r}"
         raise PushRefusedError(msg)
     redact = redactor(token)
-    args = ["push", "--no-verify", "--porcelain", url, f"refs/heads/{branch}:refs/heads/{branch}"]
+    args = ["push", "--porcelain", url, f"refs/heads/{branch}:refs/heads/{branch}"]
     log(f"$ git push {url} {branch}")
-    with tempfile.TemporaryDirectory(prefix="fact-no-hooks-") as hooks_dir:
-        code, lines = await run_git(args, worktree, push_config(url, token, Path(hooks_dir)), redact)
+    code, lines = await run_git(args, worktree, push_config(url, token), redact)
     for line in lines:
         log(line)
     if code != 0:

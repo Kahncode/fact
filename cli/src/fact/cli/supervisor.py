@@ -30,6 +30,7 @@ class ChildSpec:
     argv: list[str]
     wait_for: tuple[str, int] | None = None  # (host, port) that must accept connections before starting
     env: dict[str, str] = field(default_factory=dict)  # added to this process's environment
+    unset: tuple[str, ...] = ()  # removed from this process's environment before `env` is added
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,10 @@ def _pump(name: str, width: int, stream: IO[str]) -> None:
         emit(name, width, line)
 
 
+def _inherited(unset: tuple[str, ...]) -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in unset}
+
+
 def _start(spec: ChildSpec, width: int, children: list[Child], pumps: list[threading.Thread]) -> None:
     # Own process group (Windows) or session (POSIX): the console's Ctrl-C reaches only us, and we stop them in order.
     kwargs: dict = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if IS_WINDOWS else {"start_new_session": True}
@@ -64,7 +69,7 @@ def _start(spec: ChildSpec, width: int, children: list[Child], pumps: list[threa
         text=True,
         encoding="utf-8",
         errors="replace",
-        env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **spec.env},
+        env={**_inherited(spec.unset), "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **spec.env},
         **kwargs,
     )
     children.append(Child(spec.name, proc))  # tracked before anything else can be interrupted

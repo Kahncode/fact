@@ -52,8 +52,7 @@ async def _git_code(args: list[str], worktree: Path) -> tuple[int, list[str]]:
     """
     Run git in the worktree as a person would: their config and the repository's hooks apply.
 
-    Signing is off because nobody is there to unlock a key; pathspecs are literal. The environment is the minimal one
-    `run_git` builds, so a hook gets none of the worker's environment variables.
+    Signing is off because nobody is there to unlock a key; pathspecs are literal.
     """
     return await run_git(["--literal-pathspecs", "-c", "commit.gpgSign=false", *args], worktree)
 

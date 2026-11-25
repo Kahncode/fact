@@ -1,4 +1,4 @@
-"""Subprocess helpers: a minimal environment, merged output and killing a whole process tree."""
+"""Subprocess helpers: the inherited environment, merged output and killing a whole process tree."""
 
 import asyncio
 import contextlib
@@ -13,16 +13,13 @@ from typing import Any
 
 from fact.worker.runners.base import ExecExit, ExecLine, ExecOutput
 
-BASE_ENV_KEYS = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT")
 _LINE_LIMIT = 1 << 20
 _IS_WINDOWS = sys.platform == "win32"
 
 
 def build_env(extra: Mapping[str, str] | None) -> dict[str, str]:
-    """Only what the caller passes plus the few variables a process needs to start."""
-    env = {k: os.environ[k] for k in BASE_ENV_KEYS if k in os.environ}
-    env.update(extra or {})
-    return env
+    """Return the worker's own environment plus what the caller passes: a local machine is a trusted environment."""
+    return {**os.environ, **(extra or {})}
 
 
 async def kill_tree(proc: asyncio.subprocess.Process) -> None:

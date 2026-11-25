@@ -149,15 +149,15 @@ async def test_teardown_removes_workspace_and_worktree(runner: LocalWorktreeRunn
     assert "run-1" not in _git("worktree", "list", cwd=mirror)
 
 
-async def test_env_is_minimal(runner: LocalWorktreeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FACT_SECRET_TEST", "leak")
+async def test_env_is_inherited(runner: LocalWorktreeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FACT_ENV_TEST", "inherited")
     handle = await runner.prepare(_spec())
 
     lines, _ = await _collect(
-        runner.exec(handle, [sys.executable, "-c", "import os; print(os.environ.get('FACT_SECRET_TEST'))"])
+        runner.exec(handle, [sys.executable, "-c", "import os; print(os.environ.get('FACT_ENV_TEST'))"])
     )
 
-    assert lines == ["None"]
+    assert lines == ["inherited"]  # a local machine is trusted; containers isolate
     await runner.teardown(handle)
 
 

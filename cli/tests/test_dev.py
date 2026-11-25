@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from typer.testing import CliRunner
 
 
 def test_build_commands(settings: Settings) -> None:
-    temporal, api, worker = dev.build_commands(settings, "/bin/temporal")
+    temporal, api, worker = dev.build_commands(settings, "/bin/temporal", environ={})
 
     assert temporal.name == "temporal"
     assert temporal.argv == [
@@ -86,11 +87,11 @@ def test_temporal_endpoint_rejects_missing_port() -> None:
 
 def test_build_commands_from_pinned(settings: Settings, tmp_path: Path) -> None:
     checkout = tmp_path / "pinned" / "abc"
-    temporal, api, worker = dev.build_commands(settings, "temporal", checkout, "/bin/uv")
+    temporal, api, worker = dev.build_commands(settings, "temporal", checkout, environ={})
 
-    launcher = ["/bin/uv", "run", "--frozen", "--project", str(checkout), "python"]
-    assert api.argv == [*launcher, "-m", "fact.api"]
-    assert worker.argv == [*launcher, "-m", "fact.worker"]
+    python = str(dev.venv_python(checkout))
+    assert api.argv == [python, "-m", "fact.api"]
+    assert worker.argv == [python, "-m", "fact.worker"]
     assert api.env == worker.env == {CONFIG_VAR: str(config_file().resolve())}
     assert temporal.env == {}
 
@@ -112,6 +113,8 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     checkout = settings.pinned_dir / "factory" / sha
     checkout.mkdir(parents=True)
     (checkout / "pyproject.toml").write_text("", encoding="utf-8")
+    dev.venv_python(checkout).parent.mkdir(parents=True)
+    dev.venv_python(checkout).write_text("", encoding="utf-8")
     (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     started: list[list[str]] = []
@@ -126,4 +129,35 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
 
     assert result.exit_code == 0, result.output
     assert f"Running pinned {sha}" in result.output
-    assert started[1][:5] == ["uv", "run", "--frozen", "--project", str(checkout)]
+    assert started[1][0] == str(dev.venv_python(checkout))
+
+
+def test_children_start_without_the_venv_activation(settings: Settings, tmp_path: Path) -> None:
+    venv = tmp_path / "factory" / ".venv"
+    scripts = venv / ("Scripts" if dev.IS_WINDOWS else "bin")
+    other = tmp_path / "tools"
+    environ = {"VIRTUAL_ENV": str(venv), "PATH": os.pathsep.join([str(scripts), str(other)])}
+
+    temporal, api, worker = dev.build_commands(settings, "temporal", environ=environ)
+
+    assert api.env["PATH"] == worker.env["PATH"] == str(other)
+    assert api.unset == worker.unset == dev.VENV_VARS
+    assert temporal.unset == ()
+
+
+def test_path_is_kept_without_an_active_venv() -> None:
+    assert dev.deactivated_path({"PATH": "/bin"}) is None
+
+
+def test_dev_pinned_without_venv_fails(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    sha = "d" * 40
+    (settings.pinned_dir / "factory" / sha).mkdir(parents=True)
+    (settings.pinned_dir / "factory" / sha / "pyproject.toml").write_text("", encoding="utf-8")
+    (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
+    monkeypatch.setattr(dev.shutil, "which", lambda name: name)
+    monkeypatch.setattr(dev, "run_all", lambda _: 0)
+
+    result = CliRunner().invoke(app, ["dev", "--pinned"])
+
+    assert result.exit_code == 1
+    assert "run `fact use` again" in result.output

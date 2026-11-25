@@ -27,7 +27,7 @@ class HarnessRequest(_Model):
     permission_mode: str | None = None  # harness-specific, such as "auto" for Claude Code; None: the harness default
     output_schema: dict[str, Any] | None = None  # JSON Schema the agent's final answer must match
     resume_session_id: str | None = None
-    env: dict[str, str] = Field(default_factory=dict)  # added to a minimal environment; agent credentials go here
+    env: dict[str, str] = Field(default_factory=dict)  # added to the worker's environment, overriding it
 
 
 class PermissionDenial(_Model):
