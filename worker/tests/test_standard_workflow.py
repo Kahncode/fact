@@ -1,231 +1,51 @@
 """`.fact/workflows/standard.py` against fake activities registered under the real names, plus a replay test."""
 
-import importlib
 import json
 import os
-import sys
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
 
 import pytest
 from fact.core.activity_contract import (
     AGENT_INTERRUPTED,
     AGENT_STEP,
-    CONTROL_QUEUE,
     MARK_TASK_DONE,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
-    SANDBOX_QUEUE,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
-    AgentStepInput,
-    MarkTaskDoneInput,
-    OpenChangeSetInput,
-    PostCostCommentInput,
-    RunFinishedInput,
-    RunStartedInput,
-    ShellStepInput,
 )
 from fact.core.enums import RunOutcome, StepOutcome
-from fact.core.settings import REPO_ROOT
-from fact.core.types import PRRef, RepoCheckout, RunInput, RunResult, StepResult, Task, WorkspaceHandle, WorkspaceSpec
+from fact.core.types import StepResult
 from fact.sdk.sessions import MAX_RESUMES
 from fact.worker.loader import sandbox_runner
-from temporalio import activity
-from temporalio.client import Client, WorkflowFailureError, WorkflowHistory
+from standard_harness import (
+    BRANCH,
+    HISTORY,
+    LEARNED,
+    MAX_FIX_ATTEMPTS,
+    MET,
+    PR,
+    RECORD_VAR,
+    RUN_URL,
+    STANDARD,
+    FakeActivities,
+    agent_sessions,
+    checks,
+    finished,
+    run_standard,
+)
+from temporalio.client import WorkflowFailureError, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Replayer, Worker
-
-WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
-WORKFLOW_QUEUE = "wf-test"
-IDENTITY = "test-worker"  # kept out of recorded histories instead of the host name
-REPO = "acme/widget"
-BRANCH = "fact/task-m1-99"
-PR = PRRef(repo=REPO, number=7, url=f"https://github.com/{REPO}/pull/7", head_sha="abc123")
-
-
-def load_standard() -> ModuleType:
-    """Import `.fact/workflows/standard.py` by name, so the workflow sandbox can import it again."""
-    if str(WORKFLOWS_DIR) not in sys.path:
-        sys.path.insert(0, str(WORKFLOWS_DIR))
-    return importlib.import_module("standard")
-
-
-RUN_URL = "http://ui.test/namespaces/default/workflows/run-1"
-MET = {"text": "The widget renders", "met": True, "evidence": "test_widget passes"}
-UNMET = {"text": "The widget is documented", "met": False, "evidence": "README not updated"}
-LOW = {"severity": "low", "file": "widget.py", "line": 3, "message": "name could be clearer"}
-HIGH = {"severity": "high", "file": "widget.py", "line": 9, "message": "crashes on empty input"}
-CLEAN_REVIEW = {"status": "done", "summary": "looks good", "criteria": [MET], "findings": [LOW]}
-
-
-def run_input(run_id: str = "run-1") -> RunInput:
-    task = Task(key="task:M1-99", id="M1-99", title="Add a widget", path="tasks/M1/99-widget.md")
-    repo = RepoCheckout(full_name=REPO, default_branch="main", branch=BRANCH)
-    return RunInput(run_id=run_id, project="acme", task=task, repos=[repo], run_url=RUN_URL)
-
-
-@dataclass
-class FakeActivities:
-    """Scripted step results. `test_failures` is how many `test` checks fail before one passes."""
-
-    test_failures: int = 0
-    implement_outcome: StepOutcome = StepOutcome.PASSED
-    setup_outcome: StepOutcome = StepOutcome.PASSED
-    implement_script: list[StepResult | Exception] = field(default_factory=list)  # first implement sessions, in order
-    review: StepResult = field(
-        default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, summary="looks good", outputs=CLEAN_REVIEW)
-    )
-    address_outcome: StepOutcome = StepOutcome.PASSED
-    test_failures_after_address: int = 0  # `test` failures once `address_review` has run
-    broken: str | None = None  # name of an activity that raises a non-retryable error
-    checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
-    calls: list[tuple[str, object]] = field(default_factory=list)
-
-    def _call(self, name: str, spec: object) -> None:
-        self.calls.append((name, spec))
-        if name == self.broken:
-            msg = f"{name} is broken"
-            raise ApplicationError(msg, non_retryable=True)
-
-    @activity.defn(name=RECORD_RUN_STARTED)
-    async def record_run_started(self, spec: RunStartedInput) -> None:
-        self._call(RECORD_RUN_STARTED, spec)
-
-    @activity.defn(name=RECORD_RUN_FINISHED)
-    async def record_run_finished(self, spec: RunFinishedInput) -> None:
-        self._call(RECORD_RUN_FINISHED, spec)
-
-    @activity.defn(name=PREPARE_WORKSPACE)
-    async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
-        self._call(PREPARE_WORKSPACE, spec)
-        root = f"/ws/{spec.run_id}"
-        repos = {r.full_name: f"{root}/widget" for r in spec.repos}
-        return WorkspaceHandle(
-            run_id=spec.run_id, root=root, repos=repos, branches=dict.fromkeys(repos, self.checked_out)
-        )
-
-    @activity.defn(name=TEARDOWN_WORKSPACE)
-    async def teardown_workspace(self, handle: WorkspaceHandle) -> None:
-        self._call(TEARDOWN_WORKSPACE, handle)
-
-    @activity.defn(name=AGENT_STEP)
-    async def agent_step(self, spec: AgentStepInput) -> StepResult:
-        self._call(AGENT_STEP, spec)
-        implementing = spec.prompt_name == "implement"
-        if implementing and self.implement_script:
-            scripted = self.implement_script.pop(0)
-            if isinstance(scripted, Exception):
-                raise scripted
-            return scripted
-        if spec.prompt_name == "review":
-            return self.review
-        if spec.prompt_name == "address_review":
-            self.test_failures += self.test_failures_after_address
-            return StepResult(outcome=self.address_outcome, summary="addressed", outputs={"summary": "addressed"})
-        outputs = {"title": "feat(M1-99): add the widget"} if implementing else {}
-        outcome = self.implement_outcome if implementing else StepOutcome.PASSED
-        return StepResult(outcome=outcome, summary=f"{spec.prompt_name} done", outputs=outputs)
-
-    @activity.defn(name=SHELL_STEP)
-    async def shell_step(self, spec: ShellStepInput) -> StepResult:
-        self._call(SHELL_STEP, spec)
-        if spec.check == "setup":
-            return StepResult(outcome=self.setup_outcome, summary="`uv sync` exited with 1")
-        if spec.check == "test" and self.test_failures > 0:
-            self.test_failures -= 1
-            outputs = {"command": ["pytest"], "exit_code": 1, "failure_output": "FAILED test_widget"}
-            return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="`pytest` exited with 1", outputs=outputs)
-        return StepResult(outcome=StepOutcome.PASSED)
-
-    @activity.defn(name=MARK_TASK_DONE)
-    async def mark_task_done(self, spec: MarkTaskDoneInput) -> bool:
-        self._call(MARK_TASK_DONE, spec)
-        return True
-
-    @activity.defn(name=OPEN_CHANGE_SET)
-    async def open_change_set(self, spec: OpenChangeSetInput) -> list[PRRef]:
-        self._call(OPEN_CHANGE_SET, spec)
-        return [PR]
-
-    @activity.defn(name=POST_COST_COMMENT)
-    async def post_cost_comment(self, spec: PostCostCommentInput) -> None:
-        self._call(POST_COST_COMMENT, spec)
-
-    def of(self, name: str) -> list:
-        return [arg for n, arg in self.calls if n == name]
-
-
-@asynccontextmanager
-async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> AsyncIterator[None]:
-    control = [
-        fakes.record_run_started,
-        fakes.record_run_finished,
-        fakes.prepare_workspace,
-        fakes.teardown_workspace,
-        fakes.mark_task_done,
-        fakes.open_change_set,
-        fakes.post_cost_comment,
-    ]
-    async with AsyncExitStack() as stack:
-        await stack.enter_async_context(
-            Worker(
-                client,
-                identity=IDENTITY,
-                task_queue=WORKFLOW_QUEUE,
-                workflows=[workflow_cls],
-                workflow_runner=sandbox_runner(),
-            )
-        )
-        await stack.enter_async_context(Worker(client, identity=IDENTITY, task_queue=CONTROL_QUEUE, activities=control))
-        await stack.enter_async_context(
-            Worker(client, identity=IDENTITY, task_queue=SANDBOX_QUEUE, activities=[fakes.agent_step, fakes.shell_step])
-        )
-        yield
-
-
-_standard = load_standard()
-STANDARD = _standard.Standard
-MAX_FIX_ATTEMPTS = _standard.MAX_FIX_ATTEMPTS
-HISTORY = Path(__file__).parent / "histories" / "standard_green.json"
-RECORD_VAR = "FACT_RECORD_HISTORIES"  # set to 1 to re-record the saved histories from the green path
-
-
-async def _run(fakes: FakeActivities, workflow_id: str) -> tuple[RunResult, WorkflowHistory]:
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter, identity=IDENTITY)
-    async with env_cm as env, workers(env.client, fakes, STANDARD):
-        handle = await env.client.start_workflow(
-            STANDARD.run, run_input(), id=workflow_id, task_queue=WORKFLOW_QUEUE, result_type=RunResult
-        )
-        result = await handle.result()
-        history = await handle.fetch_history()
-    return result, history
-
-
-def _agent_sessions(fakes: FakeActivities) -> list[tuple[str, int, str]]:
-    return [(s.stage_id, s.attempt, s.prompt_name) for s in fakes.of(AGENT_STEP)]
-
-
-def _finished(fakes: FakeActivities) -> RunOutcome:
-    (finished,) = fakes.of(RECORD_RUN_FINISHED)
-    return finished.outcome
-
-
-def _checks(fakes: FakeActivities) -> list[ShellStepInput]:
-    return [s for s in fakes.of(SHELL_STEP) if s.stage_id == "checks"]
+from temporalio.worker import Replayer
 
 
 async def test_green_path(tmp_path: Path) -> None:
     fakes = FakeActivities()
-    result, history = await _run(fakes, "run-green")
+    result, history = await run_standard(fakes, "run-green")
 
     assert result.outcome == RunOutcome.PR_OPENED
     assert result.prs == [PR]
@@ -237,13 +57,14 @@ async def test_green_path(tmp_path: Path) -> None:
         SHELL_STEP,
         SHELL_STEP,
         AGENT_STEP,
+        AGENT_STEP,
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         TEARDOWN_WORKSPACE,
     ]
-    assert _agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review")]
+    assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
         ("setup", 1, "setup"),
         ("checks", 1, "lint"),
@@ -251,14 +72,13 @@ async def test_green_path(tmp_path: Path) -> None:
     ]
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert pr_spec.branch == BRANCH
-    assert pr_spec.title == "feat(M1-99): add the widget"  # from the implement session's outputs
-    assert pr_spec.summary == "implement done"
+    assert (pr_spec.title, pr_spec.summary) == (LEARNED["title"], LEARNED["summary"])  # from the learn session
     assert pr_spec.run_url == RUN_URL
     assert [(c.name, c.outcome) for c in pr_spec.check_results] == [("lint", "passed"), ("test", "passed")]
     assert [c.model_dump() for c in pr_spec.criteria] == [MET]  # a low finding needs no address_review
     (cost_spec,) = fakes.of(POST_COST_COMMENT)
     assert (cost_spec.run_id, cost_spec.prs) == ("run-1", [PR])
-    assert _finished(fakes) == RunOutcome.PR_OPENED
+    assert finished(fakes) == RunOutcome.PR_OPENED
 
     if os.environ.get(RECORD_VAR):
         HISTORY.parent.mkdir(exist_ok=True)
@@ -269,40 +89,41 @@ async def test_green_path(tmp_path: Path) -> None:
 
 async def test_two_failures_then_green() -> None:
     fakes = FakeActivities(test_failures=2)
-    result, _ = await _run(fakes, "run-two-failures")
+    result, _ = await run_standard(fakes, "run-two-failures")
 
     assert result.outcome == RunOutcome.PR_OPENED
-    assert _agent_sessions(fakes) == [
+    assert agent_sessions(fakes) == [
         ("implement", 1, "implement"),
         ("implement", 2, "fix_checks"),
         ("implement", 3, "fix_checks"),
         ("review", 1, "review"),
+        ("learn", 1, "learn"),
     ]
     fix = fakes.of(AGENT_STEP)[1]
     assert "### test: `pytest` exited with 1" in fix.context
     assert "FAILED test_widget" in fix.context
-    assert [s.attempt for s in _checks(fakes)] == [1, 2, 3, 4, 5, 6]  # three rounds of lint and test
+    assert [s.attempt for s in checks(fakes)] == [1, 2, 3, 4, 5, 6]  # three rounds of lint and test
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
 async def test_exhausted_checks_need_a_human() -> None:
     fakes = FakeActivities(test_failures=100)
-    result, _ = await _run(fakes, "run-exhausted")
+    result, _ = await run_standard(fakes, "run-exhausted")
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
     assert result.prs == []
     assert "test" in result.summary
     assert len(fakes.of(AGENT_STEP)) == 1 + MAX_FIX_ATTEMPTS
-    assert len(_checks(fakes)) == 2 * (MAX_FIX_ATTEMPTS + 1)
+    assert len(checks(fakes)) == 2 * (MAX_FIX_ATTEMPTS + 1)
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
-    assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
+    assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
 
 
 async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
     fakes = FakeActivities(checked_out=f"{BRANCH}-2")
-    result, _ = await _run(fakes, "run-branch-taken")
+    result, _ = await run_standard(fakes, "run-branch-taken")
 
     assert result.outcome == RunOutcome.PR_OPENED
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
@@ -311,18 +132,18 @@ async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
 
 async def test_failed_setup_ends_the_run_before_implement() -> None:
     fakes = FakeActivities(setup_outcome=StepOutcome.FAILED_CHECKS)
-    result, _ = await _run(fakes, "run-setup-failed")
+    result, _ = await run_standard(fakes, "run-setup-failed")
 
     assert result.outcome == RunOutcome.FAILED
     assert "setup ended failed_checks" in result.summary
     assert fakes.of(AGENT_STEP) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
-    assert _finished(fakes) == RunOutcome.FAILED
+    assert finished(fakes) == RunOutcome.FAILED
 
 
 async def test_teardown_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=TEARDOWN_WORKSPACE)
-    result, _ = await _run(fakes, "run-teardown-broken")
+    result, _ = await run_standard(fakes, "run-teardown-broken")
     assert result.outcome == RunOutcome.PR_OPENED
 
 
@@ -335,24 +156,24 @@ async def test_replay_green_history() -> None:
 
 async def test_failed_implement_ends_the_run_without_checks() -> None:
     fakes = FakeActivities(implement_outcome=StepOutcome.FAILED_ERROR)
-    result, _ = await _run(fakes, "run-implement-failed")
+    result, _ = await run_standard(fakes, "run-implement-failed")
 
     assert result.outcome == RunOutcome.FAILED
-    assert _checks(fakes) == []
+    assert checks(fakes) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
-    assert _finished(fakes) == RunOutcome.FAILED
+    assert finished(fakes) == RunOutcome.FAILED
 
 
 async def test_blocked_implement_needs_a_human_without_a_pr() -> None:
     fakes = FakeActivities(implement_outcome=StepOutcome.NEEDS_HUMAN)
-    result, _ = await _run(fakes, "run-implement-blocked")
+    result, _ = await run_standard(fakes, "run-implement-blocked")
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
     assert "needs_human" in result.summary
-    assert _checks(fakes) == []
+    assert checks(fakes) == []
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
-    assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
+    assert finished(fakes) == RunOutcome.NEEDS_HUMAN
 
 
 RETRYABLE = StepResult(
@@ -366,10 +187,10 @@ INTERRUPTED = ApplicationError("worker stopped", "s-1", type=AGENT_INTERRUPTED, 
 
 async def test_retryable_block_resumes_the_session_once() -> None:
     fakes = FakeActivities(implement_script=[RETRYABLE])
-    result, _ = await _run(fakes, "run-retryable")
+    result, _ = await run_standard(fakes, "run-retryable")
 
     assert result.outcome == RunOutcome.PR_OPENED
-    first, second, _review = fakes.of(AGENT_STEP)
+    first, second, _review, _learn = fakes.of(AGENT_STEP)
     assert (first.attempt, first.resume_session_id) == (1, None)
     assert (second.stage_id, second.attempt, second.prompt_name) == ("implement", 2, "implement")
     assert second.resume_session_id == "s-1"
@@ -378,7 +199,7 @@ async def test_retryable_block_resumes_the_session_once() -> None:
 
 async def test_retryable_block_twice_needs_a_human() -> None:
     fakes = FakeActivities(implement_script=[RETRYABLE, RETRYABLE])
-    result, _ = await _run(fakes, "run-retryable-twice")
+    result, _ = await run_standard(fakes, "run-retryable-twice")
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
     assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1  # one resume, never more
@@ -387,10 +208,10 @@ async def test_retryable_block_twice_needs_a_human() -> None:
 
 async def test_interrupted_worker_resumes_the_session() -> None:
     fakes = FakeActivities(implement_script=[INTERRUPTED])
-    result, _ = await _run(fakes, "run-interrupted")
+    result, _ = await run_standard(fakes, "run-interrupted")
 
     assert result.outcome == RunOutcome.PR_OPENED
-    _, resumed, _review = fakes.of(AGENT_STEP)
+    _, resumed, _review, _learn = fakes.of(AGENT_STEP)
     assert (resumed.attempt, resumed.resume_session_id) == (2, "s-1")
     assert "worker" in resumed.context
 
@@ -398,30 +219,30 @@ async def test_interrupted_worker_resumes_the_session() -> None:
 async def test_interrupted_twice_fails_the_run() -> None:
     fakes = FakeActivities(implement_script=[INTERRUPTED, INTERRUPTED])
     with pytest.raises(WorkflowFailureError):
-        await _run(fakes, "run-interrupted-twice")
+        await run_standard(fakes, "run-interrupted-twice")
     assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1
-    assert _finished(fakes) == RunOutcome.FAILED
+    assert finished(fakes) == RunOutcome.FAILED
     assert fakes.of(TEARDOWN_WORKSPACE) == []
 
 
 async def test_cost_comment_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=POST_COST_COMMENT)
-    result, _ = await _run(fakes, "run-cost-broken")
+    result, _ = await run_standard(fakes, "run-cost-broken")
     assert result.outcome == RunOutcome.PR_OPENED
-    assert _finished(fakes) == RunOutcome.PR_OPENED
+    assert finished(fakes) == RunOutcome.PR_OPENED
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=RECORD_RUN_STARTED)
-    result, _ = await _run(fakes, "run-api-down")
+    result, _ = await run_standard(fakes, "run-api-down")
     assert result.outcome == RunOutcome.PR_OPENED
 
 
 async def test_failing_activity_fails_the_run_and_records_it() -> None:
     fakes = FakeActivities(broken=PREPARE_WORKSPACE)
     with pytest.raises(WorkflowFailureError):
-        await _run(fakes, "run-prepare-broken")
-    assert _finished(fakes) == RunOutcome.FAILED
+        await run_standard(fakes, "run-prepare-broken")
+    assert finished(fakes) == RunOutcome.FAILED
 
 
 def test_standard_stage_manifest() -> None:
@@ -432,72 +253,7 @@ def test_standard_stage_manifest() -> None:
         {"id": "checks", "label": "Lint and test", "kind": "shell", "loops_to": "implement"},
         {"id": "review", "label": "Review", "kind": "agent", "loops_to": None},
         {"id": "address_review", "label": "Address review", "kind": "agent", "loops_to": "checks"},
+        {"id": "learn", "label": "Learn", "kind": "agent", "loops_to": None},
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
     ]
     assert json.loads(json.dumps(STANDARD.manifest()))[3]["loops_to"] == "implement"
-
-
-def _reviewed(outputs: dict, outcome: StepOutcome = StepOutcome.PASSED) -> StepResult:
-    return StepResult(outcome=outcome, summary="reviewed", outputs={"status": "done", "summary": "reviewed", **outputs})
-
-
-@pytest.mark.parametrize(
-    ("criteria", "findings"), [([UNMET], [LOW]), ([MET], [HIGH]), ([MET], [{**HIGH, "severity": "medium"}])]
-)
-async def test_review_findings_are_addressed_then_checked(criteria: list, findings: list) -> None:
-    fakes = FakeActivities(review=_reviewed({"criteria": criteria, "findings": findings}))
-    result, _ = await _run(fakes, "run-review-findings")
-
-    assert result.outcome == RunOutcome.PR_OPENED
-    assert _agent_sessions(fakes) == [
-        ("implement", 1, "implement"),
-        ("review", 1, "review"),
-        ("address_review", 1, "address_review"),
-    ]
-    address = fakes.of(AGENT_STEP)[2]
-    assert all(f["message"] in address.context for f in findings)
-    assert all(c["text"] in address.context for c in criteria if not c["met"])
-    assert [(s.attempt, s.check) for s in _checks(fakes)] == [(1, "lint"), (2, "test"), (3, "lint"), (4, "test")]
-    (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
-    assert pr_spec.title == "feat(M1-99): add the widget"
-    assert pr_spec.summary == "implement done"  # neither review nor address_review rewrites the PR text
-    assert [c.text for c in pr_spec.criteria] == [c["text"] for c in criteria]
-
-
-async def test_checks_failing_after_address_review_go_to_fix_sessions() -> None:
-    fakes = FakeActivities(review=_reviewed({"criteria": [MET], "findings": [HIGH]}), test_failures_after_address=1)
-    result, _ = await _run(fakes, "run-address-then-fix")
-
-    assert result.outcome == RunOutcome.PR_OPENED
-    assert [p for _, _, p in _agent_sessions(fakes)] == ["implement", "review", "address_review", "fix_checks"]
-
-
-async def test_blocked_address_review_needs_a_human() -> None:
-    fakes = FakeActivities(
-        review=_reviewed({"criteria": [UNMET], "findings": []}), address_outcome=StepOutcome.NEEDS_HUMAN
-    )
-    result, _ = await _run(fakes, "run-address-blocked")
-
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert "address_review ended needs_human" in result.summary
-    assert fakes.of(OPEN_CHANGE_SET) == []
-
-
-@pytest.mark.parametrize(
-    "review",
-    [
-        StepResult(outcome=StepOutcome.FAILED_ERROR, summary="the agent ended without a structured answer: bye"),
-        _reviewed({"criteria": [MET]}),  # no findings
-        _reviewed({"criteria": [{"text": "x", "met": "maybe"}], "findings": []}),
-        _reviewed({"criteria": [], "findings": [{**LOW, "severity": "blocker"}]}),
-    ],
-)
-async def test_review_without_a_valid_answer_fails_the_run(review: StepResult) -> None:
-    fakes = FakeActivities(review=review)
-    result, _ = await _run(fakes, "run-review-invalid")
-
-    assert result.outcome == RunOutcome.FAILED
-    assert "review ended failed_error" in result.summary
-    assert [p for _, _, p in _agent_sessions(fakes)] == ["implement", "review"]
-    assert fakes.of(OPEN_CHANGE_SET) == []
-    assert _finished(fakes) == RunOutcome.FAILED

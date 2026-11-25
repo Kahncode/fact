@@ -176,6 +176,13 @@ You may edit any relevant project documentation:
 
 Never leave documentation in a contradictory state after a run.
 
+## Interactive vs Unattended
+
+The caller says which mode you run in; without a mode, assume interactive.
+
+- **Interactive:** ask the user before writing significant changes (more than a few lines).
+- **Unattended:** nobody can answer. Never ask or wait: write the updates, and where a fact conflicts with the docs, follow the code and note the conflict in your report. List every file you changed in your report. Never commit.
+
 ## Auto-Memory Is Not Enough
 
 When invoked via `/learn`, the primary target is **project documentation files** — `AGENTS.md`, `docs/*.md`, `README.md`, etc. Auto-memory files (e.g. `.claude/projects/*/memory/MEMORY.md`) are a separate system managed by Claude Code itself and are **not** a substitute for updating project docs.

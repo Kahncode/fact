@@ -17,7 +17,7 @@ Any error is a `WorkflowLoadError` naming the project or file; `python -m fact.w
 
 `fact.worker.deployments`: each loaded project gets a worker on task queue `wf-<project>` (`workflow_queue(project)` in `fact.core.activity_contract`), as version `<factory SHA[:12]>+<home SHA>` of deployment `wf-<project>`, with Worker Deployment Versioning and default behaviour `PINNED`. Once the workers start, `set_current_version` makes that version current (retried up to 10 times; startup fails if it cannot). `FactWorkflow.execute` passes the build id as `RunStartedInput.worker_version`, and `record_run_started` stores `worker_version` and `home_sha` on the run.
 
-One process runs only the newest version: runs pinned to an older one wait after a restart on new code, so drop and restart them. Side-by-side versions (`fact upgrade`) come later. `loader.sandbox_runner()` is the sandboxed runner every workflow worker (and `test_standard_workflow.py`) uses, with `fact`, `pydantic`, `pydantic_core` and `rich` passed through.
+One process runs only the newest version: runs pinned to an older one wait after a restart on new code, so drop and restart them. Side-by-side versions (`fact upgrade`) come later. `loader.sandbox_runner()` is the sandboxed runner every workflow worker (and the `Standard` tests, through `tests/standard_harness.py`) uses, with `fact`, `pydantic`, `pydantic_core` and `rich` passed through.
 
 ## Runners
 
@@ -89,7 +89,7 @@ A missing GitHub App, a refusal, and GitHub 401, 404 or 422 are non-retryable `A
 
 ## Workflow tests
 
-`tests/test_loader.py`, `tests/test_deployments.py` and `tests/test_pinned_run.py` cover loading, deployment config and a pinned run that records its version (`test_pinned_run.py` starts a Temporal dev server and is skipped when `temporal` is not on PATH). `tests/test_standard_workflow.py` runs `.fact/workflows/standard.py` in a time-skipping Temporal environment with fake activities registered under the real names, and replays `tests/histories/standard_green.json`. Re-record that history after an intended workflow change:
+`tests/test_loader.py`, `tests/test_deployments.py` and `tests/test_pinned_run.py` cover loading, deployment config and a pinned run that records its version (`test_pinned_run.py` starts a Temporal dev server and is skipped when `temporal` is not on PATH). `tests/test_standard_workflow.py` runs `.fact/workflows/standard.py` in a time-skipping Temporal environment with fake activities registered under the real names, and replays `tests/histories/standard_green.json`; `tests/test_standard_review.py` and `tests/test_standard_learn.py` cover the review and learn stages. The shared fakes and helpers (`FakeActivities`, `run_standard`, `load_standard`) live in `tests/standard_harness.py`, imported as `standard_harness` because `tests/conftest.py` puts `worker/tests` on `sys.path`. Re-record that history after an intended workflow change:
 
 ```
 FACT_RECORD_HISTORIES=1 uv run pytest worker/tests/test_standard_workflow.py

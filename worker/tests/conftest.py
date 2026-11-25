@@ -1,5 +1,6 @@
 """Shared fixtures for the worker tests: the real API app on a temporary data dir."""
 
+import sys
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
@@ -8,6 +9,10 @@ from fact.api.app import create_app
 from fact.core.settings import CONFIG_VAR, REPO_ROOT, Settings, reset_settings
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+
+# Test modules import shared harnesses (such as `standard_harness`) by name; `--import-mode=importlib` adds no path.
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
 
 
 @pytest.fixture

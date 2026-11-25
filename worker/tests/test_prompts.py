@@ -84,3 +84,13 @@ def test_review_prompt_never_changes_code() -> None:
     assert "Never change code" in text
     assert "`review` skill" in text
     assert "/ws/review.json" in text
+
+
+def test_learn_prompt_runs_the_skill_unattended_and_answers_a_title() -> None:
+    text = render_prompt(REPO_ROOT, "learn", TASK, "", "/ws")
+    assert "T-1" in text
+    assert "$" not in text
+    assert "`learn` skill" in text
+    assert "/ws/pr.json" in text
+    assert "push" in text.lower()
+    assert "title" in output_schema(REPO_ROOT, "learn")["properties"]

@@ -141,8 +141,8 @@ class FactWorkflow:
         Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.
 
         The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
-        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried. With `pr_text`
-        off, the session's `title` and `summary` are not taken for the PR (a review describes no change).
+        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried. With `pr_text`,
+        a passed session's `title` and `summary` replace earlier ones for the PR (off for a review: it changes nothing).
         """
         resume: str | None = None
         for resumes in range(MAX_RESUMES + 1):
@@ -162,7 +162,7 @@ class FactWorkflow:
             workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
             await workflow.sleep(RESUME_DELAY)
             resume, context = result.session_id, f"you reported a temporary problem: {reason}"
-        if pr_text:
+        if pr_text and result.outcome == StepOutcome.PASSED:
             self._remember_pr_text(result)
         return result
 
@@ -203,7 +203,7 @@ class FactWorkflow:
         Run every check in every repository; on failure, a fresh `fix_stage` session gets the failures as context.
 
         `max_attempts` caps the fix sessions, so checks run at most `max_attempts + 1` times. Returns `passed`, or
-        `failed_checks` once the fixes are exhausted or a fix session does not pass.
+        `failed_checks` once the fixes are exhausted or a fix session does not pass. Fixes never write the PR text.
         """
         for fixes in range(max_attempts + 1):
             failures = await self._run_checks(checks, stage_id)
@@ -211,7 +211,7 @@ class FactWorkflow:
                 return StepOutcome.PASSED
             if fixes == max_attempts:
                 break
-            fixed = await self.agent(fix_stage, fix_prompt, context=failure_context(failures))
+            fixed = await self.agent(fix_stage, fix_prompt, context=failure_context(failures), pr_text=False)
             if fixed.outcome != StepOutcome.PASSED:
                 break  # an errored or over-budget session: another round would only spend more
         return StepOutcome.FAILED_CHECKS

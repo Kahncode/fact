@@ -25,7 +25,8 @@ Every agent session ends with a structured answer, a JSON object the harness val
 
 Sessions run headless: nobody is asked for approval, so a tool call that would prompt is refused, logged in the step's log and kept in `outputs.permission_denials`. Prompts should tell the agent to report `blocked` when that stops it.
 
-- `implement.md` (+ `implement.schema.json`, adds `title`): implement the task to its acceptance criteria and commit locally; the `Standard` workflow uses `title` and `summary` for the PR.
+- `implement.md` (+ `implement.schema.json`, adds `title`): implement the task to its acceptance criteria and commit locally; its `title` and `summary` are the PR text when `learn` gives none.
 - `fix_checks.md`: fix the failing checks in `$context` and commit.
 - `review.md` (+ `review.schema.json`, adds `criteria` and `findings`): review the change with the `review` skill against the acceptance criteria, writing `$workspace/review.json`; never changes code. `criteria` is a list of `{text, met, evidence}`, `findings` a list of `{severity: low|medium|high, file, line, message}`; `fact.sdk.review.parse_review` turns a passed step whose answer does not parse into `failed_error`.
 - `address_review.md`: fix the unmet criteria and findings in `$context` (from `fact.sdk.review.review_context`) and commit.
+- `learn.md` (+ `learn.schema.json`, adds `title`): run the `learn` skill unattended on the branch's diff range with the output path `$workspace/pr.json`, commit the doc updates, and answer the PR `title` and `summary`, which `Standard` puts on the PR.

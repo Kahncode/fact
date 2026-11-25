@@ -4,15 +4,19 @@ Standard: from a task to a PR.
 Prepare the workspace, run each repository's setup commands, implement, loop lint and test with fix sessions until
 green, then review once: a separate session checks the change against the task's acceptance criteria and the review
 checklist. An unmet criterion or a medium or high finding sends the change to an `address_review` session, then
-through the check loop again. Then mark the task done on the branch, open the PR (with the review's criteria table)
-and comment the run's cost on it.
+through the check loop again. Then a `learn` session updates the repositories' context (`CLAUDE.md`, `docs/`,
+READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch, open the PR (with
+the review's criteria table) and comment the run's cost on it.
 
 A failing setup ends the run `failed`. If the checks never go green, or an agent reports itself blocked, the run ends
 `needs_human` with no PR (M2 turns that into a gate). An agent session that errors, including a review without a valid
-structured answer, ends the run `failed`.
+structured answer, ends the run `failed`. A `learn` session that does not pass, or whose activity fails, is the exception: its docs are not
+worth losing the change over, so the PR still opens with the implement session's title and summary (else the task's
+conventional title).
 """
 
 from temporalio import workflow
+from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from fact.sdk.review import Review, parse_review, review_context
@@ -40,6 +44,7 @@ def _ended(stage: str, step: StepResult) -> RunResult:
         Stage("checks", "Lint and test", StepKind.SHELL, loops_to="implement"),
         Stage("review", "Review", StepKind.AGENT),
         Stage("address_review", "Address review", StepKind.AGENT, loops_to="checks"),
+        Stage("learn", "Learn", StepKind.AGENT),
         Stage("open_pr", "Open PR", StepKind.GITHUB),
     ]
 )
@@ -65,6 +70,7 @@ class Standard(FactWorkflow):
             return _ended("review", reviewed)
         if (stuck := await self._address(review)) is not None:
             return stuck
+        await self._learn()
         await self.mark_task_done()
         prs = await self.open_change_set(*self.pr_text(implemented.summary), criteria=review.criteria)
         await self.post_cost_comment(prs)
@@ -87,3 +93,13 @@ class Standard(FactWorkflow):
         if addressed.outcome != StepOutcome.PASSED:
             return _ended("address_review", addressed)
         return await self._checks_green()
+
+    async def _learn(self) -> None:
+        """Update the context and write the PR text; a session that does not pass leaves the earlier text in place."""
+        try:
+            learned = await self.agent("learn", "learn")
+        except ActivityError as exc:  # timed out, interrupted twice, or the step could not start
+            workflow.logger.warning("learn failed: %s; opening the PR with the earlier text", exc.cause or exc)
+            return
+        if learned.outcome != StepOutcome.PASSED:
+            workflow.logger.warning("learn ended %s; opening the PR with the earlier text", learned.outcome)
