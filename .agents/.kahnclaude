@@ -2,9 +2,9 @@
   "version": 2,
   "layout": "agents",
   "source": "I:/workspace/claude/kahnclaude",
-  "commit": "f76fc926de3347254ac23903804915b4145bad84",
+  "commit": "b01a21bea95481ac39011b2c2019540fd02d661a",
   "installed_at": "2026-11-24T18:24:46+00:00",
-  "updated_at": "2026-11-24T19:24:48+00:00",
+  "updated_at": "2026-11-25T23:10:26+00:00",
   "projection": "junction",
   "agents": [
     "backend/api-dev.md",
@@ -25,5 +25,5 @@
     "python/python-dev.md",
     "python/security-dev.md"
   ],
-  "notes": "Python 3.15/uv workspace, FastAPI, Temporal, SQLAlchemy, Typer; core + python + backend (api-dev, backend-dev, supabase-dev) + frontend agents; excluded mobile. Migrated next-task, plan-tasks to .agents/skills. 2026-11-24: updated document, learn skills, documenter agent (README sync), settings Read(*)."
+  "notes": "Python 3.15/uv workspace, FastAPI, Temporal, SQLAlchemy, Typer; core + python + backend (api-dev, backend-dev, supabase-dev) + frontend agents; excluded mobile. Migrated next-task, plan-tasks to .agents/skills. 2026-11-24: updated document, learn skills, documenter agent (README sync), settings Read(*). 2026-11-26: removed 7 retired hooks and notify.py (global-only), updated block-write-outside-repo, new deny rules, dropped filesystem MCP/Read(*)/read-only allows; kept project's commit skill."
 }
