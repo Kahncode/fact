@@ -40,7 +40,7 @@ fact picks up work by itself. A Temporal Schedule starts a short `SchedulerTick`
 ## Out of scope
 
 - GitHub Issues as a source (M2-08 onwards).
-- Budgets and usage windows (M6, v0.1).
+- Usage windows (M2-14); budgets (M6, v0.1).
 
 ## Acceptance criteria
 

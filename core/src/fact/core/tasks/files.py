@@ -14,8 +14,6 @@ STATUSES = ("planned", "ready", "done")
 _ID_RE = re.compile(r"^M(\d+)-(\d+)$")
 _FILE_RE = re.compile(r"^(\d+)-.+\.md$")
 _CRITERION_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(.+?)\s*$")
-_STATUS_LINE_RE = re.compile(rb"^(status:[ \t]*)[^\s#]+", re.MULTILINE)
-_FRONT_MATTER_RE = re.compile(rb"\A(?:\xef\xbb\xbf)?---[^\n]*\n.*?\n---[^\n]*(?:\n|\Z)", re.DOTALL)
 
 
 def branch_name(key: str) -> str:
@@ -208,19 +206,11 @@ class FileTaskSource:
         errors.extend(_cycle_errors(seen))
         return errors
 
-    def mark_done(self, worktree: Path, key: str) -> None:
-        """Set `status: done` in the task's file under `worktree`, leaving every other byte as it was."""
+    def mark_done(self, worktree: Path, key: str) -> str:
+        """Delete the task's file under `worktree` and return its path: a finished file task is deleted, not marked."""
         entry = self._entries().get(key)
         if entry is None or entry.task.path is None:
             msg = f"unknown task {key}"
             raise KeyError(msg)
-        path = worktree / entry.task.path
-        data = path.read_bytes()
-        fm = _FRONT_MATTER_RE.match(data)
-        end = fm.end() if fm else 0
-        head, count = _STATUS_LINE_RE.subn(rb"\g<1>done", data[:end], count=1)
-        new = head + data[end:]
-        if count == 0:
-            msg = f"{entry.task.path} has no status line"
-            raise ValueError(msg)
-        path.write_bytes(new)
+        (worktree / entry.task.path).unlink()
+        return entry.task.path

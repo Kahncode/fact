@@ -118,19 +118,17 @@ def test_validate_reports_bad_files(tmp_path: Path) -> None:
     assert "07-broken.md" in errors
 
 
-def test_mark_done_changes_only_status(tmp_path: Path) -> None:
+def test_mark_done_deletes_the_file(tmp_path: Path) -> None:
     path = _task(tmp_path, "M1-02", status="ready")
-    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
-    before = path.read_bytes()
     worktree = tmp_path / "wt"
     copy = worktree / "tasks" / "M1" / path.name
     copy.parent.mkdir(parents=True)
-    copy.write_bytes(before)
+    copy.write_bytes(path.read_bytes())
 
-    FileTaskSource(tmp_path).mark_done(worktree, "task:M1-02")
+    assert FileTaskSource(tmp_path).mark_done(worktree, "task:M1-02") == f"tasks/M1/{path.name}"
 
-    assert path.read_bytes() == before  # the source tree is untouched
-    assert copy.read_bytes() == before.replace(b"status: ready", b"status: done", 1)
+    assert path.exists()  # the source tree is untouched
+    assert not copy.exists()
 
 
 def test_branch_name() -> None:
@@ -141,24 +139,10 @@ def test_real_tasks_folder_is_valid() -> None:
     assert FileTaskSource(REPO_ROOT).validate() == []
 
 
-def test_mark_done_ignores_status_lines_in_body(tmp_path: Path) -> None:
-    path = _task(tmp_path, "M1-02", status="ready")
-    text = path.read_text(encoding="utf-8").replace("Do it.", "```\nstatus: example\n```")
-    path.write_text(text, encoding="utf-8", newline="\n")
-    FileTaskSource(tmp_path).mark_done(tmp_path, "task:M1-02")
-    assert "status: done" in path.read_text(encoding="utf-8")
-    assert "status: example" in path.read_text(encoding="utf-8")
-
-
-def test_mark_done_errors(tmp_path: Path) -> None:
-    path = _task(tmp_path, "M1-02")
-    src = FileTaskSource(tmp_path)
+def test_mark_done_unknown_task(tmp_path: Path) -> None:
+    _task(tmp_path, "M1-02")
     with pytest.raises(KeyError):
-        src.mark_done(tmp_path, "task:M9-01")
-    path.write_text(path.read_text(encoding="utf-8").replace("status:", "state:"), encoding="utf-8", newline="\n")
-    assert "invalid status ''" in "\n".join(src.validate())
-    with pytest.raises(ValueError, match="no status line"):
-        src.mark_done(tmp_path, "task:M1-02")
+        FileTaskSource(tmp_path).mark_done(tmp_path, "task:M9-01")
 
 
 def test_bom_and_bad_yaml(tmp_path: Path) -> None:

@@ -21,7 +21,7 @@
 - **Repository**: one monorepo, [Kahncode/fact](https://github.com/Kahncode/fact): a uv workspace of Python packages `core/`, `api/`, `worker/`, `sdk/` and `cli/` (namespace `fact.*`, each with its own `tests/`), plus `web/` for the UI, `docs/spec/` for this spec and `tasks/` for the bootstrap tasks.
 - **Auto-merge**: none in v0; you merge everything. The review agent and the rules still classify each change set as high or low risk.
 - **Concurrency defaults**: 2 execution sandboxes and 1 planner at a time on your PC.
-- **Claude Code**: runs headless under your logged-in subscription in v0. From v0.1, fact reads Claude Code's actual usage and windows and only schedules new agent steps when the window allows.
+- **Claude Code**: runs headless under your logged-in subscription in v0. From M2, fact reads Claude Code's actual usage and windows, starts new runs only when the window allows, and a step that hits the limit waits for the reset and resumes.
 - **Context**: lives in the repositories; every workflow has a learn step after review.
 - **Scoring and benchmarks**: needed soon after v0 to measure whether changes to fact itself (prompts, workflows, models) make it better.
 - **Spec in the repository:** this spec is copied to docs/spec/ in M0; from then on the repository copy is the source of truth and agents keep it current.

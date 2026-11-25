@@ -49,7 +49,7 @@ What a neighbouring task does instead.
 - **status**
   - `planned`: written, not yet approved to run.
   - `ready`: approved. It may start once every `depends_on` task is `done`.
-  - `done`: merged. While bootstrapping locally, `next-task` deletes a finished task's file instead of setting this, and a dependency whose file is gone counts as done when its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present (so validation cannot catch typos below that bound; an id above it is an error). CI validates the task folder as a test. Set to `done` in the task's own commit, so `main` always shows what is finished. While a task is running, its status lives in fact's DB, not in the file.
+  - `done`: still accepted, but a finished task's file is deleted rather than set to `done`: `next-task` does this, and so does fact's `mark_task_done`, in the task's own commit. A dependency whose file is gone counts as done when its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present (so validation cannot catch typos below that bound; an id above it is an error). CI validates the task folder as a test. While a task is running, its status lives in fact's DB, not in the file.
 - **complexity** picks the model:
   - `trivial`: mechanical edits, Sonnet.
   - `standard`: normal feature work, Sonnet.
@@ -65,7 +65,7 @@ The `next-task` skill runs a task with Claude Code. From late M1, `fact run task
 2. Create a branch `fact/task-<id in lower case>`.
 3. Read `CLAUDE.md`, the task, and only what its "Read first" lists.
 4. Implement until every acceptance criterion holds and lint, format and tests pass.
-5. Update the context (`CLAUDE.md`, `docs/spec/`, READMEs) where the change made it wrong. Set `status: done`.
+5. Update the context (`CLAUDE.md`, `docs/spec/`, READMEs) where the change made it wrong. Delete the task's file (`git rm`) in the same commit. In a fact run, leave the file alone: fact deletes it after the checks pass.
 6. Commit and open a PR titled `<type>(<id>): <title>` (conventional commits; `feature`→`feat`, `chore`→`chore`, `bug`→`fix`). PRs are squash-merged, so each task lands on `main` as one commit with its context update. A person merges it.
 
 ## How to split work

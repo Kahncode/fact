@@ -1,9 +1,10 @@
 """
 Standard: from a task to a PR.
 
-Prepare the workspace, implement, loop lint and test with fix sessions until green, mark the task done on the branch,
-open the PR and comment the run's cost on it. If the checks never go green, or the implement agent reports itself
-blocked, the run ends `needs_human` with no PR (M2 turns that into a gate).
+Prepare the workspace, run each repository's setup commands, implement, loop lint and test with fix sessions until
+green, mark the task done on the branch, open the PR and comment the run's cost on it. A failing setup ends the run
+`failed`. If the checks never go green, or the implement agent reports itself blocked, the run ends `needs_human` with
+no PR (M2 turns that into a gate).
 """
 
 from temporalio import workflow
@@ -20,6 +21,7 @@ SUMMARY_BYTES = 1024
 @stages(
     [
         Stage("prepare", "Prepare workspace", StepKind.SHELL),
+        Stage("setup", "Set up workspace", StepKind.SHELL),
         Stage("implement", "Implement", StepKind.AGENT),
         Stage("checks", "Lint and test", StepKind.SHELL, loops_to="implement"),
         Stage("open_pr", "Open PR", StepKind.GITHUB),
@@ -33,6 +35,10 @@ class Standard(FactWorkflow):
 
     async def _steps(self) -> RunResult:
         await self.prepare()
+        failed_setup = await self.setup()
+        if failed_setup is not None:
+            summary = f"setup ended {failed_setup.outcome}: {failed_setup.summary}"
+            return RunResult(outcome=RunOutcome.FAILED, summary=limit_text(summary, SUMMARY_BYTES))
         implemented = await self.agent("implement", "implement")
         if implemented.outcome != StepOutcome.PASSED:
             summary = f"implement ended {implemented.outcome}: {implemented.summary}"

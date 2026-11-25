@@ -32,7 +32,7 @@ In code: `fact.core.migrate.upgrade(url)`. It is synchronous (the async `env.py`
 
 ## Task files
 
-`fact.core.tasks.FileTaskSource(root)` reads `tasks/` (format in `tasks/README.md`): `all()`, `get(key)`, `status(key)`, `deps_done(task)`, `ready()`, `validate()` (list of error strings) and `mark_done(worktree, key)` (rewrites only the status value in the front matter). Statuses are not on `Task`; use `status()`. A dependency whose file is missing counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present. `branch_name(key)` returns the task branch name.
+`fact.core.tasks.FileTaskSource(root)` reads `tasks/` (format in `tasks/README.md`): `all()`, `get(key)`, `status(key)`, `deps_done(task)`, `ready()`, `validate()` (list of error strings) and `mark_done(worktree, key)` (deletes the task's file under `worktree` and returns its path). Statuses are not on `Task`; use `status()`. A dependency whose file is missing counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present. `branch_name(key)` returns the task branch name.
 
 ## Shared types
 

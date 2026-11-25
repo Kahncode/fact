@@ -1,7 +1,7 @@
 """
 Stands in for `claude` in tests: records argv and stdin, replays a stream-json fixture, then exits.
 
-Driven by environment variables: FAKE_STREAM (fixture to replay), FAKE_RECORD (file for argv and prompt),
+Driven by environment variables: FAKE_STREAM (fixture to replay), FAKE_RECORD (file for argv, prompt and env),
 FAKE_EXIT (exit code), FAKE_STDERR (text for stderr), FAKE_HANG (sleep forever after the first line),
 FAKE_SKIP_STDIN (exit at once without reading stdin), FAKE_LONG_LINE (print a line of that many bytes first).
 """
@@ -18,7 +18,9 @@ def main() -> int:
         return 1
     prompt = sys.stdin.read()
     if record := os.environ.get("FAKE_RECORD"):
-        Path(record).write_text(json.dumps({"argv": sys.argv[1:], "prompt": prompt}), encoding="utf-8")
+        auto_memory = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+        recorded = {"argv": sys.argv[1:], "prompt": prompt, "disable_auto_memory": auto_memory}
+        Path(record).write_text(json.dumps(recorded), encoding="utf-8")
     sys.stderr.write(os.environ.get("FAKE_STDERR", ""))
     sys.stderr.flush()
     lines = (

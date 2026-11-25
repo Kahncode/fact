@@ -24,7 +24,7 @@ def test_loads_real_project_file() -> None:
 
 def test_loads_real_repo_file() -> None:
     cfg = load_repo_config(REPO_ROOT)
-    assert cfg.setup == [["uv", "sync"]]
+    assert cfg.setup == [["uv", "sync"], ["uv", "run", "pre-commit", "install", "--install-hooks"]]
     assert cfg.lint[1] == ["uv", "run", "black", "--check", "."]
     assert cfg.test == [["uv", "run", "pytest"]]
     assert cfg.build == []

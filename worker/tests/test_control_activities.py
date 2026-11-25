@@ -63,18 +63,26 @@ def worktree(tmp_path: Path) -> Path:
 
 
 def _spec(worktree: Path, key: str = "task:M1-99") -> MarkTaskDoneInput:
-    task = Task(key=key, id=key.removeprefix("task:"), title="Add a widget")
+    task_id = key.removeprefix("task:")
+    path = TASK_PATH if task_id == "M1-99" else None
+    task = Task(key=key, id=task_id, title="Add a widget", path=path)
     handle = WorkspaceHandle(run_id="run-1", root=str(worktree.parent), repos={REPO: str(worktree)})
     return MarkTaskDoneInput(run_id="run-1", task=task, handle=handle)
 
 
-async def test_mark_task_done_commits_the_status(worktree: Path, client: AsyncClient) -> None:
+def _hook(worktree: Path, name: str, body: str) -> None:
+    hook = worktree / ".git" / "hooks" / name
+    hook.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8", newline="\n")
+    hook.chmod(0o755)
+
+
+async def test_mark_task_done_deletes_the_task_file(worktree: Path, client: AsyncClient) -> None:
     activities = ControlActivities(BASE, client)
     assert await activities.mark_task_done(_spec(worktree)) is True
 
-    assert (worktree / TASK_PATH).read_bytes() == TASK_FILE.replace("status: ready", "status: done").encode()
+    assert not (worktree / TASK_PATH).exists()
     assert _git("log", "-1", "--format=%s", cwd=worktree) == "chore(M1-99): mark done"
-    assert _git("show", "--name-only", "--format=", "HEAD", cwd=worktree) == TASK_PATH
+    assert _git("show", "--name-status", "--format=", "HEAD", cwd=worktree) == f"D\t{TASK_PATH}"
     assert _git("status", "--porcelain", cwd=worktree) == ""
 
 
@@ -90,12 +98,13 @@ async def test_mark_task_done_twice_adds_no_commit(worktree: Path, client: Async
 async def test_mark_task_done_retry_after_a_failed_commit(worktree: Path, client: AsyncClient) -> None:
     activities = ControlActivities(BASE, client)
     lock = worktree / ".git" / "index.lock"
-    lock.write_text("", encoding="utf-8")  # another git process: add and commit fail
+    lock.write_text("", encoding="utf-8")  # another git process: rm and commit fail
     with pytest.raises(RuntimeError, match="failed"):
         await activities.mark_task_done(_spec(worktree))
     lock.unlink()
 
-    assert await activities.mark_task_done(_spec(worktree)) is True  # the file says done, but it was never committed
+    assert not (worktree / TASK_PATH).exists()  # deleted, but never committed
+    assert await activities.mark_task_done(_spec(worktree)) is True
     assert _git("log", "-1", "--format=%s", cwd=worktree) == "chore(M1-99): mark done"
     assert _git("status", "--porcelain", cwd=worktree) == ""
 
@@ -107,6 +116,36 @@ async def test_mark_task_done_commits_only_the_task_file(worktree: Path, client:
     await ControlActivities(BASE, client).mark_task_done(_spec(worktree))
     assert _git("show", "--name-only", "--format=", "HEAD", cwd=worktree) == TASK_PATH
     assert _git("status", "--porcelain", cwd=worktree) == "A  staged.txt"
+
+
+async def test_mark_task_done_when_the_agent_deleted_the_file(worktree: Path, client: AsyncClient) -> None:
+    _git("rm", "-q", TASK_PATH, cwd=worktree)
+    _git("commit", "-q", "-m", "feat(M1-99): add a widget", cwd=worktree)
+    head = _git("rev-parse", "HEAD", cwd=worktree)
+
+    assert await ControlActivities(BASE, client).mark_task_done(_spec(worktree)) is False
+    assert _git("rev-parse", "HEAD", cwd=worktree) == head
+
+
+async def test_mark_task_done_runs_the_repository_hooks(
+    worktree: Path, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FACT_SECRET", "leak")
+    _hook(worktree, "pre-commit", 'echo "$FACT_SECRET" > hook-ran.txt')
+    _hook(worktree, "commit-msg", 'grep -q "^chore(" "$1"')
+
+    await ControlActivities(BASE, client).mark_task_done(_spec(worktree))
+    assert (worktree / "hook-ran.txt").read_text(encoding="utf-8").strip() == ""  # ran, without the worker's env
+
+
+async def test_mark_task_done_fails_when_a_hook_fails(worktree: Path, client: AsyncClient) -> None:
+    _hook(worktree, "pre-commit", "exit 1")
+    head = _git("rev-parse", "HEAD", cwd=worktree)
+
+    with pytest.raises(ApplicationError, match="commit failed") as info:
+        await ControlActivities(BASE, client).mark_task_done(_spec(worktree))
+    assert info.value.non_retryable  # a hook would refuse it again
+    assert _git("rev-parse", "HEAD", cwd=worktree) == head
 
 
 async def test_mark_task_done_unknown_task_is_not_retried(worktree: Path, client: AsyncClient) -> None:
@@ -130,7 +169,7 @@ async def test_record_run_started_and_finished(client: AsyncClient, run_id: str)
 
 
 async def test_record_run_started_records_the_pinned_version(client: AsyncClient, run_id: str) -> None:
-    home = "0123456789abcdef0123456789abcdef01234567"
+    home = "0123456789abcdef0123456789abcdef01234567"  # pragma: allowlist secret
     version = f"fedcba987654+{home}"
 
     await ControlActivities(BASE, client).record_run_started(RunStartedInput(run_id=run_id, worker_version=version))

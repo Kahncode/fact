@@ -1,13 +1,12 @@
 """
 Control activities: bookkeeping a workflow needs around its steps.
 
-- `mark_task_done`: set the task file's `status: done` on the run's branch and commit it, so the PR (squash-merged)
-  lands the work and the task's completion as one commit.
+- `mark_task_done`: delete the task's file on the run's branch and commit that, so the PR (squash-merged) lands the
+  work and the task's completion as one commit.
 - `record_run_started` and `record_run_finished`: move the run row through the runs API; the start also records the
   worker version the run is pinned to and its home SHA.
 """
 
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -49,14 +48,21 @@ def _home_worktree(spec: MarkTaskDoneInput) -> Path:
     return Path(repos[name])
 
 
-async def _git(args: list[str], worktree: Path, hooks_dir: Path) -> list[str]:
-    """Run git in the worktree with hooks, fsmonitor and signing off: the control zone runs none of the worktree's code."""
-    hardening = ["-c", f"core.hooksPath={hooks_dir}", "-c", "core.fsmonitor=false", "-c", "commit.gpgSign=false"]
-    code, lines = await run_git([*hardening, *args], worktree, env={"GIT_CONFIG_NOSYSTEM": "1"})
+async def _git_code(args: list[str], worktree: Path) -> tuple[int, list[str]]:
+    """
+    Run git in the worktree as a person would: their config and the repository's hooks apply.
+
+    Signing is off because nobody is there to unlock a key; pathspecs are literal. The environment is the minimal one
+    `run_git` builds, so a hook gets none of the worker's environment variables.
+    """
+    return await run_git(["--literal-pathspecs", "-c", "commit.gpgSign=false", *args], worktree)
+
+
+async def _git(args: list[str], worktree: Path) -> None:
+    code, lines = await _git_code(args, worktree)
     if code != 0:
         msg = f"git {' '.join(args)} failed ({code}): {' '.join(lines)}"
         raise RuntimeError(msg)
-    return lines
 
 
 def _task_source(worktree: Path) -> FileTaskSource | None:
@@ -67,14 +73,6 @@ def _task_source(worktree: Path) -> FileTaskSource | None:
     return FileTaskSource(worktree, config.path) if config.kind == "files" else None
 
 
-def _task_path(source: FileTaskSource, key: str) -> str:
-    found = source.get(key)
-    if found is None or found.path is None:
-        msg = f"task {key} is not in {source.folder}/ on the run's branch"
-        raise _non_retryable(msg)
-    return found.path
-
-
 class ControlActivities:
     def __init__(self, api_base_url: str, http_client: httpx.AsyncClient) -> None:
         self._base = api_base_url.rstrip("/") + API_PREFIX
@@ -82,28 +80,32 @@ class ControlActivities:
 
     @activity.defn(name=MARK_TASK_DONE)
     async def mark_task_done(self, spec: MarkTaskDoneInput) -> bool:
-        """Commit `chore(<id>): mark done` on the run's branch; False when there was nothing to mark."""
+        """Commit `chore(<id>): mark done`, deleting the task file, on the run's branch; False when nothing to do."""
         with bind_run(spec.run_id):
             worktree = _home_worktree(spec)
             source = _task_source(worktree)
             if source is None:
                 log.info("mark_task_done_skipped", reason="the task source is not files")
                 return False
-            rel = _task_path(source, spec.task.key)
-            with tempfile.TemporaryDirectory(prefix="fact-hooks-") as hooks:
-                hooks_dir = Path(hooks)
-                if source.status(spec.task.key) != "done":
-                    try:
-                        source.mark_done(worktree, spec.task.key)
-                    except (KeyError, ValueError) as exc:
-                        raise _non_retryable(str(exc)) from exc
-                elif not await _git(["status", "--porcelain", "--", rel], worktree, hooks_dir):
-                    log.info("mark_task_done_skipped", reason="already done")  # done on the branch, or a retry
-                    return False
-                # Done but not committed: a retry after a failed commit. Commit only the task file.
-                await _git(["add", "--", rel], worktree, hooks_dir)
-                message = f"chore({spec.task.id}): mark done"
-                await _git(["commit", "--no-verify", "-m", message, "--", rel], worktree, hooks_dir)
+            rel = spec.task.path  # where the task was on the default branch when the run started
+            if rel is None:
+                msg = f"task {spec.task.key} has no file path"
+                raise _non_retryable(msg)
+            if (worktree / rel).exists():
+                try:
+                    source.mark_done(worktree, spec.task.key)
+                except KeyError as exc:  # the file at `rel` no longer holds this task
+                    raise _non_retryable(str(exc)) from exc
+            elif (await _git_code(["cat-file", "-e", f"HEAD:{rel}"], worktree))[0] != 0:
+                log.info("mark_task_done_skipped", reason="already deleted on the branch")  # by us, or the agent
+                return False
+            # Deleted in the worktree, still in HEAD: commit the deletion (also a retry after a failed commit).
+            await _git(["rm", "-q", "--cached", "--ignore-unmatch", "--", rel], worktree)
+            message = f"chore({spec.task.id}): mark done"
+            code, lines = await _git_code(["commit", "-q", "-m", message, "--", rel], worktree)
+            if code != 0:  # a hook refused it: retrying would only refuse it again
+                msg = f"git commit failed ({code}): {' '.join(lines)}"
+                raise _non_retryable(msg)
             log.info("task_marked_done", task_key=spec.task.key, path=rel)
             return True
 

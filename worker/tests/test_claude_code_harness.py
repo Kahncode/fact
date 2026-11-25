@@ -154,6 +154,7 @@ async def test_run_streams_transcript_and_messages(tmp_path: Path) -> None:
     recorded = json.loads(record.read_text(encoding="utf-8"))
     assert recorded["prompt"] == prompt
     assert recorded["argv"][:4] == ["-p", "--output-format", "stream-json", "--verbose"]
+    assert recorded["disable_auto_memory"] == "1"
 
 
 async def test_run_reports_max_turns_error(tmp_path: Path) -> None:

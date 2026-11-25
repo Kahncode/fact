@@ -33,7 +33,7 @@ Each project has its own catalog of workflows, and a triage step picks one for e
 
 - **Single-repository project**: the home is that repository.
 - **Multi-repository project**: the home is a small dedicated config repository (for example `<product>-fact`) by default, so changing a workflow never needs a PR on product code. Pointing the home at one of its repositories, such as the backend, is also allowed.
-- **Per-repository commands** (setup, lint, test, build) live in each repository's own `.fact/repo.yaml`, so they change together with that repository's code.
+- **Per-repository commands** (setup, lint, test, build) live in each repository's own `.fact/repo.yaml`, so they change together with that repository's code. `setup` runs once per run, right after the workspace is prepared; fact's own setup runs `uv sync` and `pre-commit install --install-hooks`, so commits in a workspace run the repository's hooks.
 - **Loading and pinning**: each project gets its own workflow worker and task queue (`wf-<project>`), which loads its workflows from a checkout of the home repository at a fixed SHA. A run is pinned to that SHA plus the factory version. Activities still run in the control and sandbox zones.
 - **Changing a project's workflows** is a PR on its home repository, which the factory can make itself like any other change.
 - **Trust**: project workflow code runs in a factory worker, so only projects you own get workflow code; a client project could later be limited to configuration only.
@@ -95,7 +95,7 @@ class Standard(FactWorkflow):
             await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
 ```
 
-The example is the target shape. What exists today (M1) is the shorter `Standard` in `.fact/workflows/standard.py`: prepare, implement, `until_green`, mark the task done, open the PR; stages come from `@stages`, and the run method delegates to `FactWorkflow.execute`.
+The example is the target shape. What exists today (M1) is the shorter `Standard` in `.fact/workflows/standard.py`: prepare, setup (each repository's `setup` commands, such as installing dependencies and git hooks; a failure ends the run `failed`), implement, `until_green`, mark the task done, open the PR; stages come from `@stages`, and the run method delegates to `FactWorkflow.execute`.
 
 - **Checks**: `until_green` runs the project's lint and test commands (for example `ruff`, `pytest`) as shell steps in the run sandbox. On failure, the output goes to a fresh fix session (a new attempt of the `implement` stage); `max_attempts` caps the fix sessions, then the run pauses and notifies you. In M1 there is no gate yet: the run ends `needs_human` with no PR.
 - **Sessions**: each agent role (implement, fix, review, address review, learn, address comment) is its own session, in the same sandbox and on the same branches.

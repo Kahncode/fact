@@ -74,6 +74,7 @@ class FakeActivities:
 
     test_failures: int = 0
     implement_outcome: StepOutcome = StepOutcome.PASSED
+    setup_outcome: StepOutcome = StepOutcome.PASSED
     implement_script: list[StepResult | Exception] = field(default_factory=list)  # first implement sessions, in order
     broken: str | None = None  # name of an activity that raises a non-retryable error
     checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
@@ -122,6 +123,8 @@ class FakeActivities:
     @activity.defn(name=SHELL_STEP)
     async def shell_step(self, spec: ShellStepInput) -> StepResult:
         self._call(SHELL_STEP, spec)
+        if spec.check == "setup":
+            return StepResult(outcome=self.setup_outcome, summary="`uv sync` exited with 1")
         if spec.check == "test" and self.test_failures > 0:
             self.test_failures -= 1
             outputs = {"command": ["pytest"], "exit_code": 1, "failure_output": "FAILED test_widget"}
@@ -201,6 +204,10 @@ def _finished(fakes: FakeActivities) -> RunOutcome:
     return finished.outcome
 
 
+def _checks(fakes: FakeActivities) -> list[ShellStepInput]:
+    return [s for s in fakes.of(SHELL_STEP) if s.stage_id == "checks"]
+
+
 async def test_green_path(tmp_path: Path) -> None:
     fakes = FakeActivities()
     result, history = await _run(fakes, "run-green")
@@ -210,6 +217,7 @@ async def test_green_path(tmp_path: Path) -> None:
     assert [n for n, _ in fakes.calls] == [
         RECORD_RUN_STARTED,
         PREPARE_WORKSPACE,
+        SHELL_STEP,
         AGENT_STEP,
         SHELL_STEP,
         SHELL_STEP,
@@ -221,6 +229,7 @@ async def test_green_path(tmp_path: Path) -> None:
     ]
     assert _agent_sessions(fakes) == [("implement", 1, "implement")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
+        ("setup", 1, "setup"),
         ("checks", 1, "lint"),
         ("checks", 2, "test"),
     ]
@@ -254,7 +263,7 @@ async def test_two_failures_then_green() -> None:
     fix = fakes.of(AGENT_STEP)[1]
     assert "### test: `pytest` exited with 1" in fix.context
     assert "FAILED test_widget" in fix.context
-    assert [s.attempt for s in fakes.of(SHELL_STEP)] == [1, 2, 3, 4, 5, 6]  # three rounds of lint and test
+    assert [s.attempt for s in _checks(fakes)] == [1, 2, 3, 4, 5, 6]  # three rounds of lint and test
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
@@ -266,7 +275,7 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert result.prs == []
     assert "test" in result.summary
     assert len(fakes.of(AGENT_STEP)) == 1 + MAX_FIX_ATTEMPTS
-    assert len(fakes.of(SHELL_STEP)) == 2 * (MAX_FIX_ATTEMPTS + 1)
+    assert len(_checks(fakes)) == 2 * (MAX_FIX_ATTEMPTS + 1)
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
@@ -280,6 +289,17 @@ async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
     assert result.outcome == RunOutcome.PR_OPENED
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert pr_spec.branch == f"{BRANCH}-2"
+
+
+async def test_failed_setup_ends_the_run_before_implement() -> None:
+    fakes = FakeActivities(setup_outcome=StepOutcome.FAILED_CHECKS)
+    result, _ = await _run(fakes, "run-setup-failed")
+
+    assert result.outcome == RunOutcome.FAILED
+    assert "setup ended failed_checks" in result.summary
+    assert fakes.of(AGENT_STEP) == []
+    assert fakes.of(OPEN_CHANGE_SET) == []
+    assert _finished(fakes) == RunOutcome.FAILED
 
 
 async def test_teardown_failure_does_not_fail_the_run() -> None:
@@ -300,7 +320,7 @@ async def test_failed_implement_ends_the_run_without_checks() -> None:
     result, _ = await _run(fakes, "run-implement-failed")
 
     assert result.outcome == RunOutcome.FAILED
-    assert fakes.of(SHELL_STEP) == []
+    assert _checks(fakes) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.FAILED
 
@@ -311,7 +331,7 @@ async def test_blocked_implement_needs_a_human_without_a_pr() -> None:
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
     assert "needs_human" in result.summary
-    assert fakes.of(SHELL_STEP) == []
+    assert _checks(fakes) == []
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
@@ -389,8 +409,9 @@ async def test_failing_activity_fails_the_run_and_records_it() -> None:
 def test_standard_stage_manifest() -> None:
     assert STANDARD.manifest() == [
         {"id": "prepare", "label": "Prepare workspace", "kind": "shell", "loops_to": None},
+        {"id": "setup", "label": "Set up workspace", "kind": "shell", "loops_to": None},
         {"id": "implement", "label": "Implement", "kind": "agent", "loops_to": None},
         {"id": "checks", "label": "Lint and test", "kind": "shell", "loops_to": "implement"},
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
     ]
-    assert json.loads(json.dumps(STANDARD.manifest()))[2]["loops_to"] == "implement"
+    assert json.loads(json.dumps(STANDARD.manifest()))[3]["loops_to"] == "implement"

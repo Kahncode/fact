@@ -24,7 +24,7 @@ Logs and transcripts are kept forever for now, like rows; a retention setting ca
 
 ### Capacity and monitors
 
-Every job runs on a runner pool with its own concurrency cap. Budgets, and from v0.1 subscription usage windows, decide whether a queued job may start.
+Every job runs on a runner pool with its own concurrency cap. Budgets and subscription usage windows decide whether a queued job may start.
 
 **Runner pools.** A pool is a place where sandboxes run: your PC (worktrees or local containers), GitHub-hosted runners, Daytona, and so on. Each pool is a Temporal task queue whose workers allow at most the pool's cap of sandboxes, so extra jobs wait in the queue and show as Queued. A project picks its pool; v0 has one pool, your PC.
 
@@ -33,7 +33,7 @@ Every job runs on a runner pool with its own concurrency cap. Budgets, and from 
 | Concurrent sandboxes | Per runner pool | The job waits for a free slot |
 | Concurrent runs | Whole factory, and per project | New runs wait as Queued |
 | Budget (USD) | Per project in USD per day (a project setting), optional per-run cap; Claude Code spend read from its own usage reporting | Alerts at 50% and 80%; at 100% new steps wait and you are notified |
-| Usage window (v0.1) | Per subscription agent account, such as a Claude Code plan | New agent steps wait until the window resets; running steps finish |
+| Usage window (M2) | Per subscription agent account, such as a Claude Code plan | Over the threshold (default 90%), the scheduler starts no new run; a step that hits the limit sleeps on a durable timer until the window resets, then resumes its session |
 
 **Monitors: use what already exists.**
 

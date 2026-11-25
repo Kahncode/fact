@@ -127,6 +127,14 @@ class FactWorkflow:
         self._handle = await self._control(PREPARE_WORKSPACE, spec, WorkspaceHandle)
         return self._handle
 
+    async def setup(self, stage_id: str = "setup") -> StepResult | None:
+        """Run each repository's `.fact/repo.yaml` `setup` commands; return the first step that failed, else None."""
+        for repo in self.handle.repos:
+            step = await self._shell(stage_id, repo, "setup")
+            if step.outcome != StepOutcome.PASSED:
+                return step
+        return None
+
     async def agent(self, stage_id: str, prompt: str, context: str = "") -> StepResult:
         """
         Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.

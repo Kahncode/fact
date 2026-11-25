@@ -1,5 +1,6 @@
 setup:
   - [uv, sync]
+  - [uv, run, pre-commit, install, --install-hooks]
 lint:
   - [uv, run, ruff, check, .]
   - [uv, run, black, --check, .]

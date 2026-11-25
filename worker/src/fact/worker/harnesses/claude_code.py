@@ -18,6 +18,8 @@ _CHUNK = 1 << 16
 _DROPPED_LINE = '{"type":"fact_dropped_line","reason":"line too long"}'
 _CMD_SPECIAL = frozenset('"&|<>^%!\r\n')
 _STDERR_GRACE = 5.0  # seconds to finish reading stderr after the process tree is gone
+# Runs must not read or write Claude Code's per-project auto-memory, which would carry notes between runs and projects.
+_ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
 class _Collector:
@@ -201,7 +203,7 @@ class ClaudeCodeHarness:
     ) -> HarnessResult:
         argv = self.build_argv(request)
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
-        env = build_env(request.env)
+        env = build_env({**_ISOLATION_ENV, **(request.env or {})})
         try:
             proc = await spawn(argv, request.cwd, env, pipe_stdin=True, merge_stderr=False)
         except OSError as e:
