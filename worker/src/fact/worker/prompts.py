@@ -1,8 +1,10 @@
 """Render a project's prompt template, `.fact/prompts/<name>.md`, for one task."""
 
+import json
 import re
 from pathlib import Path
 from string import Template
+from typing import Any
 
 from fact.core.types import Task
 
@@ -11,7 +13,23 @@ _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 
 class PromptError(ValueError):
-    """The prompt is missing, its name is unsafe, or it uses an unknown `$placeholder`."""
+    """The prompt is missing, its name is unsafe, it uses an unknown `$placeholder`, or its schema is invalid."""
+
+
+# Every agent step ends with this JSON object; `.fact/prompts/<name>.schema.json` may add properties to it.
+BASE_OUTPUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["done", "blocked"],
+            "description": "done: the work is finished and committed. blocked: you could not finish it.",
+        },
+        "summary": {"type": "string", "description": "A few lines of markdown: what you did and why."},
+        "blocker": {"type": "string", "description": "When blocked: what stopped you and what would unblock it."},
+    },
+    "required": ["status", "summary"],
+}
 
 
 def prompt_path(repo_root: Path, name: str) -> Path:
@@ -59,3 +77,31 @@ def render_prompt(  # noqa: PLR0913, PLR0917
         msg = f"cannot read prompt {name!r} at {path}: {exc}"
         raise PromptError(msg) from exc
     return render(template, variables(task, context, workspace, stage_id))
+
+
+def output_schema(repo_root: Path, name: str) -> dict[str, Any]:
+    """
+    Return the JSON Schema the step's final answer must match: `BASE_OUTPUT_SCHEMA` plus the prompt's own schema.
+
+    `.fact/prompts/<name>.schema.json`, when present, is an object with `properties` and optionally `required`; they
+    are added to the base, which keeps its own fields.
+    """
+    path = prompt_path(repo_root, name).with_suffix(".schema.json")
+    try:
+        extra = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return BASE_OUTPUT_SCHEMA
+    except (OSError, ValueError) as exc:
+        msg = f"cannot read output schema {path}: {exc}"
+        raise PromptError(msg) from exc
+    props = extra.get("properties") if isinstance(extra, dict) else None
+    required = extra.get("required", []) if isinstance(extra, dict) else None
+    if not isinstance(props, dict) or not isinstance(required, list):
+        msg = f"{path} must be an object with a `properties` object and an optional `required` list"
+        raise PromptError(msg)
+    base_required = BASE_OUTPUT_SCHEMA["required"]
+    return {
+        **BASE_OUTPUT_SCHEMA,
+        "properties": {**props, **BASE_OUTPUT_SCHEMA["properties"]},
+        "required": base_required + [r for r in required if r not in base_required],
+    }

@@ -126,6 +126,7 @@ class RunInput(_Model):
     complexity: Complexity = "standard"
     home_repo: str | None = None  # full name in `repos` holding `.fact/`; None: the first repository
     limits: RunLimits = Field(default_factory=RunLimits)
+    run_url: str = ""  # where a person follows the run (the Temporal UI for now), linked from the PR
 
 
 class RunResult(_Model):

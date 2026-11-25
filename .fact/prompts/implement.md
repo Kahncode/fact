@@ -20,7 +20,6 @@ $context
 2. Implement the task so every acceptance criterion holds. Write tests with the code.
 3. Run each repository's own lint and tests and fix what fails.
 4. Commit your work locally in each repository you changed, on the branch you are on, with a clear message: a conventional commit subject such as `feat($task_id): <what changed>` and a short body saying why.
-5. Write the pull request text to `$workspace/.fact-out/$stage_id.json` as a JSON object: `title`, a conventional commit subject for the whole change such as `feat($task_id): <what it adds>`, and `summary`, a few lines of markdown saying what changed and why.
 
 ## Rules
 
@@ -29,4 +28,13 @@ $context
 - Stay within the task. Note follow-up ideas in your final message instead of doing them.
 - Never commit secrets, and never write outside `$workspace`.
 
-End with a short summary of what you changed and anything a reviewer should check.
+## Final answer
+
+No one can answer questions or approve anything during this session: a tool call that would need approval is refused. Work around a refusal if you can; otherwise stop.
+
+End with the structured answer:
+
+- `status`: `done` only when the work is committed and the checks pass; `blocked` when you could not finish, for any reason.
+- `title`: the pull request title, a conventional commit subject for the whole change such as `feat($task_id): <what it adds>`.
+- `summary`: a few lines of markdown for the pull request: what changed, why, and anything a reviewer should check.
+- `blocker`: when blocked, what stopped you and what would unblock it.

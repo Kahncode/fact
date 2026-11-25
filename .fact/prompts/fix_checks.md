@@ -27,4 +27,12 @@ $acceptance_criteria
 - Never rewrite existing commits: add new ones.
 - Fix only what the failing checks need.
 
-End with a short summary of what was wrong and how you fixed it.
+## Final answer
+
+No one can answer questions or approve anything during this session: a tool call that would need approval is refused. Work around a refusal if you can; otherwise stop.
+
+End with the structured answer:
+
+- `status`: `done` only when the fix is committed and the checks pass; `blocked` when you could not fix them.
+- `summary`: what was wrong and how you fixed it.
+- `blocker`: when blocked, what stopped you and what would unblock it.

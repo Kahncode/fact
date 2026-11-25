@@ -90,6 +90,9 @@ class StepDefaults(_Section):
 class AgentStepDefaults(StepDefaults):
     timeout_minutes: float = Field(default=60.0, gt=0)
     max_turns: int | None = Field(default=100, ge=1)
+    # Harness permission mode, such as Claude Code's "auto" (a classifier approves or denies, nobody is asked) or
+    # "bypassPermissions" (checks off: only in an isolated runner). None: the harness default.
+    permission_mode: str | None = "auto"
 
 
 class ShellStepDefaults(StepDefaults):

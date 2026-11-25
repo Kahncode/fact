@@ -115,7 +115,7 @@ async def start_run(body: RunStart, request: Request, session: Session) -> RunSt
         try:
             await client.start_workflow(
                 wf_type,
-                run_input(settings, found, run.id),
+                run_input(settings, found, run.id, temporal_link(settings, run.workflow_id)),
                 id=run.workflow_id,
                 task_queue=workflow_queue(found.ref.name),
             )

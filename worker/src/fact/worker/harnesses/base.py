@@ -24,8 +24,17 @@ class HarnessRequest(_Model):
     model: str | None = None  # harness default when None
     allowed_tools: list[str] = Field(default_factory=list)  # empty: the harness's own permission rules apply
     max_turns: int | None = None
+    permission_mode: str | None = None  # harness-specific, such as "auto" for Claude Code; None: the harness default
+    output_schema: dict[str, Any] | None = None  # JSON Schema the agent's final answer must match
     resume_session_id: str | None = None
     env: dict[str, str] = Field(default_factory=dict)  # added to a minimal environment; agent credentials go here
+
+
+class PermissionDenial(_Model):
+    """A tool call the harness refused because it would have needed a person's approval."""
+
+    tool_name: str
+    tool_input: dict[str, Any] = Field(default_factory=dict)
 
 
 class HarnessResult(_Model):
@@ -36,6 +45,8 @@ class HarnessResult(_Model):
     stop_reason: str  # harness-specific, such as "success" or "error_max_turns" for Claude Code
     num_turns: int = 0
     usage: Usage = Field(default_factory=Usage)
+    structured_output: dict[str, Any] | None = None  # the final answer matching `output_schema`, when one was asked
+    permission_denials: list[PermissionDenial] = Field(default_factory=list)
 
 
 class Harness(Protocol):

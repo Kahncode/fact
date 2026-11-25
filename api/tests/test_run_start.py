@@ -233,6 +233,7 @@ async def test_start_runs_the_project_workflow(app: FastAPI, client: AsyncClient
     assert got.task.key == "task:M1-02"
     assert got.complexity == "complex"
     assert got.home_repo == "acme/home"
+    assert got.run_url == started["temporal_url"]
     assert [(r.full_name, r.branch) for r in got.repos] == [("acme/home", "fact/task-m1-02")]
     run = (await client.get(f"/api/v1/runs/{started['run_id']}")).json()
     assert (run["status"], run["workflow_id"], run["task_key"]) == ("queued", "run-task-M1-02-1", "task:M1-02")

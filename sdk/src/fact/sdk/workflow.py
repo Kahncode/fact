@@ -86,7 +86,7 @@ class FactWorkflow:
         self._handle: WorkspaceHandle | None = None
         self._attempts: dict[str, int] = {}
         self.check_results: list[CheckResult] = []  # from the last `until_green` round, for the PR description
-        self.pr_title: str | None = None  # from the last agent session that wrote `title` to its outputs
+        self.pr_title: str | None = None  # from the last agent session whose structured answer had a `title`
         self.pr_summary: str | None = None  # likewise, `summary`
 
     @classmethod
@@ -212,6 +212,7 @@ class FactWorkflow:
             title=title,
             summary=summary,
             check_results=self.check_results,
+            run_url=run.run_url,
         )
         return await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
 

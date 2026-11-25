@@ -121,7 +121,7 @@ async def find_task(settings: Settings, task_key: str, project: str | None) -> F
     return found[0]
 
 
-def run_input(settings: Settings, found: FoundTask, run_id: str) -> RunInput:
+def run_input(settings: Settings, found: FoundTask, run_id: str, run_url: str = "") -> RunInput:
     task = found.check.task
     repos = [
         RepoCheckout(full_name=r.full_name, default_branch=r.default_branch, branch=branch_name(task.key), role=r.role)
@@ -141,6 +141,7 @@ def run_input(settings: Settings, found: FoundTask, run_id: str) -> RunInput:
         complexity=task.complexity,
         home_repo=home,
         limits=limits,
+        run_url=run_url,
     )
 
 

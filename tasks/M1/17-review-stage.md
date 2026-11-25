@@ -26,7 +26,7 @@ Before any PR, a separate review session checks the change against the task's ac
   - optional inputs: the task file or a list of acceptance criteria, and a diff range; with criteria it also answers each one as met or not met, with evidence;
   - optional output path: writes the `review.json` below, mapping CRITICAL to high, WARNING to medium, INFO to low;
   - never changes code.
-- `.fact/prompts/review.md` uses the review skill, passing it the task file's acceptance criteria and the output path, and must not change code. It writes `.fact-out/review.json` with:
+- `.fact/prompts/review.md` uses the review skill, passing it the task file's acceptance criteria and the output path, and must not change code. It returns, as its structured answer (fields declared in `.fact/prompts/review.schema.json`, see `.fact/prompts/README.md`):
   - `criteria`: a list of `{text, met, evidence}`;
   - `findings`: a list of `{severity: low|medium|high, file, line, message}`.
 - `.fact/prompts/address_review.md`: fix the findings and unmet criteria in `$context`, then commit.
@@ -37,7 +37,7 @@ Before any PR, a separate review session checks the change against the task's ac
 
   One review round in v0. Stages and the manifest are updated.
 - The PR body shows the criteria table from the review.
-- Tests: the workflow with fake activities, for a clean review and for findings; the `review.json` schema is validated, and an invalid file gives outcome `failed_error`.
+- Tests: the workflow with fake activities, for a clean review and for findings; a session that ends without a valid structured answer gives outcome `failed_error`.
 
 ## Out of scope
 

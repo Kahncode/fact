@@ -26,7 +26,7 @@ After review, a `learn` session brings `CLAUDE.md`, `docs/spec/` and READMEs in 
   - unattended mode, selected when explicit inputs or an output path are given: no confirmation, no commit unless told to;
   - optional output path: writes `{pr_title, pr_summary}` (a conventional-commit title for the whole change, and a few sentences on what changed and why);
   - works from a diff range, a task file or a plain-text fact.
-- `.fact/prompts/learn.md` uses the learn skill (unattended, with the diff range and output path), commits its changes, and writes `.fact-out/learn.json` with `{pr_title, pr_summary}`.
+- `.fact/prompts/learn.md` uses the learn skill (unattended, with the diff range and output path), commits its changes, and returns `title` and `summary` in its structured answer (`title` declared in `.fact/prompts/learn.schema.json`, like `implement`).
 - `Standard`: a `learn` stage after review (and address review), before marking the task done. `open_change_set` takes the title and summary from that output, falling back to the task title and the implement summary.
 - Tests: the workflow passes the title through; the fallback works when the output is missing.
 

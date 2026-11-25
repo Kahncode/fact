@@ -12,14 +12,13 @@ from fact.core.enums import StepKind, StepOutcome
 from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
 from fact.worker.harnesses import Harness, HarnessError, HarnessRequest, HarnessResult
-from fact.worker.prompts import PromptError, render_prompt
+from fact.worker.prompts import PromptError, output_schema, render_prompt
 from fact.worker.reporting import TRANSCRIPT_NAME, StepContext, StepReporter
 from fact.worker.routing import choose
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 HEARTBEAT_S = 30.0
-OUT_DIR = ".fact-out"  # at the workspace root, outside every repository, so agents never commit it
 OUTPUTS_MAX_BYTES = 64 * 1024  # outputs travel in the Temporal payload; anything bigger belongs in an artifact
 __all__ = ["AgentActivities", "AgentStepInput"]
 
@@ -55,10 +54,48 @@ async def _heartbeats(stage_id: str, progress: _Progress) -> None:
             activity.heartbeat(f"{stage_id}: {progress.turns} turns")
 
 
-def _outcome(result: HarnessResult) -> StepOutcome:
+def _denied(result: HarnessResult) -> str:
+    """One line naming the tool calls the harness refused, or "" when there were none."""
+    if not result.permission_denials:
+        return ""
+    names = sorted({d.tool_name for d in result.permission_denials})
+    return f"{len(result.permission_denials)} tool calls denied ({', '.join(names)})"
+
+
+def judge(result: HarnessResult) -> tuple[StepOutcome, str, dict[str, Any]]:
+    """
+    Outcome, summary and outputs of an agent session, from its structured final answer rather than its exit code.
+
+    `passed` needs `status: done`; `blocked` is `needs_human`; no structured answer, a harness error or oversized
+    outputs is `failed_error`; the turn limit is `stopped_by_monitor`. Denied tool calls are noted in the summary.
+    """
+    answer = result.structured_output
+    denied = _denied(result)
     if result.stop_reason in MAX_TURNS_REASONS:
-        return StepOutcome.STOPPED_BY_MONITOR
-    return StepOutcome.FAILED_ERROR if result.is_error else StepOutcome.PASSED
+        outcome, summary = StepOutcome.STOPPED_BY_MONITOR, result.final_message
+    elif result.is_error:
+        outcome, summary = StepOutcome.FAILED_ERROR, result.final_message
+    elif answer is None:
+        outcome, summary = (
+            StepOutcome.FAILED_ERROR,
+            f"the agent ended without a structured answer: {result.final_message}",
+        )
+    elif answer.get("status") == "done":
+        outcome, summary = StepOutcome.PASSED, str(answer.get("summary") or result.final_message)
+    else:
+        outcome = StepOutcome.NEEDS_HUMAN
+        summary = str(answer.get("blocker") or answer.get("summary") or result.final_message)
+    outputs = dict(answer or {})
+    if (size := len(json.dumps(outputs).encode("utf-8"))) > OUTPUTS_MAX_BYTES:
+        outputs = {}
+        if outcome == StepOutcome.PASSED:
+            outcome = StepOutcome.FAILED_ERROR
+            summary = f"structured answer is {size} bytes, over the {OUTPUTS_MAX_BYTES} byte limit"
+    if denied:
+        outputs["permission_denials"] = [d.model_dump() for d in result.permission_denials]
+        if outcome != StepOutcome.PASSED:
+            summary = f"{summary}\n\n{denied}"
+    return outcome, summary, outputs
 
 
 def _non_retryable(exc: Exception) -> ApplicationError:
@@ -88,14 +125,18 @@ class AgentActivities:
 
     async def _run(self, spec: AgentStepInput, route: Route, step: StepContext) -> None:
         harness = self._harness(route.harness)
-        prompt = self._prompt(spec)
+        prompt, schema = self._prompt(spec)
         root = Path(spec.handle.root)
-        out_file = root / OUT_DIR / f"{spec.stage_id}.json"
-        out_file.unlink(missing_ok=True)  # never read a previous attempt's outputs
         transcript = step.log_path.with_name(TRANSCRIPT_NAME)
         transcript.unlink(missing_ok=True)
+        defaults = self._settings.step_defaults.agent
         request = HarnessRequest(
-            prompt=prompt, cwd=root, model=route.model, max_turns=self._settings.step_default(StepKind.AGENT).max_turns
+            prompt=prompt,
+            cwd=root,
+            model=route.model,
+            max_turns=defaults.max_turns,
+            permission_mode=defaults.permission_mode,
+            output_schema=schema,
         )
         step.log(f"{spec.stage_id}: {route.harness} / {route.model}, prompt {spec.prompt_name!r}, cwd {root}")
         progress = _Progress()
@@ -112,22 +153,14 @@ class AgentActivities:
                 await beat
             if transcript.exists():
                 await step.attach_transcript(transcript)
-        self._finish(step, result, out_file)
+        self._finish(step, result)
 
     @staticmethod
-    def _finish(step: StepContext, result: HarnessResult, out_file: Path) -> None:
+    def _finish(step: StepContext, result: HarnessResult) -> None:
         step.log(f"stop reason {result.stop_reason}, {result.num_turns} turns, exit code {result.exit_code}")
-        outcome, summary = _outcome(result), result.final_message
-        outputs: dict[str, Any] = {}
-        if out_file.exists():
-            try:
-                outputs = _read_outputs(out_file)
-            except (ValueError, OSError) as exc:
-                step.log(f"bad outputs file {out_file.name}: {exc}")
-                if outcome == StepOutcome.PASSED:
-                    outcome, summary = StepOutcome.FAILED_ERROR, f"invalid {OUT_DIR}/{out_file.name}: {exc}"
-            finally:
-                out_file.unlink(missing_ok=True)
+        for denial in result.permission_denials:
+            step.log(f"permission denied: {denial.tool_name} {json.dumps(denial.tool_input)[:500]}")
+        outcome, summary, outputs = judge(result)
         step.finish(outcome, summary, outputs, result.usage)
 
     def _harness(self, name: str) -> Harness:
@@ -138,28 +171,16 @@ class AgentActivities:
         return harness
 
     @staticmethod
-    def _prompt(spec: AgentStepInput) -> str:
+    def _prompt(spec: AgentStepInput) -> tuple[str, dict[str, Any]]:
+        """Return the rendered prompt and the output schema, both from the home repository's `.fact/prompts/`."""
         repos = spec.handle.repos
         name = spec.home_repo or next(iter(repos), None)
         if name is None or name not in repos:
             msg = f"home repository {name!r} is not in the workspace"
             raise ApplicationError(msg, non_retryable=True)
+        repo = Path(repos[name])
         try:
-            return render_prompt(
-                Path(repos[name]), spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id
-            )
+            prompt = render_prompt(repo, spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id)
+            return prompt, output_schema(repo, spec.prompt_name)
         except PromptError as exc:
             raise _non_retryable(exc) from exc
-
-
-def _read_outputs(path: Path) -> dict[str, Any]:
-    """Read the step's outputs file, a JSON object. Raises `ValueError` for anything else."""
-    size = path.stat().st_size
-    if size > OUTPUTS_MAX_BYTES:
-        msg = f"{size} bytes is over the {OUTPUTS_MAX_BYTES} byte limit; put large data in an artifact"
-        raise ValueError(msg)
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        msg = f"expected a JSON object, got {type(data).__name__}"
-        raise ValueError(msg)  # noqa: TRY004
-    return data

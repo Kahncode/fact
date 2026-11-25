@@ -12,7 +12,8 @@ from fact.core.settings import RoutingSettings, Settings
 from fact.core.types import Route, RouteOverride, StepResult, Task, Usage, WorkspaceHandle
 from fact.worker.activities import agent as agent_module
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
-from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, OnMessage
+from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
+from fact.worker.prompts import BASE_OUTPUT_SCHEMA
 from fact.worker.reporting import StepReporter
 from httpx import AsyncClient
 from temporalio.exceptions import ApplicationError
@@ -30,7 +31,7 @@ MESSAGES = [
 
 
 class FakeHarness:
-    """Writes `MESSAGES` to the transcript, optionally writes outputs, then returns `result` or raises `error`."""
+    """Writes `MESSAGES` to the transcript, then returns `result` or raises `error`."""
 
     name = "fake"
 
@@ -38,12 +39,10 @@ class FakeHarness:
         self,
         result: HarnessResult | None = None,
         error: Exception | None = None,
-        outputs: str | None = None,
         delay: float = 0.0,
     ) -> None:
         self.result = result or _result()
         self.error = error
-        self.outputs = outputs
         self.delay = delay
         self.requests: list[HarnessRequest] = []
 
@@ -57,16 +56,21 @@ class FakeHarness:
                 if on_message is not None:
                     on_message(m)
         await asyncio.sleep(self.delay)
-        if self.outputs is not None:
-            out = request.cwd / ".fact-out"
-            out.mkdir(exist_ok=True)
-            (out / "implement.json").write_text(self.outputs, encoding="utf-8")
         if self.error is not None:
             raise self.error
         return self.result
 
 
-def _result(stop_reason: str = "success", *, is_error: bool = False) -> HarnessResult:
+DONE = {"status": "done", "summary": "Added the thing.", "title": "feat(T-1): add a thing"}
+
+
+def _result(
+    stop_reason: str = "success",
+    *,
+    is_error: bool = False,
+    answer: dict[str, Any] | None = DONE,
+    denials: tuple[PermissionDenial, ...] = (),
+) -> HarnessResult:
     return HarnessResult(
         session_id="s-1",
         final_message="all done",
@@ -75,6 +79,8 @@ def _result(stop_reason: str = "success", *, is_error: bool = False) -> HarnessR
         stop_reason=stop_reason,
         num_turns=2,
         usage=USAGE,
+        structured_output=answer,
+        permission_denials=list(denials),
     )
 
 
@@ -128,10 +134,6 @@ class Env:
         (step,) = (await self.client.get(f"/api/v1/runs/{self.handle.run_id}")).json()["steps"]
         return step
 
-    @property
-    def out_file(self) -> Path:
-        return Path(self.handle.root) / ".fact-out" / "implement.json"
-
 
 @pytest.fixture
 def env(client: AsyncClient, tmp_path: Path, agent_settings: Settings, handle: WorkspaceHandle) -> Env:
@@ -139,19 +141,20 @@ def env(client: AsyncClient, tmp_path: Path, agent_settings: Settings, handle: W
 
 
 async def test_success_records_harness_model_usage_and_transcript(env: Env) -> None:
-    harness = FakeHarness(outputs='{"pr_title": "Add a thing"}')
+    harness = FakeHarness()
     result = await env.run(harness)
 
     assert result.outcome == StepOutcome.PASSED
-    assert result.summary == "all done"
-    assert result.outputs == {"pr_title": "Add a thing"}
+    assert result.summary == "Added the thing."
+    assert result.outputs == DONE
     assert result.usage == USAGE
-    assert not env.out_file.exists()
 
     (request,) = harness.requests
     assert request.cwd == Path(env.handle.root)
     assert request.model == "opus"
     assert request.max_turns == env.settings.step_defaults.agent.max_turns
+    assert request.permission_mode == "auto"
+    assert request.output_schema == BASE_OUTPUT_SCHEMA
     assert request.prompt == f"Implement T-1: Add a thing in {env.handle.root}\nctx here"
 
     step = await env.step()
@@ -161,7 +164,7 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     assert step["tokens_in"] == USAGE.tokens_in
     assert step["tokens_out"] == USAGE.tokens_out
     assert float(step["cost_usd"]) == USAGE.cost_usd
-    assert step["outputs"] == {"pr_title": "Add a thing"}
+    assert step["outputs"] == DONE
     assert step["transcript_ref"] == f"runs/{env.handle.run_id}/implement/1/transcript.jsonl"
     assert result.transcript_ref == step["transcript_ref"]
     transcript = (await env.client.get(f"/api/v1/artifacts/{step['transcript_ref']}")).text
@@ -195,25 +198,61 @@ async def test_max_turns_is_stopped_by_monitor(env: Env) -> None:
     assert (await env.step())["outcome"] == "stopped_by_monitor"
 
 
-async def test_invalid_outputs_file_fails_the_step(env: Env) -> None:
-    result = await env.run(FakeHarness(outputs="[1, 2]"))
+async def test_no_structured_answer_fails_the_step(env: Env) -> None:
+    result = await env.run(FakeHarness(_result(answer=None)))
     assert result.outcome == StepOutcome.FAILED_ERROR
-    assert "JSON object" in result.summary
-    assert not env.out_file.exists()
+    assert "without a structured answer" in result.summary
+    assert "all done" in result.summary
 
 
-async def test_oversized_outputs_fail_the_step(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_blocked_answer_needs_a_human_and_names_denied_tools(env: Env) -> None:
+    answer = {"status": "blocked", "summary": "Nothing changed.", "blocker": "Writes were refused."}
+    denial = PermissionDenial(tool_name="Write", tool_input={"file_path": "x.py"})
+    result = await env.run(FakeHarness(_result(answer=answer, denials=(denial, denial))))
+    assert result.outcome == StepOutcome.NEEDS_HUMAN
+    assert result.summary == "Writes were refused.\n\n2 tool calls denied (Write)"
+    assert result.outputs["status"] == "blocked"
+    assert result.outputs["permission_denials"] == [denial.model_dump()] * 2
+    step = await env.step()
+    assert step["outcome"] == "needs_human"
+    log = (await env.client.get(f"/api/v1/artifacts/{result.log_ref}")).text
+    assert 'permission denied: Write {"file_path": "x.py"}' in log
+
+
+async def test_done_answer_with_denials_still_passes(env: Env) -> None:
+    denial = PermissionDenial(tool_name="WebFetch")
+    result = await env.run(FakeHarness(_result(denials=(denial,))))
+    assert result.outcome == StepOutcome.PASSED
+    assert result.summary == "Added the thing."
+    assert result.outputs["permission_denials"] == [denial.model_dump()]
+
+
+async def test_oversized_answer_fails_the_step(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agent_module, "OUTPUTS_MAX_BYTES", 10)
-    result = await env.run(FakeHarness(outputs='{"big": "0123456789"}'))
+    result = await env.run(FakeHarness())
     assert result.outcome == StepOutcome.FAILED_ERROR
-    assert "artifact" in result.summary
+    assert "byte limit" in result.summary
     assert result.outputs == {}
 
 
-async def test_stale_outputs_are_removed_before_the_run(env: Env) -> None:
-    env.out_file.parent.mkdir()
-    env.out_file.write_text('{"old": true}', encoding="utf-8")
-    assert (await env.run(FakeHarness())).outputs == {}
+async def test_prompt_schema_adds_fields_to_the_answer(env: Env) -> None:
+    prompts = Path(env.handle.repos[HOME]) / ".fact" / "prompts"
+    extra = {"properties": {"title": {"type": "string"}}, "required": ["title"]}
+    (prompts / "implement.schema.json").write_text(json.dumps(extra), encoding="utf-8")
+    harness = FakeHarness()
+    await env.run(harness)
+    schema = harness.requests[0].output_schema
+    assert schema is not None
+    assert set(schema["properties"]) == {"status", "summary", "blocker", "title"}
+    assert schema["required"] == ["status", "summary", "title"]
+
+
+async def test_invalid_prompt_schema_is_non_retryable(env: Env) -> None:
+    prompts = Path(env.handle.repos[HOME]) / ".fact" / "prompts"
+    (prompts / "implement.schema.json").write_text("[1]", encoding="utf-8")
+    with pytest.raises(ApplicationError, match="properties") as info:
+        await env.run(FakeHarness())
+    assert info.value.non_retryable
 
 
 async def test_missing_prompt_is_non_retryable(env: Env) -> None:

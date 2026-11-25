@@ -54,10 +54,13 @@ def load_standard() -> ModuleType:
     return importlib.import_module("standard")
 
 
+RUN_URL = "http://ui.test/namespaces/default/workflows/run-1"
+
+
 def run_input(run_id: str = "run-1") -> RunInput:
     task = Task(key="task:M1-99", id="M1-99", title="Add a widget", path="tasks/M1/99-widget.md")
     repo = RepoCheckout(full_name=REPO, default_branch="main", branch=BRANCH)
-    return RunInput(run_id=run_id, project="acme", task=task, repos=[repo])
+    return RunInput(run_id=run_id, project="acme", task=task, repos=[repo], run_url=RUN_URL)
 
 
 @dataclass
@@ -198,6 +201,7 @@ async def test_green_path(tmp_path: Path) -> None:
     assert pr_spec.branch == BRANCH
     assert pr_spec.title == "feat(M1-99): add the widget"  # from the implement session's outputs
     assert pr_spec.summary == "implement done"
+    assert pr_spec.run_url == RUN_URL
     assert [(c.name, c.outcome) for c in pr_spec.check_results] == [("lint", "passed"), ("test", "passed")]
     assert _finished(fakes) == RunOutcome.PR_OPENED
 
@@ -254,6 +258,18 @@ async def test_failed_implement_ends_the_run_without_checks() -> None:
     assert fakes.of(SHELL_STEP) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.FAILED
+
+
+async def test_blocked_implement_needs_a_human_without_a_pr() -> None:
+    fakes = FakeActivities(implement_outcome=StepOutcome.NEEDS_HUMAN)
+    result, _ = await _run(fakes, "run-implement-blocked")
+
+    assert result.outcome == RunOutcome.NEEDS_HUMAN
+    assert "needs_human" in result.summary
+    assert fakes.of(SHELL_STEP) == []
+    assert fakes.of(MARK_TASK_DONE) == []
+    assert fakes.of(OPEN_CHANGE_SET) == []
+    assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:

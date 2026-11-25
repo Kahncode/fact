@@ -27,11 +27,11 @@ One process runs only the newest version: runs pinned to an older one wait after
 
 `fact.worker.harnesses` holds the harness contract and its adapters.
 
-- `HarnessRequest`: `prompt`, `cwd`, `model`, `allowed_tools`, `max_turns`, `resume_session_id`, `env`.
-- `HarnessResult`: `session_id`, `final_message`, `is_error`, `exit_code`, `stop_reason`, `num_turns`, `usage` (`fact.core.types.Usage`).
+- `HarnessRequest`: `prompt`, `cwd`, `model`, `allowed_tools`, `max_turns`, `permission_mode`, `output_schema` (JSON Schema for the final answer), `resume_session_id`, `env`.
+- `HarnessResult`: `session_id`, `final_message`, `is_error`, `exit_code`, `stop_reason`, `num_turns`, `usage` (`fact.core.types.Usage`), `structured_output` (the final answer matching `output_schema`, or None), `permission_denials` (`PermissionDenial`: `tool_name`, `tool_input`).
 - `Harness.run(request, transcript_path, on_message)` runs the agent to completion, writes every raw output line to `transcript_path` and calls `on_message` with each parsed message. Cancelling it kills the agent's process tree; the transcript written so far stays.
 
-`ClaudeCodeHarness` runs `claude -p --output-format stream-json --verbose`, adding `--model`, `--max-turns`, `--resume` and `--allowedTools` (one argument per rule, last) when set. The prompt goes on stdin, never argv (Windows limits command-line length). When `claude` resolves to a `.cmd`/`.bat` wrapper (an npm install on Windows), cmd.exe re-parses the command line, so arguments containing `"&|<>^%!` or newlines are rejected with `HarnessError`; the native `claude.exe` has no such limit. A process that cannot start (missing binary or `cwd`) also raises `HarnessError`. An output line over 64 MiB is dropped and replaced in the transcript by a `{"type":"fact_dropped_line"}` marker. The process gets the minimal environment from `build_env` plus `request.env`, so agent credentials such as `ANTHROPIC_API_KEY` must be passed there; a logged-in Claude Code finds its credentials through `HOME`/`USERPROFILE`.
+`ClaudeCodeHarness` runs `claude -p --output-format stream-json --verbose --permission-prompts none`, adding `--model`, `--max-turns`, `--permission-mode`, `--json-schema` (the schema as compact JSON), `--resume` and `--allowedTools` (one argument per rule, last) when set. `--permission-prompts none` keeps a headless session from ever waiting on an approval: a tool call that would prompt is denied and listed in the result's `permission_denials`. `--json-schema` contains quotes, so it needs the native `claude.exe` on Windows (see below). The prompt goes on stdin, never argv (Windows limits command-line length). When `claude` resolves to a `.cmd`/`.bat` wrapper (an npm install on Windows), cmd.exe re-parses the command line, so arguments containing `"&|<>^%!` or newlines are rejected with `HarnessError`; the native `claude.exe` has no such limit. A process that cannot start (missing binary or `cwd`) also raises `HarnessError`. An output line over 64 MiB is dropped and replaced in the transcript by a `{"type":"fact_dropped_line"}` marker. The process gets the minimal environment from `build_env` plus `request.env`, so agent credentials such as `ANTHROPIC_API_KEY` must be passed there; a logged-in Claude Code finds its credentials through `HOME`/`USERPROFILE`.
 
 The result comes from the final `result` message:
 
@@ -54,12 +54,12 @@ uv run python -m fact.worker.harnesses "reply with OK" --model haiku
 
 `agent_step` (`fact.worker.activities.agent`, `sandbox` queue) runs a coding agent as a reported step. `AgentStepInput`: `run_id`, `stage_id`, `attempt`, `handle`, `task`, `prompt_name`, `context`, `complexity` (default `standard`), `override` (`RouteOverride`), `home_repo` (full name in `handle.repos`; default the first repository).
 
-1. Picks harness and model with `routing.choose` and renders `.fact/prompts/<prompt_name>.md` from the home repository's worktree, so the prompt comes from the run's branch.
-2. Runs the harness with `cwd` = workspace root and `max_turns` from `step_defaults.agent`; heartbeats every 30 s with the turn count (distinct assistant message ids).
-3. Uploads `transcript.jsonl` as the step's `transcript_ref` (`StepContext.attach_transcript`), also on error or cancel.
-4. Reads `.fact-out/<stage_id>.json` at the workspace root into the step's outputs: a JSON object of at most 64 KiB, otherwise the step is `failed_error`. The file is removed before and after the run.
+1. Picks harness and model with `routing.choose` and renders `.fact/prompts/<prompt_name>.md` from the home repository's worktree, so the prompt comes from the run's branch. The output schema is `prompts.BASE_OUTPUT_SCHEMA` (`status: done|blocked`, `summary`, optional `blocker`) plus the properties of `.fact/prompts/<prompt_name>.schema.json` when present.
+2. Runs the harness with `cwd` = workspace root, and `max_turns` and `permission_mode` (default `auto`) from `step_defaults.agent`; heartbeats every 30 s with the turn count (distinct assistant message ids).
+3. Uploads `transcript.jsonl` as the step's `transcript_ref` (`StepContext.attach_transcript`), also on error or cancel. Each denied tool call is a `permission denied:` line in the step log.
+4. `judge` turns the result into outcome, summary and outputs: the structured answer is the step's outputs (at most 64 KiB, else `failed_error`), plus `permission_denials` when there were any.
 
-Outcomes: `passed`; `failed_error` for an error result or a `HarnessError`; `stopped_by_monitor` when the stop reason is `error_max_turns`. An unknown harness, a missing home repository or prompt, or a bad placeholder raises a non-retryable `ApplicationError` (the step row is still finished as `failed_error`).
+Outcomes: `passed` for `status: done`; `needs_human` for `status: blocked` (the summary is the `blocker`, followed by the denied tools); `failed_error` for an error result, a `HarnessError` or no structured answer; `stopped_by_monitor` when the stop reason is `error_max_turns`. The exit code alone never makes a step pass. An unknown harness, a missing home repository or prompt, a bad placeholder or an invalid `<prompt>.schema.json` raises a non-retryable `ApplicationError` (the step row is still finished as `failed_error`).
 
 No `env` is passed to the harness yet, so only a Claude Code login found through `HOME`/`USERPROFILE` works; `ANTHROPIC_API_KEY` is not forwarded. `step_defaults.*.timeout_minutes` is not applied by anything yet.
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from fact.worker.harnesses import ClaudeCodeHarness, HarnessError, HarnessRequest, claude_code
+from fact.worker.harnesses import ClaudeCodeHarness, HarnessError, HarnessRequest, PermissionDenial, claude_code
 from fact.worker.harnesses.claude_code import parse_line, result_from_messages
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -80,7 +80,7 @@ def test_argv_has_flags_and_never_the_prompt(tmp_path: Path) -> None:
         allowed_tools=["Read", "Bash(git status:*)"],
     )
     argv = ClaudeCodeHarness(command=["claude"]).build_argv(request)
-    assert argv[:5] == ["claude", "-p", "--output-format", "stream-json", "--verbose"]
+    assert argv[:7] == ["claude", "-p", "--output-format", "stream-json", "--verbose", "--permission-prompts", "none"]
     assert argv[argv.index("--model") + 1] == "sonnet"
     assert argv[argv.index("--max-turns") + 1] == "7"
     assert argv[argv.index("--resume") + 1] == "abc"
@@ -88,10 +88,46 @@ def test_argv_has_flags_and_never_the_prompt(tmp_path: Path) -> None:
     assert "do the thing" not in argv
 
 
+def test_argv_passes_permission_mode_and_schema(tmp_path: Path) -> None:
+    schema = {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
+    request = HarnessRequest(prompt="x", cwd=tmp_path, permission_mode="auto", output_schema=schema)
+    argv = ClaudeCodeHarness(command=["claude"]).build_argv(request)
+    assert argv[argv.index("--permission-mode") + 1] == "auto"
+    assert json.loads(argv[argv.index("--json-schema") + 1]) == schema
+
+
 def test_argv_omits_unset_options(tmp_path: Path) -> None:
     argv = ClaudeCodeHarness(command=["claude"]).build_argv(HarnessRequest(prompt="x", cwd=tmp_path))
-    for flag in ("--model", "--max-turns", "--resume", "--allowedTools"):
+    for flag in ("--model", "--max-turns", "--resume", "--allowedTools", "--permission-mode", "--json-schema"):
         assert flag not in argv
+
+
+def test_result_carries_structured_output_and_denials() -> None:
+    """Shaped like a real `claude -p --json-schema --permission-prompts none` result whose Write was refused."""
+    answer = {"status": "blocked", "reason": "Write to probe.txt was denied"}
+    result_message = {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": "s-1",
+        "result": json.dumps(answer),
+        "structured_output": answer,
+        "permission_denials": [
+            {"tool_name": "Write", "tool_use_id": "toolu_1", "tool_input": {"file_path": "probe.txt", "content": "x"}},
+            {"tool_use_id": "toolu_2"},  # no tool name: skipped
+        ],
+    }
+    result = result_from_messages([result_message], exit_code=0)
+    assert result.structured_output == answer
+    assert result.permission_denials == [
+        PermissionDenial(tool_name="Write", tool_input={"file_path": "probe.txt", "content": "x"})
+    ]
+
+
+def test_result_without_structured_output_has_none() -> None:
+    result = result_from_messages(_messages(OK_STREAM), exit_code=0)
+    assert result.structured_output is None
+    assert result.permission_denials == []
 
 
 def test_missing_binary_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -26,10 +26,12 @@ routing:
       model: opus
     "*.review":
       model: opus
-# Limits per step kind: timeout_minutes is the activity's start-to-close timeout; max_turns caps agent turns.
+# Limits per step kind: timeout_minutes is the activity's start-to-close timeout; max_turns caps agent turns;
+# permission_mode is the agent harness's mode (Claude Code: auto keeps checks on without prompting anyone).
 step_defaults:
   agent:
     timeout_minutes: 60
     max_turns: 100
+    permission_mode: auto
   shell:
     timeout_minutes: 15

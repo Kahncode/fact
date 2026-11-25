@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fact.core.types import Usage
-from fact.worker.harnesses.base import HarnessError, HarnessRequest, HarnessResult, OnMessage
+from fact.worker.harnesses.base import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
 from fact.worker.runners.process import build_env, kill_tree, spawn
 
 _LINE_LIMIT = 1 << 26  # one stream-json line carries a whole tool result
@@ -53,6 +53,8 @@ class _Collector:
             stop_reason=str(r.get("subtype") or "unknown"),
             num_turns=int(r.get("num_turns") or 0),
             usage=_usage(r),
+            structured_output=_structured(r),
+            permission_denials=_denials(r),
         )
 
 
@@ -67,6 +69,23 @@ def _usage(result: dict[str, Any]) -> Usage:
         tokens_out=int(u.get("output_tokens") or 0),
         cost_usd=float(result.get("total_cost_usd") or 0.0),
     )
+
+
+def _structured(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the final answer matching `--json-schema`, or None when none was asked or the agent never gave one."""
+    found = result.get("structured_output")
+    return found if isinstance(found, dict) else None
+
+
+def _denials(result: dict[str, Any]) -> list[PermissionDenial]:
+    denials = []
+    for d in result.get("permission_denials") or []:
+        if isinstance(d, dict) and isinstance(name := d.get("tool_name"), str):
+            tool_input = d.get("tool_input")
+            denials.append(
+                PermissionDenial(tool_name=name, tool_input=tool_input if isinstance(tool_input, dict) else {})
+            )
+    return denials
 
 
 def parse_line(line: str) -> dict[str, Any] | None:
@@ -157,7 +176,12 @@ class ClaudeCodeHarness:
                 raise HarnessError(msg)
 
     def build_argv(self, request: HarnessRequest) -> list[str]:
-        argv = [*self._resolve(), "-p", "--output-format", "stream-json", "--verbose"]
+        # Headless: nothing may wait on an approval; whatever would prompt is denied and listed in the result.
+        argv = [*self._resolve(), "-p", "--output-format", "stream-json", "--verbose", "--permission-prompts", "none"]
+        if request.permission_mode:
+            argv += ["--permission-mode", request.permission_mode]
+        if request.output_schema is not None:
+            argv += ["--json-schema", json.dumps(request.output_schema, separators=(",", ":"))]
         if request.model:
             argv += ["--model", request.model]
         if request.max_turns is not None:

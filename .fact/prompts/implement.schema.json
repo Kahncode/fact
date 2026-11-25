@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Pull request title: a conventional commit subject for the whole change."
+    }
+  }
+}
