@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
         RECORD_RUN_STARTED,
         SANDBOX_QUEUE,
         SHELL_STEP,
+        TEARDOWN_WORKSPACE,
         AgentStepInput,
         Check,
         CheckResult,
@@ -36,19 +37,21 @@ with workflow.unsafe.imports_passed_through():
         ShellStepInput,
     )
     from fact.core.enums import RunOutcome, StepOutcome
-    from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec, limit_text
+    from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+    from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
     from fact.sdk.stages import Stage, stages
 
-__all__ = ["FactWorkflow", "Stage", "failure_context", "stages"]
+__all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
 HEARTBEAT_TIMEOUT = timedelta(minutes=2)  # agent and shell steps heartbeat every 30 s
 NO_RETRY = RetryPolicy(maximum_attempts=1)  # agent sessions are resumed only by `FactWorkflow.agent`, deliberately
 INFRA_RETRY = RetryPolicy(  # shell and control steps: only infrastructure errors raise, and those may pass on retry
     initial_interval=timedelta(seconds=5), maximum_interval=timedelta(minutes=2), maximum_attempts=5
 )
-CONTEXT_MAX_BYTES = 32 * 1024  # failure context handed to a fix session
 COMMIT_TYPES = {"feature": "feat", "chore": "chore", "bug": "fix"}
+# the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
+PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
 class FactWorkflow:
@@ -88,6 +91,7 @@ class FactWorkflow:
         Record the run as started, run `body`, and record how it finished: `failed` if it raised a Temporal failure.
 
         The start carries the worker deployment version (build id `<factory SHA>+<home SHA>`) the run is pinned to.
+        A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person.
 
         Any other exception is a bug in workflow code: it fails the workflow task, which Temporal retries once the
         code is fixed, so the run is not recorded as finished.
@@ -104,6 +108,8 @@ class FactWorkflow:
             )
             raise
         await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=result.outcome))
+        if result.outcome in PUSHED_OUTCOMES:
+            await self._teardown()
         return result
 
     def next_attempt(self, stage_id: str) -> int:
@@ -112,6 +118,9 @@ class FactWorkflow:
         return self._attempts[stage_id]
 
     async def prepare(self) -> WorkspaceHandle:
+        """Create the workspace once; it lasts as long as the run, so its branches and PR never change."""
+        if self._handle is not None:
+            return self._handle
         run = self.input
         spec = WorkspaceSpec(run_id=run.run_id, task_key=run.task.key, repos=run.repos)
         self._handle = await self._control(PREPARE_WORKSPACE, spec, WorkspaceHandle)
@@ -209,7 +218,7 @@ class FactWorkflow:
             run_id=run.run_id,
             task=run.task,
             handle=self.handle,
-            branch=run.repos[0].branch,
+            branch=self.handle.branches.get(run.repos[0].full_name, run.repos[0].branch),
             title=title,
             summary=summary,
             check_results=self.check_results,
@@ -265,6 +274,15 @@ class FactWorkflow:
             retry_policy=INFRA_RETRY,
         )
 
+    async def _teardown(self) -> None:
+        """Best effort: a workspace left behind only takes disk space."""
+        if self._handle is None:
+            return
+        try:
+            await self._control(TEARDOWN_WORKSPACE, self._handle, type(None))
+        except ActivityError as exc:
+            workflow.logger.warning("teardown failed for run %s: %s", self._handle.run_id, exc.cause or exc)
+
     async def _record(self, name: str, arg: RunStartedInput | RunFinishedInput) -> None:
         """Run bookkeeping is best effort: an API outage must not fail a run that did its work."""
         try:
@@ -278,16 +296,3 @@ class FactWorkflow:
             self.pr_title = title.strip()
         if isinstance(summary, str) and summary.strip():
             self.pr_summary = summary.strip()
-
-
-def failure_context(failures: Sequence[tuple[CheckResult, StepResult]]) -> str:
-    """Build the text a fix session gets: each failed check with its command, exit code and output tail."""
-    parts: list[str] = []
-    for check, step in failures:
-        command, code, output = (step.outputs.get(k) for k in ("command", "exit_code", "failure_output"))
-        if isinstance(command, list) and isinstance(output, str):
-            argv = " ".join(str(a) for a in command)
-            parts.append(f"### {check.name}: `{argv}` exited with {code}\n\n```\n{output}\n```")
-        else:
-            parts.append(f"### {check.name}: {check.outcome}\n\n{step.summary}")
-    return limit_text("\n\n".join(parts), CONTEXT_MAX_BYTES)

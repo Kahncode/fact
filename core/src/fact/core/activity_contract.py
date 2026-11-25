@@ -16,6 +16,7 @@ SANDBOX_QUEUE = "sandbox"  # runs agents and the repository's own commands
 WORKFLOW_QUEUE_PREFIX = "wf-"  # each project's workflows run on `wf-<project>`, one worker deployment per project
 
 PREPARE_WORKSPACE = "prepare_workspace"
+TEARDOWN_WORKSPACE = "teardown_workspace"
 AGENT_STEP = "agent_step"
 SHELL_STEP = "shell_step"
 OPEN_CHANGE_SET = "open_change_set"
@@ -76,7 +77,7 @@ class OpenChangeSetInput(_Input):
     run_id: str
     task: Task
     handle: WorkspaceHandle
-    branch: str  # the run's branch, from its `RepoCheckout`; the only branch this activity pushes
+    branch: str  # the branch the workspace checked out (`WorkspaceHandle.branches`); the only one this pushes
     title: str  # PR title, written by the last agent session
     summary: str  # top of the PR description, written by the last agent session
     check_results: list[CheckResult] = Field(default_factory=list)

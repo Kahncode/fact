@@ -14,6 +14,10 @@ Needs a design for:
 
 It probably builds on the gate and notification work in M2 (M2-01 to M2-03).
 
+## Workspaces
+
+- Workspaces of runs that did not open their PR (failed, needs_human, cancelled) stay in `workspaces_dir` forever. Add `fact workspaces prune`: list them with their run status and remove the ones a person picks (a removed folder frees its branch, and the next run resets it to the remote). Until then, a left-behind workspace holding a task branch sends every new run on that task to a suffixed branch and a new PR.
+
 ## Later milestones (from the spec)
 
 - M3 UI: inbox, runs, run detail with stage graph, live logs, notifications.

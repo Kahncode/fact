@@ -14,6 +14,7 @@ from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT, Settings
 from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
 from fact.worker.runners.base import ExecLine, ExecOutput, RunnerCapabilities, RunnerError
+from fact.worker.runners.branches import free_branch
 from fact.worker.runners.process import build_env, spawn, stream
 
 log = get_logger(__name__)
@@ -57,6 +58,7 @@ class LocalWorktreeRunner:
         self._github = github
         self._factory_root = factory_root
         self._mirror_locks: defaultdict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._run_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def capabilities(self) -> RunnerCapabilities:
         return RunnerCapabilities(name=PROFILE, isolation="none", runs_as_user=True, supports_resume=True)
@@ -99,20 +101,31 @@ class LocalWorktreeRunner:
         return root
 
     async def prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
-        root = self._validate(spec)
+        self._validate(spec)
+        # a timed-out attempt may still run while Temporal starts the next one: one prepare per run at a time
+        async with self._run_locks[spec.run_id]:
+            return await self._prepare(spec)
+
+    async def _prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
+        root = self._root(spec.run_id)
+        # a retry after a crash mid-prepare finds this run's own half-made workspace: start over, keep the branch free
+        await self.teardown(
+            WorkspaceHandle(run_id=spec.run_id, root=str(root), repos={r.full_name: "" for r in spec.repos})
+        )
         root.mkdir(parents=True, exist_ok=True)
         repos: dict[str, str] = {}
+        branches: dict[str, str] = {}
         try:
             for repo in spec.repos:
                 worktree = root / _folder(repo.full_name)
                 repos[repo.full_name] = str(worktree)
-                await self._add_worktree(repo, worktree)
-            (root / "WORKSPACE.md").write_text(_workspace_md(spec), encoding="utf-8", newline="\n")
+                branches[repo.full_name] = await self._add_worktree(repo, worktree)
+            (root / "WORKSPACE.md").write_text(_workspace_md(spec, branches), encoding="utf-8", newline="\n")
         except BaseException:
             await self.teardown(WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos))
             raise
-        log.info("workspace_ready", run_id=spec.run_id, root=str(root), repos=list(repos))
-        return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos)
+        log.info("workspace_ready", run_id=spec.run_id, root=str(root), repos=list(repos), branches=branches)
+        return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos, branches=branches)
 
     async def sync_mirror(self, full_name: str) -> Path:
         """Clone or fetch the bare mirror of `owner/repo` (remote branches under `origin/*`) and return its path."""
@@ -140,17 +153,26 @@ class LocalWorktreeRunner:
             await self._git("config", "--worktree", "core.bare", "true", cwd=mirror)
             await self._git("config", "--file", "config", "--unset", "core.bare", cwd=mirror)
 
-    async def _add_worktree(self, repo: RepoCheckout, worktree: Path) -> None:
+    async def _add_worktree(self, repo: RepoCheckout, worktree: Path) -> str:
+        """
+        Add the worktree and return its branch: the task branch, or a suffixed one if another workspace holds it.
+
+        A held branch is never reset, so a workspace left behind keeps its unpushed commits.
+        """
         mirror = await self.sync_mirror(repo.full_name)
         remote_branch = f"refs/remotes/origin/{repo.branch}"
         resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
         start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
-        await self._git("worktree", "prune", cwd=mirror)
-        await self._git("worktree", "add", "--no-track", "-B", repo.branch, str(worktree), start, cwd=mirror)
+        async with self._mirror_locks[mirror]:  # two runs on one mirror must not pick the same free branch
+            branch = await free_branch(self._git, self._git_ok, mirror, repo.branch)
+            await self._git("worktree", "add", "--no-track", "-B", branch, str(worktree), start, cwd=mirror)
+        if branch != repo.branch:
+            log.warning("branch_taken", repo=repo.full_name, wanted=repo.branch, branch=branch)
         name, email = await self._commit_identity()
         await self._git("config", "--worktree", "user.name", name, cwd=worktree)
         await self._git("config", "--worktree", "user.email", email, cwd=worktree)
-        log.info("worktree_added", repo=repo.full_name, branch=repo.branch, resumed=resumed)
+        log.info("worktree_added", repo=repo.full_name, branch=branch, resumed=resumed)
+        return branch
 
     async def _commit_identity(self) -> tuple[str, str]:
         if self._github is not None:
@@ -201,8 +223,8 @@ class LocalWorktreeRunner:
             if mirror.exists():
                 await self._git_ok("worktree", "remove", "--force", str(root / _folder(full_name)), cwd=mirror)
                 await self._git_ok("worktree", "prune", cwd=mirror)
-        if root.exists():
-            shutil.rmtree(root, onexc=_make_writable_and_retry)
+        if root.exists():  # in a thread: a large tree can take minutes, and activities on this loop must heartbeat
+            await asyncio.to_thread(shutil.rmtree, root, onexc=_make_writable_and_retry)
         log.info("workspace_removed", run_id=handle.run_id)
 
     async def _git_ok(self, *args: str, cwd: Path) -> bool:
@@ -229,7 +251,7 @@ def _make_writable_and_retry(func: Callable[[str], object], path: str, _exc: Bas
     func(path)
 
 
-def _workspace_md(spec: WorkspaceSpec) -> str:
+def _workspace_md(spec: WorkspaceSpec, branches: Mapping[str, str]) -> str:
     lines = [
         "# Workspace",
         "",
@@ -239,5 +261,8 @@ def _workspace_md(spec: WorkspaceSpec) -> str:
         "| Folder | Repository | Role | Branch |",
         "| --- | --- | --- | --- |",
     ]
-    lines.extend(f"| `{_folder(r.full_name)}` | {r.full_name} | {r.role or '-'} | `{r.branch}` |" for r in spec.repos)
+    lines.extend(
+        f"| `{_folder(r.full_name)}` | {r.full_name} | {r.role or '-'} | `{branches[r.full_name]}` |"
+        for r in spec.repos
+    )
     return "\n".join(lines) + "\n"

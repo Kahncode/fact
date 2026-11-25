@@ -22,7 +22,7 @@ A run ends when its PR is merged or closed, not when the PR opens. Its outcome (
 ## Do
 
 - A `wait_for_pr_closed(prs)` control activity that polls each PR every 60 s, heartbeating. It has a long start-to-close timeout (30 days) with retries and returns `merged` or `closed` per PR.
-- `Standard`, after CI is green: notify that PRs are ready (M2-03), wait, set the run outcome, then tear the workspace down (a `teardown_workspace` control activity). The wait is recorded as human wait time on a `review` gate-like step.
+- `Standard`, after CI is green: notify that PRs are ready (M2-03), wait, then return the run outcome (`merged` or `closed`). Don't add a teardown: `FactWorkflow.execute` already calls `teardown_workspace` for those outcomes. The wait is recorded as human wait time on a `review` gate-like step.
 - Tests: merged and closed paths with mocked GitHub; teardown is called in both.
 
 ## Out of scope

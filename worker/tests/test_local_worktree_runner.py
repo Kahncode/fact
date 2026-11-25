@@ -1,6 +1,8 @@
 """LocalWorktreeRunner against a local bare repository standing in for GitHub."""
 
 import asyncio
+import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -222,3 +224,92 @@ async def test_refuses_workspace_inside_pinned_dir(settings: Settings, remote: P
     with pytest.raises(RunnerError, match="pinned_dir"):
         await runner.prepare(_spec())
     assert not settings.workspaces_dir.exists()
+
+
+async def test_taken_branch_gets_a_suffix(runner: LocalWorktreeRunner) -> None:
+    first = await runner.prepare(_spec(run_id="run-a"))
+    second = await runner.prepare(_spec(run_id="run-b"))
+    third = await runner.prepare(_spec(run_id="run-c"))
+
+    assert first.branches[FULL_NAME] == "fact/task-m1-06"
+    assert second.branches[FULL_NAME] == "fact/task-m1-06-2"
+    assert third.branches[FULL_NAME] == "fact/task-m1-06-3"
+    assert _git("branch", "--show-current", cwd=Path(second.repos[FULL_NAME])) == "fact/task-m1-06-2"
+    assert "fact/task-m1-06-2" in (Path(second.root) / "WORKSPACE.md").read_text(encoding="utf-8")
+    for handle in (first, second, third):
+        await runner.teardown(handle)
+
+
+async def test_branch_is_free_again_after_teardown(runner: LocalWorktreeRunner) -> None:
+    first = await runner.prepare(_spec(run_id="run-a"))
+    await runner.teardown(first)
+    second = await runner.prepare(_spec(run_id="run-b"))
+
+    assert second.branches[FULL_NAME] == "fact/task-m1-06"
+    await runner.teardown(second)
+
+
+async def test_branch_is_free_once_its_folder_is_gone(runner: LocalWorktreeRunner) -> None:
+    first = await runner.prepare(_spec(run_id="run-a"))
+    shutil.rmtree(first.root, onexc=_writable)  # a folder deleted by hand: git still lists the worktree
+    second = await runner.prepare(_spec(run_id="run-b"))
+
+    assert second.branches[FULL_NAME] == "fact/task-m1-06"
+    await runner.teardown(second)
+
+
+async def test_suffix_skips_branches_on_the_remote(runner: LocalWorktreeRunner, remote: Path, tmp_path: Path) -> None:
+    pusher = tmp_path / "pusher"
+    _git("clone", str(remote), str(pusher), cwd=tmp_path)
+    _git("push", "origin", "HEAD:refs/heads/fact/task-m1-06-2", cwd=pusher)  # another run's PR branch
+    first = await runner.prepare(_spec(run_id="run-a"))
+    second = await runner.prepare(_spec(run_id="run-b"))
+
+    assert second.branches[FULL_NAME] == "fact/task-m1-06-3"
+    for handle in (first, second):
+        await runner.teardown(handle)
+
+
+def _writable(func, path: str, _exc: BaseException) -> None:  # noqa: ANN001
+    Path(path).chmod(stat.S_IWRITE)
+    func(path)
+
+
+async def test_retry_after_a_crash_mid_prepare_keeps_the_branch(runner: LocalWorktreeRunner) -> None:
+    await runner.prepare(_spec(run_id="run-a"))  # the activity died before reporting: the retry prepares again
+    handle = await runner.prepare(_spec(run_id="run-a"))
+
+    assert handle.branches[FULL_NAME] == "fact/task-m1-06"
+    await runner.teardown(handle)
+
+
+async def test_held_branch_keeps_its_unpushed_commits(runner: LocalWorktreeRunner) -> None:
+    left = await runner.prepare(_spec(run_id="run-a"))  # a failed run's workspace, left on disk
+    worktree = Path(left.repos[FULL_NAME])
+    (worktree / "local.txt").write_text("not pushed\n", encoding="utf-8")
+    _git("add", ".", cwd=worktree)
+    _git("commit", "-m", "local work", cwd=worktree)
+    head = _git("rev-parse", "HEAD", cwd=worktree)
+
+    other = await runner.prepare(_spec(run_id="run-b"))
+
+    assert other.branches[FULL_NAME] == "fact/task-m1-06-2"
+    assert _git("rev-parse", "fact/task-m1-06", cwd=worktree) == head
+    for handle in (left, other):
+        await runner.teardown(handle)
+
+
+async def test_concurrent_runs_get_distinct_branches(runner: LocalWorktreeRunner) -> None:
+    first, second = await asyncio.gather(runner.prepare(_spec(run_id="run-a")), runner.prepare(_spec(run_id="run-b")))
+
+    assert {first.branches[FULL_NAME], second.branches[FULL_NAME]} == {"fact/task-m1-06", "fact/task-m1-06-2"}
+    for handle in (first, second):
+        await runner.teardown(handle)
+
+
+async def test_overlapping_attempts_of_one_run_take_turns(runner: LocalWorktreeRunner) -> None:
+    first, second = await asyncio.gather(runner.prepare(_spec(run_id="run-a")), runner.prepare(_spec(run_id="run-a")))
+
+    assert first.branches[FULL_NAME] == second.branches[FULL_NAME] == "fact/task-m1-06"
+    assert Path(second.repos[FULL_NAME]).exists()  # noqa: ASYNC240
+    await runner.teardown(second)

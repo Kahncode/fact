@@ -80,9 +80,8 @@ def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
 
 
 def _activity_workers(
-    client: Client, settings: Settings, http: httpx.AsyncClient, github: GitHubApp | None
+    client: Client, settings: Settings, http: httpx.AsyncClient, runner: LocalWorktreeRunner, github: GitHubApp | None
 ) -> list[Worker]:
-    runner = LocalWorktreeRunner(settings, github=github)
     reporter = StepReporter(settings.api_url, http, log_dir=settings.data_dir / "step-logs")
     workspace = WorkspaceActivities(runner, reporter)
     shell = ShellActivities(runner, reporter)
@@ -97,6 +96,7 @@ def _activity_workers(
         activities=[
             ping,
             workspace.prepare_workspace,
+            workspace.teardown_workspace,
             change_set.open_change_set,
             control_steps.mark_task_done,
             control_steps.record_run_started,
@@ -119,9 +119,11 @@ async def run() -> None:
     client = await connect(settings)
     log = get_logger("fact.worker")
     github = _github_app(settings)
-    projects = await load_projects(settings, LocalWorktreeRunner(settings, github=github))
+    runner = LocalWorktreeRunner(settings, github=github)
+    projects = await load_projects(settings, runner)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
-        workers = [*_activity_workers(client, settings, http, github), *(workflow_worker(client, p) for p in projects)]
+        activity_workers = _activity_workers(client, settings, http, runner, github)
+        workers = [*activity_workers, *(workflow_worker(client, p) for p in projects)]
         for worker in workers:
             await stack.enter_async_context(worker)
         for project in projects:

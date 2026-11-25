@@ -22,6 +22,7 @@ from fact.core.activity_contract import (
     RECORD_RUN_STARTED,
     SANDBOX_QUEUE,
     SHELL_STEP,
+    TEARDOWN_WORKSPACE,
     AgentStepInput,
     MarkTaskDoneInput,
     OpenChangeSetInput,
@@ -73,6 +74,7 @@ class FakeActivities:
     implement_outcome: StepOutcome = StepOutcome.PASSED
     implement_script: list[StepResult | Exception] = field(default_factory=list)  # first implement sessions, in order
     broken: str | None = None  # name of an activity that raises a non-retryable error
+    checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
     calls: list[tuple[str, object]] = field(default_factory=list)
 
     def _call(self, name: str, spec: object) -> None:
@@ -93,7 +95,14 @@ class FakeActivities:
     async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
         self._call(PREPARE_WORKSPACE, spec)
         root = f"/ws/{spec.run_id}"
-        return WorkspaceHandle(run_id=spec.run_id, root=root, repos={r.full_name: f"{root}/widget" for r in spec.repos})
+        repos = {r.full_name: f"{root}/widget" for r in spec.repos}
+        return WorkspaceHandle(
+            run_id=spec.run_id, root=root, repos=repos, branches=dict.fromkeys(repos, self.checked_out)
+        )
+
+    @activity.defn(name=TEARDOWN_WORKSPACE)
+    async def teardown_workspace(self, handle: WorkspaceHandle) -> None:
+        self._call(TEARDOWN_WORKSPACE, handle)
 
     @activity.defn(name=AGENT_STEP)
     async def agent_step(self, spec: AgentStepInput) -> StepResult:
@@ -137,6 +146,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.record_run_started,
         fakes.record_run_finished,
         fakes.prepare_workspace,
+        fakes.teardown_workspace,
         fakes.mark_task_done,
         fakes.open_change_set,
     ]
@@ -199,6 +209,7 @@ async def test_green_path(tmp_path: Path) -> None:
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
         RECORD_RUN_FINISHED,
+        TEARDOWN_WORKSPACE,
     ]
     assert _agent_sessions(fakes) == [("implement", 1, "implement")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
@@ -249,6 +260,22 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert _finished(fakes) == RunOutcome.NEEDS_HUMAN
+    assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
+
+
+async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
+    fakes = FakeActivities(checked_out=f"{BRANCH}-2")
+    result, _ = await _run(fakes, "run-branch-taken")
+
+    assert result.outcome == RunOutcome.PR_OPENED
+    (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
+    assert pr_spec.branch == f"{BRANCH}-2"
+
+
+async def test_teardown_failure_does_not_fail_the_run() -> None:
+    fakes = FakeActivities(broken=TEARDOWN_WORKSPACE)
+    result, _ = await _run(fakes, "run-teardown-broken")
+    assert result.outcome == RunOutcome.PR_OPENED
 
 
 async def test_replay_green_history() -> None:
@@ -326,6 +353,7 @@ async def test_interrupted_twice_fails_the_run() -> None:
         await _run(fakes, "run-interrupted-twice")
     assert len(fakes.of(AGENT_STEP)) == MAX_RESUMES + 1
     assert _finished(fakes) == RunOutcome.FAILED
+    assert fakes.of(TEARDOWN_WORKSPACE) == []
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:

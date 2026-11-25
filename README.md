@@ -42,6 +42,8 @@ uv run fact status run-task-M1-02-1
 
 `fact run` reads the task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links.
 
+Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run opens its PR; a run that fails or needs you leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
+
 ## GitHub App
 
 fact works on GitHub as its own App (setup in `docs/spec/12-integrations.md`). Put `FACT_GITHUB_APP_ID` and `FACT_GITHUB_APP_PRIVATE_KEY_PATH` in `.env`, then check access to a repository:

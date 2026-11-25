@@ -1,6 +1,10 @@
-"""`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`."""
+"""
+`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`.
 
-from fact.core.activity_contract import PREPARE_WORKSPACE
+`teardown_workspace`: remove it once the run's work is pushed; bookkeeping, not reported as a step.
+"""
+
+from fact.core.activity_contract import PREPARE_WORKSPACE, TEARDOWN_WORKSPACE
 from fact.core.enums import StepKind, StepOutcome
 from fact.core.types import WorkspaceHandle, WorkspaceSpec
 from fact.worker.reporting import StepReporter
@@ -21,7 +25,13 @@ class WorkspaceActivities:
         async with self._reporter.step(spec.run_id, PREPARE_STAGE, StepKind.SHELL, attempt) as step:
             step.log(f"preparing workspace for {spec.task_key}: {', '.join(r.full_name for r in spec.repos)}")
             handle = await self._runner.prepare(spec)
-            for name, path in handle.repos.items():
-                step.log(f"{name} -> {path}")
-            step.finish(StepOutcome.PASSED, outputs={"root": handle.root})
+            for repo in spec.repos:
+                branch = handle.branches.get(repo.full_name, repo.branch)
+                taken = f" ({repo.branch} is checked out by another workspace)" if branch != repo.branch else ""
+                step.log(f"{repo.full_name} -> {handle.repos[repo.full_name]} on {branch}{taken}")
+            step.finish(StepOutcome.PASSED, outputs={"root": handle.root, "branches": handle.branches})
         return handle
+
+    @activity.defn(name=TEARDOWN_WORKSPACE)
+    async def teardown_workspace(self, handle: WorkspaceHandle) -> None:
+        await self._runner.teardown(handle)

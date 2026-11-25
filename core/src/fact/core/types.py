@@ -60,6 +60,8 @@ class WorkspaceHandle(_Model):
     run_id: str
     root: str
     repos: dict[str, str] = Field(default_factory=dict)  # full name -> worktree path
+    # full name -> the branch checked out, which is the requested one or `<branch>-<n>` when another workspace holds it
+    branches: dict[str, str] = Field(default_factory=dict)
 
 
 class Usage(_Model):
