@@ -32,7 +32,7 @@ fact/
 ├── sdk/                   fact.sdk: step library and workflow base class that project workflows import
 ├── cli/                   fact.cli: the `fact` Typer command
 │   (each package: src/fact/<name>/ and tests/)
-├── scripts/tests/         tests for the .claude/hooks scripts
+├── scripts/               development scripts (openapi_snapshot.py); scripts/tests/ tests the .claude/hooks scripts
 ├── web/                   React UI (from M4)
 ├── .fact/                 fact's own project config, workflows and prompts
 ├── docs/spec/             design, one file per section (start at README.md)
@@ -91,6 +91,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Mark a notification read | `uv run fact inbox read <id>`                  |
 | Check GitHub App access | `uv run fact github check <owner/repo>`         |
 | Create fact's labels on a repo | `uv run fact github labels sync <owner/repo>` |
+| Regenerate the OpenAPI snapshot `api/openapi.json` (after an intended API change; `api/tests/test_openapi_compat.py` fails until you do) | `uv run python scripts/openapi_snapshot.py` |
 | Lint (autofix)          | `uv run ruff check . --fix`                     |
 | Format                  | `uv run black .`                                |
 | Install git hooks       | `uv run pre-commit install --install-hooks`     |
@@ -108,6 +109,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 - Queue names, activity names and activity inputs live in `fact.core.activity_contract`; `fact.sdk` calls activities by name and never imports `fact.worker`.
 - Workflow handler names for people (`answer_gate` update, `status` query, `steer` signal) and their models live in `fact.core.gates`; clients call them by name and never import `fact.sdk`. A subclass of `FactWorkflow` that defines `__init__` must call `super().__init__()`.
 - Agent sessions run through `FactWorkflow.agent`, defined in the `fact.sdk.agents.AgentSteps` mixin (resume rules in `fact.sdk.sessions`). A step the Claude usage limit refused ends `rate_limited`; `agent` marks the run `waiting` (`record_run_waiting` control activity, `WorkflowStatus.waiting`), sleeps on a durable timer until the step's `resume_at` and resumes the same session, up to `MAX_LIMIT_PAUSES` (20) times, counted apart from `MAX_RESUMES`, then the step ends `needs_human`. Project workflows never see `rate_limited`.
+- A published API never changes: `api/openapi.json` is the committed OpenAPI snapshot and `api/tests/test_openapi_compat.py` (`fact.api.openapi_compat`) fails on any removed or changed path, method, parameter, field or type, and on any addition until the snapshot is regenerated. Break compatibility only when the task asks for it.
 - Every agent step reports the usage windows it saw to `PUT /api/v1/usage/claude` (table `usage_windows`); `GET /api/v1/usage` lists them.
 - Stopping a run (`fact stop`) cancels its workflow; `FactWorkflow.execute` turns the cancellation into outcome `stopped` (`fact.sdk.stop.StopSteps`), so project workflows need no stop handling of their own.
 - `python -m fact.worker` loads each project's `.fact/workflows/` from a detached checkout of its default branch at `pinned_dir/projects/<project>/<sha>` and runs them on queue and deployment `wf-<project>` (`workflow_queue`), pinned to build id `<factory SHA[:12]>+<home SHA>`; workflow changes apply at the next worker restart (see `worker/README.md`).
