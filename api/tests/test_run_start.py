@@ -11,6 +11,7 @@ from fact.api.app import create_app
 from fact.api.run_start import FoundTask, next_run_number, run_input, safe_key, workflow_id
 from fact.api.task_ref import TaskCheck
 from fact.core.activity_contract import workflow_queue
+from fact.core.artifacts import handoff_key
 from fact.core.project_config import ProjectConfig
 from fact.core.settings import CONFIG_VAR, ProjectRef, Settings, reset_settings
 from fact.core.types import RunInput, Task
@@ -202,10 +203,12 @@ class _FailingClient:
     def __init__(self, *errors: Exception) -> None:
         self.errors = list(errors)
         self.ids: list[str] = []
+        self.inputs: list[RunInput] = []
 
-    async def start_workflow(self, _type: str, _arg: object, *, id: str, task_queue: str) -> None:  # noqa: A002
+    async def start_workflow(self, _type: str, arg: RunInput, *, id: str, task_queue: str) -> None:  # noqa: A002
         assert task_queue == workflow_queue(PROJECT)
         self.ids.append(id)
+        self.inputs.append(arg)
         if self.errors:
             raise self.errors.pop(0)
 
@@ -225,6 +228,21 @@ async def test_id_taken_in_temporal_moves_to_the_next(app: FastAPI, client: Asyn
     assert response.status_code == HTTPStatus.CREATED, response.text
     assert fake.ids == ["run-task-M1-02-1", "run-task-M1-02-2"]
     assert response.json()["workflow_id"] == "run-task-M1-02-2"
+
+
+async def test_restart_after_a_drop_gets_the_handoff_note(app: FastAPI, client: AsyncClient) -> None:
+    fake = _FailingClient()
+    app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
+    first = (await _start(client, task_key="task:M1-02")).json()
+    assert fake.inputs[0].handoff_ref is None
+    update = {"status": "finished", "outcome": "dropped", "started_at": "2026-11-01T00:00:00Z"}
+    await client.patch(f"/api/v1/runs/{first['run_id']}", json=update)
+    app.state.artifacts.put_bytes(handoff_key(first["run_id"]), b"## Handoff\n")
+
+    again = await _start(client, task_key="task:M1-02")
+    assert again.status_code == HTTPStatus.CREATED, again.text
+    assert fake.inputs[1].handoff_ref == handoff_key(first["run_id"])
+    assert fake.inputs[1].repos[0].branch == fake.inputs[0].repos[0].branch  # the same branch, so the same PR
 
 
 async def test_temporal_down_is_503(client: AsyncClient) -> None:

@@ -31,6 +31,7 @@ RECORD_RUN_FINISHED = "record_run_finished"
 RECORD_GATE_OPENED = "record_gate_opened"
 RECORD_GATE_ANSWERED = "record_gate_answered"
 NOTIFY = "notify"
+WRITE_HANDOFF = "write_handoff"
 
 Check = Literal["lint", "test", "build", "setup"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
@@ -62,6 +63,7 @@ class AgentStepInput(_Input):
     override: RouteOverride | None = None
     home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
     resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
+    handoff_ref: str | None = None  # artifact key of a dropped run's handoff note, `$handoff` in the prompt
 
 
 class ShellStepInput(_Input):
@@ -180,3 +182,24 @@ class NotifyInput(_Input):
     body: str = ""
     link: str | None = None
     dedupe_key: str = Field(max_length=300)  # such as `<run id>:gate:<gate id>`: one per run state
+
+
+class HandoffStep(_Input):
+    """One agent step of a dropped run, for its handoff note."""
+
+    stage_id: str
+    attempt: int
+    outcome: StepOutcome
+    summary: str = ""
+
+
+class HandoffInput(_Input):
+    """What a dropped run leaves for the next run of its task: written to the artifact store as `handoff_key`."""
+
+    run_id: str
+    task: Task
+    reason: str = ""  # why the run was dropped, from the cancellation
+    stage_id: str | None = None  # the last stage reached
+    attempt: int | None = None
+    steps: list[HandoffStep] = Field(default_factory=list)  # agent steps, in order
+    prs: list[PRRef] = Field(default_factory=list)  # left open, for the next run to reuse

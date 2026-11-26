@@ -6,6 +6,7 @@ run the factory's activities by name (see `fact.core.activity_contract`), so thi
 Workflow code is replayed: it must do no I/O and read no clock; the helpers only schedule activities.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
 from datetime import timedelta
@@ -37,7 +38,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
-    from fact.sdk.change_set import default_title, text_output
+    from fact.sdk.drop import DropSteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, NO_RETRY
@@ -47,12 +48,13 @@ with workflow.unsafe.imports_passed_through():
 
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
+WAIT_CANCELLED = workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
 # the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(PullRequestSteps, HumanSteps):
-    """Base class for project workflows: run bookkeeping and step helpers; PR and CI steps, gates in the mixins."""
+class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps):
+    """Base class for project workflows: bookkeeping and step helpers; PRs and CI, gates, dropping in the mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -91,7 +93,8 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
         Record the run as started, run `body`, and record how it finished: `failed` if it raised a Temporal failure.
 
         The start carries the worker deployment version (build id `<factory SHA>+<home SHA>`) the run is pinned to.
-        A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person.
+        A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person. A dropped
+        (cancelled) run ends through `drop`.
 
         Any other exception is a bug in workflow code: it fails the workflow task, which Temporal retries once the
         code is fixed, so the run is not recorded as finished.
@@ -99,14 +102,20 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
         self._input = run_input
         version = workflow.info().get_current_deployment_version()  # from the workflow task: replay-safe
         started = RunStartedInput(run_id=run_input.run_id, worker_version=version.build_id if version else None)
-        await self._record(RECORD_RUN_STARTED, started)
         try:
+            await self._record(RECORD_RUN_STARTED, started)
             result = await body()
-        except FailureError:
-            await self._record(
-                RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=RunOutcome.FAILED)
-            )
+        except (FailureError, asyncio.CancelledError) as exc:  # a cancelled activity may raise either
+            if self.drop_requested():
+                return await self.drop()
+            if isinstance(exc, FailureError):
+                await self._record(
+                    RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=RunOutcome.FAILED)
+                )
             raise
+        if self.drop_requested() and result.outcome not in PUSHED_OUTCOMES:
+            return await self.drop()  # dropped as it ended: free the branch for the restart
+        self._dropping = True  # the work is over (pushed): a late drop must not stop its bookkeeping
         await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=result.outcome))
         if result.outcome in PUSHED_OUTCOMES:
             await self._teardown()
@@ -114,6 +123,7 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
 
     def next_attempt(self, stage_id: str) -> int:
         """Return the next attempt number of `stage_id` (1, 2, ...): a run's steps are unique by stage and attempt."""
+        self.stop_if_dropped()
         self._attempts[stage_id] = self._attempts.get(stage_id, 0) + 1
         self.note_stage(stage_id, self._attempts[stage_id])
         return self._attempts[stage_id]
@@ -179,6 +189,7 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
             complexity=run.complexity,
             home_repo=run.home_repo,
             resume_session_id=resume,
+            handoff_ref=run.handoff_ref,
         )
         result = await workflow.execute_activity(
             AGENT_STEP,
@@ -188,8 +199,10 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
             start_to_close_timeout=timedelta(seconds=run.limits.agent_timeout_s),
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=NO_RETRY,
+            cancellation_type=WAIT_CANCELLED,  # a drop tears the workspace down only once the session stopped
         )
         self.note_outcome(stage_id, spec.attempt, result.outcome)
+        self.note_agent_step(stage_id, spec.attempt, result)
         return result
 
     async def until_green(
@@ -223,11 +236,6 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
         spec = MarkTaskDoneInput(run_id=run.run_id, task=run.task, handle=self.handle, home_repo=run.home_repo)
         return await self._control(MARK_TASK_DONE, spec, bool)
 
-    def pr_text(self, fallback_summary: str = "") -> tuple[str, str]:
-        """PR title and summary: what an agent wrote to its outputs, else a conventional title from the task."""
-        task = self.input.task
-        return self.pr_title or default_title(task), self.pr_summary or fallback_summary or task.title
-
     async def _run_checks(self, checks: Sequence[Check], stage_id: str) -> list[tuple[CheckResult, StepResult]]:
         results: list[tuple[CheckResult, StepResult]] = []
         repos = list(self.handle.repos)
@@ -258,11 +266,13 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
             start_to_close_timeout=timedelta(seconds=run.limits.shell_timeout_s + 60),
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=INFRA_RETRY,
+            cancellation_type=WAIT_CANCELLED,
         )
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result
 
     async def _control[T](self, name: str, arg: object, result_type: type[T]) -> T:
+        self.stop_if_dropped()
         return await workflow.execute_activity(
             name,
             arg,
@@ -287,7 +297,3 @@ class FactWorkflow(PullRequestSteps, HumanSteps):
             await self._control(name, arg, type(None))
         except ActivityError as exc:
             workflow.logger.warning("%s failed for run %s: %s", name, arg.run_id, exc.cause or exc)
-
-    def _remember_pr_text(self, result: StepResult) -> None:
-        self.pr_title = text_output(result, "title") or self.pr_title
-        self.pr_summary = text_output(result, "summary") or self.pr_summary

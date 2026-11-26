@@ -20,6 +20,7 @@ from fact.worker.activities.ci import CIActivities
 from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.gates import GateActivities
+from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.activities.notify import NotifyActivities
 from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.shell import ShellActivities
@@ -96,6 +97,7 @@ def _activity_workers(
     control_steps = ControlActivities(settings.api_url, http)
     gates = GateActivities(settings.api_url, http)
     notify = NotifyActivities(settings.api_url, http)
+    handoff = HandoffActivities(settings.api_url, http)
     cost = CostCommentActivities(github, settings.api_url, http)
     ci = CIActivities(github, reporter)
     pr_state = PRStateActivities(github)
@@ -117,6 +119,7 @@ def _activity_workers(
             gates.record_gate_opened,
             gates.record_gate_answered,
             notify.notify,
+            handoff.write_handoff,
         ],
     )
     sandbox = Worker(

@@ -1,5 +1,7 @@
 """
-The person in the loop, through Temporal: answer a gate (update), steer a run (signal), read its live status (query).
+The person in the loop, through Temporal: answer a gate, steer a run, read its live status, drop a run.
+
+A gate is answered by an update, steering is a signal, the status a query, and a drop cancels the workflow.
 
 Handlers are called by name from `fact.core.gates`; the API never imports `fact.sdk`.
 """
@@ -9,6 +11,7 @@ from typing import Annotated
 
 from fact.api.deps import get_session
 from fact.api.temporal import temporal_client
+from fact.core.enums import RunStatus
 from fact.core.gates import (
     ANSWER_GATE,
     NOTE_MAX_CHARS,
@@ -45,6 +48,10 @@ class GateAnswerIn(BaseModel):
 
 class InstructionIn(BaseModel):
     text: str = Field(min_length=1, max_length=STEER_MAX_CHARS)
+
+
+class DropIn(BaseModel):
+    reason: str = Field(default="", max_length=NOTE_MAX_CHARS)
 
 
 class Touched(BaseModel):
@@ -118,3 +125,22 @@ async def live_status(run_id: str, request: Request, session: Session) -> Workfl
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Status query failed for {run.workflow_id}: {exc}") from exc
     except RPCError as exc:
         raise _rpc_error(run, exc) from exc
+
+
+@router.post("/runs/{run_id}/drop", status_code=status.HTTP_202_ACCEPTED)
+async def drop(run_id: str, body: DropIn, request: Request, session: Session) -> Touched:
+    """
+    Cancel the run's workflow with a reason; it ends `dropped`, leaving a handoff note, its branch and its PRs.
+
+    Accepted, not done: the run's own worker version handles the cancellation, and the run shows `dropped` once its
+    note is written and its workspace is gone. Start the task again then.
+    """
+    run, handle = await _handle(request, session, run_id)
+    if run.status == RunStatus.FINISHED:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"Run {run.workflow_id} already ended {run.outcome}")
+    try:
+        await handle.cancel(reason=body.reason)
+    except RPCError as exc:
+        raise _rpc_error(run, exc) from exc
+    log.info("run_dropped", run_id=run.id, reason=body.reason)
+    return await _touch(session, run)

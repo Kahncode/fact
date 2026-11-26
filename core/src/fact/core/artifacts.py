@@ -37,6 +37,13 @@ def step_key(run_id: str, stage_id: str, attempt: int, name: str) -> str:
     return key
 
 
+def handoff_key(run_id: str) -> str:
+    """Key `runs/<run>/handoff.md` of the note a dropped run leaves for the next run of its task."""
+    key = f"runs/{run_id}/handoff.md"
+    validate_key(key)
+    return key
+
+
 def validate_key(key: str) -> str:
     """Return the key if it is a safe relative POSIX-style path, else raise `InvalidArtifactKeyError`."""
     if not key or "\x00" in key:

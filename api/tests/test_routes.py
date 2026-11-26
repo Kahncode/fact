@@ -40,6 +40,10 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
         "test_human.test_gate_steer_and_status",
         "test_human.test_unknown_run_and_bad_bodies",
     ],
+    ("/api/v1/runs/{run_id}/drop", "POST"): [
+        "test_drop.test_drop_cancels_the_workflow_with_the_reason",
+        "test_drop.test_drop_refuses_a_finished_or_unknown_run",
+    ],
     ("/api/v1/artifacts/{key:path}", "PUT"): ["test_artifacts.test_upload_download"],
     ("/api/v1/artifacts/{key:path}", "GET"): ["test_artifacts.test_upload_download"],
     ("/api/v1/notifications", "POST"): [

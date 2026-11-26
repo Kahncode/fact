@@ -5,7 +5,8 @@ A gate waits on workflow state only, with no timer and no activity, so it costs 
 and survives worker restarts. Its step (kind `gate`) is recorded through control activities, best effort: an API
 outage must not lose a person's answer. Opening a gate also creates a `gate_waiting` notification, once per gate.
 
-`HumanSteps` uses the workflow's `input`, `next_attempt` and `_control`; `FactWorkflow` calls its `__init__`.
+`HumanSteps` uses the workflow's `input`, `next_attempt` and `_control`; `FactWorkflow` calls its `__init__`, which
+calls the next mixin's.
 """
 
 from collections.abc import Sequence
@@ -48,6 +49,7 @@ BAD_ENDS = frozenset({RunOutcome.FAILED, RunOutcome.NEEDS_HUMAN})
 
 class HumanSteps:
     def __init__(self) -> None:
+        super().__init__()
         self._open_gates: dict[str, OpenGate] = {}
         self._answers: dict[str, GateAnswer] = {}  # gates answered, by id; a closed gate never opens again
         self._steering: list[str] = []

@@ -7,6 +7,8 @@ from urllib.parse import quote
 
 from fact.api.projects import local_path
 from fact.api.task_ref import TaskCheck, TaskReadError, fetch, read_task
+from fact.core.artifacts import ArtifactStore, handoff_key
+from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
 from fact.core.models import Run
 from fact.core.project_config import ConfigError, ProjectConfig, load_project_config
@@ -52,6 +54,28 @@ async def next_run_number(session: AsyncSession, task_key: str) -> int:
     ids = await session.scalars(select(Run.workflow_id).where(Run.workflow_id.startswith(prefix, autoescape=True)))
     used = [int(rest) for wid in ids if (rest := wid.removeprefix(prefix)).isdigit()]
     return max(used, default=0) + 1
+
+
+async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id: int, task_key: str) -> str | None:
+    """
+    Key of the newest handoff note left by the task's last runs, if they were dropped; else None.
+
+    Runs that never started (a failed start) are skipped; the first other run back that was not dropped ends the
+    search, so a merged or failed run in between means the note is stale. A dropped run with no note (its plan was
+    rejected, or writing the note failed) is passed over for the older dropped run's note.
+    """
+    query = (
+        select(Run.id, Run.outcome)
+        .where(Run.project_id == project_id, Run.task_key == task_key, Run.status == RunStatus.FINISHED)
+        .where(Run.started_at.is_not(None))
+        .order_by(Run.created_at.desc(), Run.id.desc())
+    )
+    for run_id, outcome in (await session.execute(query)).all():
+        if outcome != RunOutcome.DROPPED:
+            return None
+        if store.exists(key := handoff_key(run_id)):
+            return key
+    return None
 
 
 def temporal_link(settings: Settings, wf_id: str) -> str:
@@ -121,7 +145,9 @@ async def find_task(settings: Settings, task_key: str, project: str | None) -> F
     return found[0]
 
 
-def run_input(settings: Settings, found: FoundTask, run_id: str, run_url: str = "") -> RunInput:
+def run_input(
+    settings: Settings, found: FoundTask, run_id: str, run_url: str = "", handoff_ref: str | None = None
+) -> RunInput:
     task = found.check.task
     repos = [
         RepoCheckout(full_name=r.full_name, default_branch=r.default_branch, branch=branch_name(task.key), role=r.role)
@@ -144,6 +170,7 @@ def run_input(settings: Settings, found: FoundTask, run_id: str, run_url: str = 
         limits=limits,
         run_url=run_url,
         require_plan_approval=found.config.require_plan_approval if approval is None else approval,
+        handoff_ref=handoff_ref,
     )
 
 

@@ -137,7 +137,7 @@ class AgentActivities:
 
     async def _run(self, spec: AgentStepInput, route: Route, step: StepContext, progress: _Progress) -> None:
         harness = self._harness(route.harness)
-        prompt, schema = self._prompt(spec)
+        prompt, schema = self._prompt(spec, await self._handoff(spec, step))
         root = Path(spec.handle.root)
         transcript = step.log_path.with_name(TRANSCRIPT_NAME)
         transcript.unlink(missing_ok=True)
@@ -184,8 +184,16 @@ class AgentActivities:
             raise ApplicationError(msg, non_retryable=True)
         return harness
 
+    async def _handoff(self, spec: AgentStepInput, step: StepContext) -> str:
+        """Return the handoff note of a dropped run of this task for `$handoff`; "" if there is none or it is unreadable."""
+        if not spec.handoff_ref:
+            return ""
+        note = await self._reporter.download_text(spec.handoff_ref)
+        step.log(f"handoff note {spec.handoff_ref}: {'unavailable, left out' if note is None else 'in $handoff'}")
+        return note or ""
+
     @staticmethod
-    def _prompt(spec: AgentStepInput) -> tuple[str, dict[str, Any]]:
+    def _prompt(spec: AgentStepInput, handoff: str = "") -> tuple[str, dict[str, Any]]:
         """Return the rendered prompt and the output schema, both from the home repository's `.fact/prompts/`."""
         repos = spec.handle.repos
         name = spec.home_repo or next(iter(repos), None)
@@ -198,7 +206,9 @@ class AgentActivities:
             if spec.resume_session_id:
                 prompt = render_resume(spec.context)
             else:
-                prompt = render_prompt(repo, spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id)
+                prompt = render_prompt(
+                    repo, spec.prompt_name, spec.task, spec.context, spec.handle.root, spec.stage_id, handoff
+                )
         except PromptError as exc:
             raise _non_retryable(exc) from exc
         return prompt, schema

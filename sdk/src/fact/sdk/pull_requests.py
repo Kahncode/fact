@@ -3,7 +3,7 @@ The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait fo
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
 `next_attempt`, `note_outcome`, `agent`, `_control`, `_record`, the gate recording helpers of `HumanSteps`, and the
-`prs` and `_change_set` its `__init__` sets.
+`pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
 """
 
 from collections.abc import Sequence
@@ -32,7 +32,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.gates import NOTE_MAX_CHARS, GateAnswer, GateDecision, OpenGate
     from fact.core.types import PRRef, StepResult
-    from fact.sdk.change_set import change_set_input
+    from fact.sdk.change_set import change_set_input, default_title, text_output
     from fact.sdk.failures import ci_failure_context
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, LONG_WAIT_RETRY
 
@@ -49,8 +49,19 @@ REVIEW_TIMEOUT = timedelta(days=30)  # a PR still open after this long fails the
 
 
 class PullRequestSteps:
+    pr_title: str | None  # from the last agent session whose structured answer had a `title`
+    pr_summary: str | None  # likewise, `summary`
     prs: list[PRRef]  # from the last push, with the head SHA it pushed
     _change_set: OpenChangeSetInput | None  # the last `open_change_set` input, to push again after a CI fix
+
+    def pr_text(self: FactWorkflow, fallback_summary: str = "") -> tuple[str, str]:
+        """PR title and summary: what an agent wrote to its outputs, else a conventional title from the task."""
+        task = self.input.task
+        return self.pr_title or default_title(task), self.pr_summary or fallback_summary or task.title
+
+    def _remember_pr_text(self, result: StepResult) -> None:
+        self.pr_title = text_output(result, "title") or self.pr_title
+        self.pr_summary = text_output(result, "summary") or self.pr_summary
 
     async def open_change_set(
         self: FactWorkflow, title: str, summary: str, criteria: Sequence[CriterionResult] = ()

@@ -46,7 +46,7 @@ def prompt_path(repo_root: Path, name: str) -> Path:
     return repo_root / PROMPTS_DIR / f"{name}.md"
 
 
-def variables(task: Task, context: str, workspace: str, stage_id: str = "") -> dict[str, str]:
+def variables(task: Task, context: str, workspace: str, stage_id: str = "", handoff: str = "") -> dict[str, str]:
     criteria = "\n".join(f"- {c}" for c in task.acceptance_criteria)
     return {
         "task_id": task.id,
@@ -56,6 +56,7 @@ def variables(task: Task, context: str, workspace: str, stage_id: str = "") -> d
         "context": context,
         "workspace": workspace,
         "stage_id": stage_id,
+        "handoff": handoff,
     }
 
 
@@ -72,7 +73,7 @@ def render(template: str, values: dict[str, str]) -> str:
 
 
 def render_prompt(  # noqa: PLR0913, PLR0917
-    repo_root: Path, name: str, task: Task, context: str, workspace: str, stage_id: str = ""
+    repo_root: Path, name: str, task: Task, context: str, workspace: str, stage_id: str = "", handoff: str = ""
 ) -> str:
     path = prompt_path(repo_root, name)
     try:
@@ -83,7 +84,7 @@ def render_prompt(  # noqa: PLR0913, PLR0917
     except (OSError, UnicodeDecodeError) as exc:
         msg = f"cannot read prompt {name!r} at {path}: {exc}"
         raise PromptError(msg) from exc
-    return render(template, variables(task, context, workspace, stage_id))
+    return render(template, variables(task, context, workspace, stage_id, handoff))
 
 
 def output_schema(repo_root: Path, name: str) -> dict[str, Any]:

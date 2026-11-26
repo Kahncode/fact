@@ -5,7 +5,9 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from types import ModuleType
+from typing import Any
 
 from fact.core.activity_contract import (
     AGENT_STEP,
@@ -24,9 +26,11 @@ from fact.core.activity_contract import (
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
     WAIT_FOR_PR_CLOSED,
+    WRITE_HANDOFF,
     AgentStepInput,
     GateAnsweredInput,
     GateOpenedInput,
+    HandoffInput,
     MarkTaskDoneInput,
     NotifyInput,
     OpenChangeSetInput,
@@ -56,6 +60,8 @@ from temporalio.worker import Worker
 WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
 WORKFLOW_QUEUE = "wf-test"
 IDENTITY = "test-worker"  # a fixed worker identity instead of the host name
+# Heartbeats reach the server at once, so an activity sees its cancellation without the 60 s default throttle
+OPTIONS: dict[str, Any] = {"identity": IDENTITY, "max_heartbeat_throttle_interval": timedelta(milliseconds=50)}
 
 
 def load_standard() -> ModuleType:
@@ -128,14 +134,18 @@ class FakeActivities:
         self._call(NOTIFY, spec)
         return len(self.of(NOTIFY))
 
+    @activity.defn(name=WRITE_HANDOFF)
+    async def write_handoff(self, spec: HandoffInput) -> str:
+        self._call(WRITE_HANDOFF, spec)
+        return f"runs/{spec.run_id}/handoff.md"
+
     @activity.defn(name=PREPARE_WORKSPACE)
     async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
         self._call(PREPARE_WORKSPACE, spec)
         root = f"/ws/{spec.run_id}"
         repos = {r.full_name: f"{root}/widget" for r in spec.repos}
-        return WorkspaceHandle(
-            run_id=spec.run_id, root=root, repos=repos, branches=dict.fromkeys(repos, self.checked_out)
-        )
+        branches = dict.fromkeys(repos, self.checked_out)
+        return WorkspaceHandle(run_id=spec.run_id, root=root, repos=repos, branches=branches)
 
     @activity.defn(name=TEARDOWN_WORKSPACE)
     async def teardown_workspace(self, handle: WorkspaceHandle) -> None:
@@ -196,9 +206,8 @@ class FakeActivities:
     async def wait_for_ci(self, spec: WaitForCIInput) -> StepResult:
         self._call(WAIT_FOR_CI, spec)
         if self.ci_timed_out:
-            return StepResult(
-                outcome=StepOutcome.FAILED_CHECKS, summary="CI still running", outputs={"timed_out": True}
-            )
+            outputs = {"timed_out": True}
+            return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="CI still running", outputs=outputs)
         if self.ci_failures > 0:
             self.ci_failures -= 1
             failure = {"name": "test (windows)", "conclusion": "failure", "url": "https://ci/1", "log_tail": "E boom"}
@@ -233,21 +242,16 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.record_gate_opened,
         fakes.record_gate_answered,
         fakes.notify,
+        fakes.write_handoff,
     ]
     async with AsyncExitStack() as stack:
-        await stack.enter_async_context(
-            Worker(
-                client,
-                identity=IDENTITY,
-                task_queue=WORKFLOW_QUEUE,
-                workflows=[workflow_cls],
-                workflow_runner=sandbox_runner(),
-            )
+        workflows = Worker(
+            client, task_queue=WORKFLOW_QUEUE, workflows=[workflow_cls], workflow_runner=sandbox_runner(), **OPTIONS
         )
-        await stack.enter_async_context(Worker(client, identity=IDENTITY, task_queue=CONTROL_QUEUE, activities=control))
-        await stack.enter_async_context(
-            Worker(client, identity=IDENTITY, task_queue=SANDBOX_QUEUE, activities=[fakes.agent_step, fakes.shell_step])
-        )
+        await stack.enter_async_context(workflows)
+        await stack.enter_async_context(Worker(client, task_queue=CONTROL_QUEUE, activities=control, **OPTIONS))
+        sandbox = [fakes.agent_step, fakes.shell_step]
+        await stack.enter_async_context(Worker(client, task_queue=SANDBOX_QUEUE, activities=sandbox, **OPTIONS))
         yield
 
 

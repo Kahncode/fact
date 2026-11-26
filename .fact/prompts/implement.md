@@ -14,6 +14,8 @@ $acceptance_criteria
 
 $context
 
+$handoff
+
 ## How to work
 
 1. Read `WORKSPACE.md`, then the instructions of each repository you touch (`AGENTS.md` or `CLAUDE.md`).

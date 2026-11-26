@@ -132,6 +132,7 @@ class RunInput(_Model):
     limits: RunLimits = Field(default_factory=RunLimits)
     run_url: str = ""  # where a person follows the run (the Temporal UI for now), linked from the PR
     require_plan_approval: bool = False  # open an `approve_plan` gate before any work (task, else project setting)
+    handoff_ref: str | None = None  # artifact key of the handoff note a dropped run of this task left, if any
 
 
 class RunResult(_Model):

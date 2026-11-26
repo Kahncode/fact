@@ -225,6 +225,11 @@ class StepReporter:
     async def post_events(self, run_id: str, events: list[dict[str, Any]]) -> bool:
         return await self._send("post events", "POST", f"/runs/{run_id}/events", json=events) is not None
 
+    async def download_text(self, key: str) -> str | None:
+        """Read a UTF-8 artifact; None (after one retry) if the API refused or was unreachable."""
+        response = await self._send("download artifact", "GET", f"/artifacts/{key}")
+        return response.content.decode("utf-8", errors="replace") if response is not None else None
+
     async def upload(self, key: str, path: Path) -> bool:
         """Upload a file; False (after one retry) if the API refused or was unreachable. The file stays on disk."""
         response = await self._send("upload artifact", "PUT", f"/artifacts/{key}", content=lambda: _file_chunks(path))

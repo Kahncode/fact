@@ -2,11 +2,12 @@
 
 from typing import Annotated
 
-from fact.api.deps import get_session
+from fact.api.deps import get_artifacts, get_session
 from fact.api.run_start import (
     FoundTask,
     StartError,
     find_task,
+    latest_handoff,
     next_run_number,
     run_input,
     temporal_link,
@@ -16,6 +17,7 @@ from fact.api.run_start import (
 from fact.api.task_ref import TaskReadError
 from fact.api.temporal import temporal_client
 from fact.core.activity_contract import workflow_queue
+from fact.core.artifacts import LocalArtifactStore
 from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
 from fact.core.models import Project, Run, new_id
@@ -33,6 +35,7 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 Session = Annotated[AsyncSession, Depends(get_session)]
+Store = Annotated[LocalArtifactStore, Depends(get_artifacts)]
 RESERVE_ATTEMPTS = 3
 
 
@@ -105,17 +108,19 @@ async def _mark_start_failed(session: AsyncSession, run: Run) -> None:
 
 
 @router.post("/runs/start", status_code=status.HTTP_201_CREATED)
-async def start_run(body: RunStart, request: Request, session: Session) -> RunStarted:
+async def start_run(body: RunStart, request: Request, session: Session, store: Store) -> RunStarted:
+    """Start the task's workflow; after a dropped run, the new run gets its handoff note (`RunInput.handoff_ref`)."""
     settings: Settings = request.app.state.settings
     found = await _find(settings, body)
     client = await temporal_client(request)  # after the checks: a refusal needs no Temporal
     wf_type = workflow_type(found)
     for _ in range(RESERVE_ATTEMPTS):
         run = await _reserve(session, found, wf_type)
+        handoff = await latest_handoff(session, store, run.project_id, run.task_key)
         try:
             await client.start_workflow(
                 wf_type,
-                run_input(settings, found, run.id, temporal_link(settings, run.workflow_id)),
+                run_input(settings, found, run.id, temporal_link(settings, run.workflow_id), handoff),
                 id=run.workflow_id,
                 task_queue=workflow_queue(found.ref.name),
             )
@@ -130,7 +135,7 @@ async def start_run(body: RunStart, request: Request, session: Session) -> RunSt
         break
     else:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Workflow ids for {found.check.task.key} are taken in Temporal")
-    log.info("run_started", run_id=run.id, workflow_id=run.workflow_id, workflow_type=wf_type)
+    log.info("run_started", run_id=run.id, workflow_id=run.workflow_id, workflow_type=wf_type, handoff=handoff)
     return RunStarted(
         run_id=run.id,
         workflow_id=run.workflow_id,

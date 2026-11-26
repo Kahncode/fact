@@ -11,7 +11,9 @@ from fact.core.gates import ANSWER_GATE, STATUS, STEER, GateAnswer, OpenGate, Wo
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
 from fastapi import FastAPI
 from temporalio import workflow
+from temporalio.client import WorkflowFailureError
 from temporalio.contrib.pydantic import pydantic_data_converter
+from temporalio.exceptions import CancelledError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -109,3 +111,29 @@ async def test_gate_moves_the_run_on_and_a_second_answer_is_refused(api: FastAPI
         assert "Gate:     none open" in (await fact("status", WF_ID)).output
 
         assert await handle.result() == ["approve", "ship it", "use the fixture"]
+
+
+async def test_drop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
+    async with (
+        await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env,
+        Worker(env.client, task_queue=QUEUE, workflows=[OneGate]),
+    ):
+        api.state.temporal = TemporalStub(env.client)
+        body = {"workflow_id": WF_ID, "project": "acme", "task_key": "task:M9-01", "workflow_type": "one_gate"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
+            assert (await client.post("/api/v1/runs", json=body)).status_code == httpx.codes.CREATED
+        handle = await env.client.start_workflow(OneGate.run, id=WF_ID, task_queue=QUEUE)
+
+        dropped = await fact("drop", WF_ID, "--reason", "newer workflow")
+        assert dropped.exit_code == 0, dropped.output
+        assert f"Dropping {WF_ID}" in dropped.output
+        with pytest.raises(WorkflowFailureError) as info:
+            await handle.result()
+        assert isinstance(info.value.cause, CancelledError)
+        history = await handle.fetch_history()
+        (requested,) = [e for e in history.events if e.HasField("workflow_execution_cancel_requested_event_attributes")]
+        assert requested.workflow_execution_cancel_requested_event_attributes.cause == "newer workflow"
+
+    unknown = await fact("drop", "run-nope-1")
+    assert unknown.exit_code == 1
+    assert "no run with workflow id run-nope-1" in unknown.output

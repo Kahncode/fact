@@ -243,3 +243,30 @@ async def test_rejected_pr_is_non_retryable(  # noqa: PLR0913, PLR0917
     with pytest.raises(ApplicationError, match="No commits") as info:
         await ActivityEnvironment().run(activities.open_change_set, _input(run_id, worktree))
     assert info.value.non_retryable
+
+
+async def test_restart_after_a_drop_reuses_the_branch_and_the_pr(  # noqa: PLR0913, PLR0917
+    settings: Settings,
+    remote: Path,
+    reporter: StepReporter,
+    run_id: str,
+    github: GitHubApp,
+    fake: FakeGitHub,
+    client: httpx.AsyncClient,
+) -> None:
+    activities = ChangeSetActivities(github, reporter, remote_url=lambda _n: remote.as_uri())
+    dropped = await _prepare(settings, remote, reporter, run_id, github=github)
+    _commit(dropped, "one.txt")
+    (pr,) = await ActivityEnvironment().run(activities.open_change_set, _input(run_id, dropped))
+    runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri())
+    await runner.teardown(WorkspaceHandle(run_id=run_id, root=str(dropped.parent), repos={FULL_NAME: str(dropped)}))
+
+    body = {"workflow_id": "wf-2", "project": "fact", "task_key": "task:M1-11", "workflow_type": "standard"}
+    restart = (await client.post("/api/v1/runs", json=body)).json()["id"]
+    worktree = await _prepare(settings, remote, reporter, restart, github=github)
+    assert _git("rev-parse", "--abbrev-ref", "HEAD", cwd=worktree) == BRANCH  # free again, not a suffixed branch
+    assert _git("rev-parse", "HEAD", cwd=worktree) == pr.head_sha  # starts from what the dropped run pushed
+    _commit(worktree, "two.txt")
+    (again,) = await ActivityEnvironment().run(activities.open_change_set, _input(restart, worktree))
+    assert (again.number, again.url) == (pr.number, pr.url)
+    assert sum(1 for m, p, _ in fake.requests if m == "POST" and p.endswith("/pulls")) == 1
