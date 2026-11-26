@@ -6,14 +6,14 @@ How the engineering skills consume fact's domain documentation. fact is single-c
 
 - **Glossary**: `docs/spec/05-domain-model.md` (the **Terms** paragraph and the entity table). Label and task-source terms are in `docs/spec/12-integrations.md`.
 - **Design decisions** (the ADR log for design): `docs/spec/16-decisions.md`.
-- **Implementation decisions**: `docs/decisions.md`, append-only, one `### [YYYY-MM-DD HH:MM] Title` entry with **What:** and **Why:**.
+- **Implementation decisions**: `docs/decisions.md` (full, read-only) continued in `docs/decisions-2.md`, append-only, one `### [YYYY-MM-DD HH:MM] Title` entry with **What:** and **Why:**.
 - **Spec index**: `docs/spec/README.md`; read only the sections your work touches.
 
 ## Writing
 
 - A new or sharpened domain term goes into `docs/spec/05-domain-model.md` (the Terms paragraph or the entity table).
 - A design decision goes into `docs/spec/16-decisions.md` (the Decided table or the "Also decided" list; move items out of "Still open" once resolved).
-- An implementation decision is appended to `docs/decisions.md` in its existing format. Never edit or reorder past entries.
+- An implementation decision is appended to `docs/decisions-2.md` in its existing format (when it reaches 300 lines, start `docs/decisions-3.md`). Never edit or reorder past entries.
 
 ## Use the glossary's vocabulary
 
@@ -21,6 +21,6 @@ When your output names a domain concept (task title, refactor proposal, test nam
 
 ## Flag decision conflicts
 
-If your output contradicts an entry in `16-decisions.md` or `docs/decisions.md`, say so explicitly rather than silently overriding:
+If your output contradicts an entry in `16-decisions.md` or the `docs/decisions*.md` files, say so explicitly rather than silently overriding:
 
 > _Contradicts "Auto-merge: none in v0" (16-decisions.md), but worth reopening because…_

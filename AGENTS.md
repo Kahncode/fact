@@ -141,15 +141,15 @@ fact works on its own tasks, so the running factory is never the code an agent e
 
 ### Issue tracker
 
-Tickets are task files in `tasks/<milestone>/` (GitHub Issues after M2). See `docs/agents/issue-tracker.md`.
+Tickets are GitHub issues on `Kahncode/fact`, specced in the issue body, created with `fact:planned`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-The five triage roles map onto task `status`/`human_actions` today and `fact:*` labels after M2. See `docs/agents/triage-labels.md`.
+The five triage roles map onto fact's own labels (`fact:planned`, `fact:ready`), assignment and close reasons. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context, with `docs/spec/05-domain-model.md` as the glossary and the two decisions files as the ADR log. See `docs/agents/domain.md`.
+Single-context, with `docs/spec/05-domain-model.md` as the glossary and the decisions files as the ADR log. See `docs/agents/domain.md`.
 
 ---
 

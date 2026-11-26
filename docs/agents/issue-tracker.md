@@ -1,39 +1,51 @@
-# Issue tracker: task files in `tasks/`
+# Issue tracker: GitHub Issues on `Kahncode/fact`
 
-Until fact reads GitHub Issues (M2-12 moves the remaining files to issues), every ticket is a markdown task file. `tasks/README.md` is the authority on the format, fields and how to split work; read it before writing a ticket.
+fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.yaml` has `task_source: {kind: github}`). The factory's scheduler starts open issues labelled `fact:ready`, so the body and labels you write are what a run reads. Use the `gh` CLI for every operation; it infers the repo from `git remote -v`.
 
-## Conventions
+## Writing an issue (a ticket)
 
-- **One ticket = one task file**: `tasks/<milestone>/<NN>-<slug>.md`, with YAML front matter (`id`, `title`, `type`, `complexity`, `status`, `depends_on`, `human_actions`) and the sections `Goal`, `Read first`, `Do`, `Out of scope`, `Acceptance criteria`.
-- **Ids** are `<milestone>-<NN>`, unique and never reused. Finished task files are deleted, so check `git log --name-only -- tasks/` before taking a number.
-- **New tickets are `status: planned`.** Only the person moves a task to `ready`.
-- **Blocking** is `depends_on: [<id>, ...]`. A missing file counts as done under the rules in `tasks/README.md`.
-- **Specs**: design lives in `docs/spec/` (one file per section). A small ticket's spec is its own task file; a larger plan updates the relevant spec section and splits into task files.
-- **Ideas not yet planned** go in `tasks/backlog.md` as a `##` section.
-- **Comments / conversation**: there is no comment thread. Record open questions in the task body under `## Open questions` and resolve them by editing the task.
-- **Done**: the task file is deleted (`git rm`) in the commit that finishes it; never set `status: done` by hand.
-- CI validates the folder (`uv run pytest` runs the task validator), so keep front matter valid.
-- The project's own `plan-tasks` skill plans in this format; prefer it, or follow it, when breaking work into tasks.
+- **The spec lives in the issue body**, as the latest plan (`docs/spec/16-decisions.md`, "Where specs live"). Keep it current by editing the body, not by adding comments.
+- **Body sections**, in this order: `## Goal`, `## Read first` (exact files and spec sections), `## Do`, `## Out of scope`, `## Acceptance criteria`. The factory reads the acceptance criteria from the `- [ ]` checklist under the `Acceptance criteria` heading, so every item must be checkable.
+- **Labels**: `fact:planned`, one `type:*` (`feature`, `bug`, `chore`, `incident`) and one `complexity:*` (`trivial`, `standard`, `complex`). See `docs/agents/triage-labels.md`.
+- **Never add `fact:ready`**: approving the issue is the person's decision. Never add `fact:running` or `fact:needs-human`; the factory sets them.
+- **Never edit the text between `<!-- fact:context:start -->` and `<!-- fact:context:end -->`**: the factory owns that section.
+- **Splitting work**: one concern per issue, small enough for one run and one PR (see "How to split work" in `tasks/README.md`). Bigger work becomes a parent issue with sub-issues.
+- **Dependencies**: GitHub blocked-by links. If you can't add them, write a `Depends on #3, #4` line in the body. An issue runs only once everything it depends on is closed as completed.
+
+## Commands
+
+- **Create**: `gh issue create --title "..." --body-file <file> --label fact:planned --label type:feature --label complexity:standard`. Write the body to a file in the scratchpad and pass it with `--body-file`.
+- **Read**: `gh issue view <n> --json number,title,body,labels,comments,state,stateReason`.
+- **List**: `gh issue list --state open --label <label> --json number,title,labels`.
+- **Sub-issue**: `gh issue create --parent <parent> ...`, or `gh issue edit <parent> --add-sub-issue <child>`.
+- **Blocked-by**: `gh api --method POST repos/Kahncode/fact/issues/<n>/dependencies/blocked_by -F issue_id=<blocker database id>`. Get the database id with `gh api repos/Kahncode/fact/issues/<blocker> --jq .id` (not the `#number`).
+- **Comment**: `gh issue comment <n> --body-file <file>`.
+- **Labels**: `gh issue edit <n> --add-label ... --remove-label ...`.
+- **Close**: `gh issue close <n> --reason "not planned" --comment "..."`. Close as completed only for work that is really done: the factory closes its own issues when their PRs merge, and a completed close satisfies dependencies.
+
+## Pull requests as a triage surface
+
+**PRs as a request surface: no.** PRs are opened by the factory (`fact[bot]`) or by you.
 
 ## When a skill says "publish to the issue tracker"
 
-Create a task file in the right `tasks/<milestone>/` folder with `status: planned`. Ask which milestone if it is unclear.
+Create a GitHub issue as described in **Writing an issue**.
 
 ## When a skill says "fetch the relevant ticket"
 
-Read the task file. The person usually gives the id (`M2-07`) or the path; glob `tasks/**/*.md` and match the `id` field.
+`gh issue view <n> --json number,title,body,labels,comments`. Run keys look like `gh:Kahncode/fact#12`; the number is the part after `#`.
+
+## Ideas not ready to plan
+
+Add them to `tasks/backlog.md` as a `##` section rather than opening an issue.
 
 ## Wayfinding operations
 
-Used by `/wayfinder`. Explorations are not tasks, so they live outside the milestone folders (the validator reads only those).
+Used by `/wayfinder`. The **map** is one issue and each **child** is a sub-issue. Wayfinding issues never get `fact:*` labels, so the scheduler never runs them. The `wayfinder:*` labels are the only ones you may create by hand (`gh label create wayfinder:map`, and so on), the first time you need them.
 
-- **Map**: `tasks/explore/<effort>/map.md` (Notes / Decisions-so-far / Fog).
-- **Child ticket**: `tasks/explore/<effort>/<NN>-<slug>.md`, with `Type:` (`research`/`prototype`/`grilling`/`task`) and `Status:` (`open`/`claimed`/`resolved`) lines at the top.
-- **Blocking**: a `Blocked by: NN, NN` line; unblocked when every listed file is `resolved`.
-- **Frontier**: open, unblocked, unclaimed files; lowest number wins.
-- **Claim**: set `Status: claimed` and save before any work.
-- **Resolve**: append `## Answer`, set `Status: resolved`, add a gist + link to the map's Decisions-so-far. Outcomes that become real work become task files.
-
-## After M2: GitHub Issues
-
-Once tasks move to issues in `Kahncode/fact`, use `gh` (`gh issue create/view/list/edit/comment/close`) and the labels in `docs/agents/triage-labels.md`. New issues get `fact:planned` plus one `type:*` and one `complexity:*` label. Update this file at that point.
+- **Map**: an issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body.
+- **Child ticket**: a sub-issue of the map, labelled `wayfinder:<type>` (`research`, `prototype`, `grilling` or `task`). Once claimed, it is assigned to the person driving.
+- **Blocking**: blocked-by links (see **Commands**), or a `Blocked by: #<n>, #<n>` line where links aren't available. A ticket is unblocked when every blocker is closed.
+- **Frontier**: the map's open sub-issues with no open blocker and no assignee. The first in map order wins.
+- **Claim**: `gh issue edit <n> --add-assignee @me`, before any other write.
+- **Resolve**: comment the answer, close the issue, then add a gist and link to the map's Decisions-so-far. An outcome that becomes real work becomes a normal planned issue.
