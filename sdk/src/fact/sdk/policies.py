@@ -13,5 +13,5 @@ INFRA_RETRY = RetryPolicy(  # shell and control steps: only infrastructure error
 LONG_WAIT_RETRY = RetryPolicy(  # a wait of days outlives worker restarts: retry until its schedule-to-close timeout
     initial_interval=timedelta(seconds=5), maximum_interval=timedelta(minutes=2), maximum_attempts=0
 )
-# a drop tears the workspace down only once the step's activity has stopped
+# a stop tears the workspace down only once the step's activity has stopped
 WAIT_CANCELLED = workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED

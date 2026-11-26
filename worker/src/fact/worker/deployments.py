@@ -34,7 +34,7 @@ async def set_current_version(client: Client, loaded: ProjectWorkflows, delay_s:
     """
     Make the worker's version current for its deployment; retried while the server registers the new version.
 
-    Runs pinned to an older version keep waiting for a worker of that version (drop and restart them to move on).
+    Runs pinned to an older version keep waiting for a worker of that version (stop and restart them to move on).
     """
     request = SetWorkerDeploymentCurrentVersionRequest(
         namespace=client.namespace,

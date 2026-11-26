@@ -1,4 +1,4 @@
-"""`fact run`, `fact runs`, `fact status`, `fact gate`, `fact steer` and `fact drop`: start, follow, answer, drop runs."""
+"""`fact run`, `fact runs`, `fact status`, `fact gate`, `fact steer` and `fact stop`: start, follow, answer, stop runs."""
 
 from datetime import datetime
 from typing import Annotated, Any
@@ -221,18 +221,18 @@ def steer(
     typer.echo(f"Queued instructions for {run_ref}'s next agent session.")
 
 
-def drop(
+def stop(
     run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or workflow id (run-...).")],
     *,
     reason: Annotated[str, typer.Option(help="Why, for the handoff note the next run gets.")] = "",
 ) -> None:
-    """Drop a run: it ends `dropped`, keeping its branch and PRs; `fact run` then restarts the task on the latest code."""
+    """Stop a run: it ends `stopped`, keeping its branch and PRs; `fact run` then restarts the task on the latest code."""
     try:
         run_id = _find_run(run_ref)["id"]
-        call_api("POST", f"{API}/runs/{quote(run_id, safe='')}/drop", json={"reason": reason})
+        call_api("POST", f"{API}/runs/{quote(run_id, safe='')}/stop", json={"reason": reason})
     except httpx.HTTPStatusError as e:
         raise api_error(e) from e
     typer.echo(
-        f"Dropping {run_ref}: it ends `dropped` once its worker writes the handoff note and removes its workspace."
+        f"Stopping {run_ref}: it ends `stopped` once its worker writes the handoff note and removes its workspace."
     )
     typer.echo("Then start the task again with `fact run`; the new run reuses the branch and the PR.")

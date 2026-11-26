@@ -102,7 +102,7 @@ class AgentSteps:
         run_id = self.input.run_id
         await self._record(RECORD_RUN_WAITING, RunWaitingInput(run_id=run_id, waiting=True, reason=reason))
         try:
-            self.stop_if_dropped()  # a drop that cancelled the record above is not delivered again
+            self.raise_if_stopped()  # a stop that cancelled the record above is not delivered again
             await workflow.sleep(max(resume_at - workflow.now(), timedelta(0)))
         finally:
             self.note_waiting(None)
@@ -134,7 +134,7 @@ class AgentSteps:
             start_to_close_timeout=timedelta(seconds=run.limits.agent_timeout_s),
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=NO_RETRY,
-            cancellation_type=WAIT_CANCELLED,  # a drop tears the workspace down only once the session stopped
+            cancellation_type=WAIT_CANCELLED,  # a stop tears the workspace down only once the session stopped
         )
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         self.note_agent_step(stage_id, spec.attempt, result)

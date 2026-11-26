@@ -123,7 +123,7 @@ async def _mark_start_failed(session: AsyncSession, run: Run) -> None:
 
 @router.post("/runs/start", status_code=status.HTTP_201_CREATED)
 async def start_run(body: RunStart, request: Request, session: Session, store: Store) -> RunStarted:
-    """Start the task's workflow; after a dropped run, the new run gets its handoff note (`RunInput.handoff_ref`)."""
+    """Start the task's workflow; after a stopped run, the new run gets its handoff note (`RunInput.handoff_ref`)."""
     settings: Settings = request.app.state.settings
     found = await _find(settings, body)
     client = await temporal_client(request)  # after the checks: a refusal needs no Temporal

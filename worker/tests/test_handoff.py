@@ -17,7 +17,7 @@ from httpx import AsyncClient
 from temporalio.testing import ActivityEnvironment
 from test_agent_step import FakeHarness
 
-TASK = Task(key="task:M2-99", id="M2-99", title="Drop me", body="Do it")
+TASK = Task(key="task:M2-99", id="M2-99", title="Stop me", body="Do it")
 PR = PRRef(repo="acme/widget", number=7, url="https://github.com/acme/widget/pull/7", head_sha="abc")
 REPO = "acme/widget"
 

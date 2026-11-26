@@ -36,12 +36,12 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
     from fact.sdk.agents import AgentSteps
-    from fact.sdk.drop import DropSteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, WAIT_CANCELLED
     from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.stages import Stage, stages
+    from fact.sdk.stop import StopSteps
     from fact.sdk.task_status import TaskStatusSteps
 
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
@@ -50,8 +50,8 @@ __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "sta
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
-    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, gates, dropping, the task in mixins."""
+class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, StopSteps, TaskStatusSteps):
+    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, gates, stopping, the task in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -90,8 +90,8 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStat
         Record the run as started, run `body`, and record how it finished: `failed` if it raised a Temporal failure.
 
         The start carries the worker deployment version (build id `<factory SHA>+<home SHA>`) the run is pinned to.
-        A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person. A dropped
-        (cancelled) run ends through `drop`.
+        A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person. A stopped
+        (cancelled) run ends through `stop`.
 
         Any other exception is a bug in workflow code: it fails the workflow task, which Temporal retries once the
         code is fixed, so the run is not recorded as finished.
@@ -104,16 +104,16 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStat
             await self.report_task("run_started")
             result = await body()
         except (FailureError, asyncio.CancelledError) as exc:  # a cancelled activity may raise either
-            if self.drop_requested():
-                return await self.drop()
+            if self.stop_requested():
+                return await self.stop()
             if isinstance(exc, FailureError):
                 await self._record(
                     RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=RunOutcome.FAILED)
                 )
             raise
-        if self.drop_requested() and result.outcome not in PUSHED_OUTCOMES:
-            return await self.drop()  # dropped as it ended: free the branch for the restart
-        self._dropping = True  # the work is over (pushed): a late drop must not stop its bookkeeping
+        if self.stop_requested() and result.outcome not in PUSHED_OUTCOMES:
+            return await self.stop()  # stopped as it ended: free the branch for the restart
+        self._stopping = True  # the work is over (pushed): a late stop must not stop its bookkeeping
         await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=result.outcome))
         await self.report_run_end(result)
         if result.outcome in PUSHED_OUTCOMES:
@@ -122,7 +122,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStat
 
     def next_attempt(self, stage_id: str) -> int:
         """Return the next attempt number of `stage_id` (1, 2, ...): a run's steps are unique by stage and attempt."""
-        self.stop_if_dropped()
+        self.raise_if_stopped()
         self._attempts[stage_id] = self._attempts.get(stage_id, 0) + 1
         self.note_stage(stage_id, self._attempts[stage_id])
         return self._attempts[stage_id]
@@ -206,7 +206,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStat
         return result
 
     async def _control[T](self, name: str, arg: object, result_type: type[T]) -> T:
-        self.stop_if_dropped()
+        self.raise_if_stopped()
         return await workflow.execute_activity(
             name,
             arg,

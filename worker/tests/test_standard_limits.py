@@ -75,16 +75,16 @@ async def test_limited_session_sleeps_until_the_reset_and_resumes_it() -> None:
     await replayer.replay_workflow(history)
 
 
-async def test_drop_during_the_sleep_ends_the_run_dropped() -> None:
+async def test_stop_during_the_sleep_ends_the_run_stopped() -> None:
     fakes = FakeActivities(implement_script=[_limited(datetime.now(UTC) + WAIT)])
-    async with started_standard(fakes, "run-limited-drop") as (_, handle):
+    async with started_standard(fakes, "run-limited-stop") as (_, handle):
         await _waiting(handle)
         await handle.cancel(reason="not worth the wait")
         result: RunResult = await handle.result()
 
-    assert result.outcome == RunOutcome.DROPPED
+    assert result.outcome == RunOutcome.STOPPED
     assert len(_implements(fakes)) == 1  # never resumed
-    assert finished(fakes) == RunOutcome.DROPPED
+    assert finished(fakes) == RunOutcome.STOPPED
 
 
 async def test_a_limit_pause_does_not_use_up_the_resumes() -> None:

@@ -38,7 +38,7 @@ REPORT_STATUS = "report_status"
 
 Check = Literal["lint", "test", "build", "setup"]
 # a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
-TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "dropped"]
+TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "stopped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 MergeMethod = Literal["squash", "merge", "rebase"]
 
@@ -69,7 +69,7 @@ class AgentStepInput(_Input):
     override: RouteOverride | None = None
     home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
     resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
-    handoff_ref: str | None = None  # artifact key of a dropped run's handoff note, `$handoff` in the prompt
+    handoff_ref: str | None = None  # artifact key of a stopped run's handoff note, `$handoff` in the prompt
 
 
 class ShellStepInput(_Input):
@@ -205,7 +205,7 @@ class NotifyInput(_Input):
 
 
 class HandoffStep(_Input):
-    """One agent step of a dropped run, for its handoff note."""
+    """One agent step of a stopped run, for its handoff note."""
 
     stage_id: str
     attempt: int
@@ -214,11 +214,11 @@ class HandoffStep(_Input):
 
 
 class HandoffInput(_Input):
-    """What a dropped run leaves for the next run of its task: written to the artifact store as `handoff_key`."""
+    """What a stopped run leaves for the next run of its task: written to the artifact store as `handoff_key`."""
 
     run_id: str
     task: Task
-    reason: str = ""  # why the run was dropped, from the cancellation
+    reason: str = ""  # why the run was stopped, from the cancellation
     stage_id: str | None = None  # the last stage reached
     attempt: int | None = None
     steps: list[HandoffStep] = Field(default_factory=list)  # agent steps, in order

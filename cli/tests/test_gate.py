@@ -113,7 +113,7 @@ async def test_gate_moves_the_run_on_and_a_second_answer_is_refused(api: FastAPI
         assert await handle.result() == ["approve", "ship it", "use the fixture"]
 
 
-async def test_drop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
+async def test_stop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
     async with (
         await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env,
         Worker(env.client, task_queue=QUEUE, workflows=[OneGate]),
@@ -124,9 +124,9 @@ async def test_drop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
             assert (await client.post("/api/v1/runs", json=body)).status_code == httpx.codes.CREATED
         handle = await env.client.start_workflow(OneGate.run, id=WF_ID, task_queue=QUEUE)
 
-        dropped = await fact("drop", WF_ID, "--reason", "newer workflow")
-        assert dropped.exit_code == 0, dropped.output
-        assert f"Dropping {WF_ID}" in dropped.output
+        stopped = await fact("stop", WF_ID, "--reason", "newer workflow")
+        assert stopped.exit_code == 0, stopped.output
+        assert f"Stopping {WF_ID}" in stopped.output
         with pytest.raises(WorkflowFailureError) as info:
             await handle.result()
         assert isinstance(info.value.cause, CancelledError)
@@ -134,6 +134,6 @@ async def test_drop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
         (requested,) = [e for e in history.events if e.HasField("workflow_execution_cancel_requested_event_attributes")]
         assert requested.workflow_execution_cancel_requested_event_attributes.cause == "newer workflow"
 
-    unknown = await fact("drop", "run-nope-1")
+    unknown = await fact("stop", "run-nope-1")
     assert unknown.exit_code == 1
     assert "no run with workflow id run-nope-1" in unknown.output

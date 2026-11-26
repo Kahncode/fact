@@ -245,7 +245,7 @@ async def test_rejected_pr_is_non_retryable(  # noqa: PLR0913, PLR0917
     assert info.value.non_retryable
 
 
-async def test_restart_after_a_drop_reuses_the_branch_and_the_pr(  # noqa: PLR0913, PLR0917
+async def test_restart_after_a_stop_reuses_the_branch_and_the_pr(  # noqa: PLR0913, PLR0917
     settings: Settings,
     remote: Path,
     reporter: StepReporter,
@@ -255,17 +255,17 @@ async def test_restart_after_a_drop_reuses_the_branch_and_the_pr(  # noqa: PLR09
     client: httpx.AsyncClient,
 ) -> None:
     activities = ChangeSetActivities(github, reporter, remote_url=lambda _n: remote.as_uri())
-    dropped = await _prepare(settings, remote, reporter, run_id, github=github)
-    _commit(dropped, "one.txt")
-    (pr,) = await ActivityEnvironment().run(activities.open_change_set, _input(run_id, dropped))
+    stopped = await _prepare(settings, remote, reporter, run_id, github=github)
+    _commit(stopped, "one.txt")
+    (pr,) = await ActivityEnvironment().run(activities.open_change_set, _input(run_id, stopped))
     runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri())
-    await runner.teardown(WorkspaceHandle(run_id=run_id, root=str(dropped.parent), repos={FULL_NAME: str(dropped)}))
+    await runner.teardown(WorkspaceHandle(run_id=run_id, root=str(stopped.parent), repos={FULL_NAME: str(stopped)}))
 
     body = {"workflow_id": "wf-2", "project": "fact", "task_key": "task:M1-11", "workflow_type": "standard"}
     restart = (await client.post("/api/v1/runs", json=body)).json()["id"]
     worktree = await _prepare(settings, remote, reporter, restart, github=github)
     assert _git("rev-parse", "--abbrev-ref", "HEAD", cwd=worktree) == BRANCH  # free again, not a suffixed branch
-    assert _git("rev-parse", "HEAD", cwd=worktree) == pr.head_sha  # starts from what the dropped run pushed
+    assert _git("rev-parse", "HEAD", cwd=worktree) == pr.head_sha  # starts from what the stopped run pushed
     _commit(worktree, "two.txt")
     (again,) = await ActivityEnvironment().run(activities.open_change_set, _input(restart, worktree))
     assert (again.number, again.url) == (pr.number, pr.url)

@@ -32,7 +32,7 @@ async def report(source: TaskSource, spec: ReportStatusInput) -> None:
         case "merged":
             await source.close(key)
             await source.set_labels(key, add=[], remove=[RUNNING, NEEDS_HUMAN])
-        case "closed" | "dropped":
+        case "closed" | "stopped":
             await source.set_labels(key, add=[], remove=[RUNNING, NEEDS_HUMAN])
             reason = f": {spec.detail}" if spec.detail else ""
             await source.comment(key, f"Run {_run_link(spec)} ended {spec.event}{reason}.")

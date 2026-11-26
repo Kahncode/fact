@@ -28,7 +28,7 @@ uv run fact use main
 uv run fact dev --pinned
 ```
 
-`fact use <ref>` checks the ref out (from `origin` when it exists there) as a separate copy under `<data_dir>/pinned/factory/<sha>` and installs its dependencies; `fact dev --pinned` runs the API and worker from that copy while still reading your `fact.yaml` and `.env`. To pick up merged changes, run `fact use main` again and restart `fact dev --pinned`, but only once runs have ended: a run still in progress or waiting for review when the worker restarts on new code stalls (after merging a run's PR, wait until `fact status` shows it `merged`, within about a minute; drop the others with `fact drop`, below). See `docs/spec/14-dogfooding-and-safety.md` and `docs/ARCHITECTURE.md`.
+`fact use <ref>` checks the ref out (from `origin` when it exists there) as a separate copy under `<data_dir>/pinned/factory/<sha>` and installs its dependencies; `fact dev --pinned` runs the API and worker from that copy while still reading your `fact.yaml` and `.env`. To pick up merged changes, run `fact use main` again and restart `fact dev --pinned`, but only once runs have ended: a run still in progress or waiting for review when the worker restarts on new code stalls (after merging a run's PR, wait until `fact status` shows it `merged`, within about a minute; stop the others with `fact stop`, below). See `docs/spec/14-dogfooding-and-safety.md` and `docs/ARCHITECTURE.md`.
 
 ## Starting a run
 
@@ -56,16 +56,16 @@ uv run fact steer run-task-M1-02-1 "Keep the old function name"
 
 `fact gate` answers the open gate; pass `--gate <id>` to answer a specific one.
 
-To restart a task on newer code, drop its run, then start the task again:
+To restart a task on newer code, stop its run, then start the task again:
 
 ```
-uv run fact drop run-task-M1-02-1 --reason "restart on the review fix"
+uv run fact stop run-task-M1-02-1 --reason "restart on the review fix"
 uv run fact run task:M1-02
 ```
 
-The dropped run ends `dropped`: it leaves a handoff note (the reason, the last stage reached, the PR links, each agent session's summary), removes its workspace and keeps its branch and PR on GitHub. The next run starts from that branch, reuses the PR and gets the note in its prompts. Commits the old run never pushed are lost.
+The stopped run ends `stopped`: it leaves a handoff note (the reason, the last stage reached, the PR links, each agent session's summary), removes its workspace and keeps its branch and PR on GitHub. The next run starts from that branch, reuses the PR and gets the note in its prompts. Commits the old run never pushed are lost.
 
-A project can require you to approve each task's plan before work starts: set `require_plan_approval` in its `.fact/project.yaml` (default true), or in a task's front matter to override it. The run then waits at an `approve_plan` gate; rejecting it ends the run `dropped`. fact's own project turns this off, since labelling an issue `fact:ready` already approves it.
+A project can require you to approve each task's plan before work starts: set `require_plan_approval` in its `.fact/project.yaml` (default true), or in a task's front matter to override it. The run then waits at an `approve_plan` gate; rejecting it ends the run `stopped`. fact's own project turns this off, since labelling an issue `fact:ready` already approves it.
 
 To see what needs you, check your inbox. A run notifies you when it waits at a gate, when its PRs are ready for review, and when it fails or gives up:
 
@@ -89,7 +89,7 @@ uv run fact scheduler off
 
 Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`).
 
-- A task whose runs failed is retried, up to 3 failed runs in a row (`concurrency.max_failed_runs`); then it waits for you to start it with `fact run`, which resets the count. A task whose last run ended any other way (needs you, dropped, PR merged or closed) is never restarted by the scheduler.
+- A task whose runs failed is retried, up to 3 failed runs in a row (`concurrency.max_failed_runs`); then it waits for you to start it with `fact run`, which resets the count. A task whose last run ended any other way (needs you, stopped, PR merged or closed) is never restarted by the scheduler.
 - It leaves part of your Claude subscription to you: while a usage window is at 90% or more (five-hour) or 95% or more (weekly), it starts no new run (`claude.reserve` in `fact.yaml`; `claude.usage_gate: false` turns this off, and it is off when `ANTHROPIC_API_KEY` is set). It reads usage from your local Claude Code login only when a task would start. Runs already going are not touched.
 - `fact scheduler status` shows what the next tick would start, why the others wait, and the usage it last read with each window's reset time.
 - On Windows, the worker keeps the PC from sleeping while a run is active (`worker.keep_awake`).
@@ -98,7 +98,7 @@ The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`
 
 ## Workspaces
 
-Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run's PR is merged or closed, or the run is dropped; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
+Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run's PR is merged or closed, or the run is stopped; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
 
 ## GitHub App
 
@@ -114,7 +114,7 @@ To set up a task repository, `uv run fact github labels sync <owner/repo>` creat
 
 ## The API
 
-Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run dropped with `POST /api/v1/runs/{id}/drop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start and `GET /api/v1/scheduler/preview` what its next tick would do. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
+Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run stopped with `POST /api/v1/runs/{id}/stop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start and `GET /api/v1/scheduler/preview` what its next tick would do. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
 
 Every response carries an `X-Request-ID` header (send your own to propagate it), and each request produces one `request_completed` log line. Set `FACT_LOG_LEVEL` to override the log level (default DEBUG locally, INFO in `test` and `prod`); see `docs/ARCHITECTURE.md` for logging details.
 
@@ -122,7 +122,7 @@ Every response carries an `X-Request-ID` header (send your own to propagate it),
 
 A project's workflows are Python classes in its `.fact/workflows/`, built on `FactWorkflow` from `fact.sdk`. fact's own `Standard` workflow (`.fact/workflows/standard.py`) prepares a workspace, runs an implement session, loops lint and test with fix sessions until green, has an agent review the change against the task (and address its findings), then runs a learn session that updates the repository's docs and writes the PR title and summary, marks the task done and opens the PR. A failed learn session does not fail the run: the PR opens with the implement session's text. It then waits for the PR's CI; a failing job's log goes to a fix session whose commit is pushed to the same PR, up to two times. When the checks or CI stay red after their fix sessions, the run does not end: it opens a gate and waits for a person, for as long as it takes and at no cost. Approving runs that loop again (extra instructions sent to the run reach its next fix sessions); rejecting ends the run needing you, with no PR for red checks and the PR open for red CI. Once CI is green, you are notified that the PR is ready, and the run stays open (shown as waiting for review) until you merge or close the PR on GitHub; it then ends `merged` or `closed`. A cost comment on the PR shows time and cost per step, including time spent waiting for you. You get a notification (see `fact inbox`) when a gate opens, when the PR is ready, and when the run ends.
 
-The worker loads each registered project's workflows from the latest commit on its home repository's default branch and pins every run to that version, so a run finishes on the code it started with. Merged workflow changes take effect when the worker restarts; runs still pinned to the old version then wait, and `fact drop` cannot end them because their worker is gone, so drop runs before restarting (otherwise delete their workspace folder by hand). See `.fact/workflows/README.md` and `worker/README.md`.
+The worker loads each registered project's workflows from the latest commit on its home repository's default branch and pins every run to that version, so a run finishes on the code it started with. Merged workflow changes take effect when the worker restarts; runs still pinned to the old version then wait, and `fact stop` cannot end them because their worker is gone, so stop runs before restarting (otherwise delete their workspace folder by hand). See `.fact/workflows/README.md` and `worker/README.md`.
 
 ## Documentation
 
