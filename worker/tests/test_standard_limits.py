@@ -1,6 +1,5 @@
 """`Standard` when the usage limit refuses an agent session: a durable sleep until the reset, then the same session."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET, RECORD_RUN_WAITING
@@ -9,13 +8,13 @@ from fact.core.gates import STATUS, WorkflowStatus
 from fact.core.types import RunResult, StepResult
 from fact.sdk.sessions import LIMIT_PAUSED, MAX_LIMIT_PAUSES
 from fact.worker.loader import sandbox_runner
+from gate_harness import until_status
 from standard_harness import STANDARD, FakeActivities, finished, started_standard
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-POLL_S = 0.05
 WAIT = timedelta(days=3)  # a full weekly window: a wait of days
 
 
@@ -33,11 +32,7 @@ RETRYABLE = StepResult(
 
 
 async def _waiting(handle: WorkflowHandle) -> WorkflowStatus:
-    while True:
-        status = await handle.query(STATUS, result_type=WorkflowStatus)
-        if status.waiting:
-            return status
-        await asyncio.sleep(POLL_S)
+    return await until_status(handle, lambda s: bool(s.waiting))
 
 
 def _implements(fakes: FakeActivities) -> list:
@@ -75,16 +70,16 @@ async def test_limited_session_sleeps_until_the_reset_and_resumes_it() -> None:
     await replayer.replay_workflow(history)
 
 
-async def test_drop_during_the_sleep_ends_the_run_dropped() -> None:
+async def test_stop_during_the_sleep_ends_the_run_stopped() -> None:
     fakes = FakeActivities(implement_script=[_limited(datetime.now(UTC) + WAIT)])
-    async with started_standard(fakes, "run-limited-drop") as (_, handle):
+    async with started_standard(fakes, "run-limited-stop") as (_, handle):
         await _waiting(handle)
         await handle.cancel(reason="not worth the wait")
         result: RunResult = await handle.result()
 
-    assert result.outcome == RunOutcome.DROPPED
+    assert result.outcome == RunOutcome.STOPPED
     assert len(_implements(fakes)) == 1  # never resumed
-    assert finished(fakes) == RunOutcome.DROPPED
+    assert finished(fakes) == RunOutcome.STOPPED
 
 
 async def test_a_limit_pause_does_not_use_up_the_resumes() -> None:

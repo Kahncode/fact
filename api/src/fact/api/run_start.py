@@ -56,11 +56,11 @@ async def next_run_number(session: AsyncSession, task_key: str) -> int:
 
 async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id: int, task_key: str) -> str | None:
     """
-    Key of the newest handoff note left by the task's last runs, if they were dropped; else None.
+    Key of the newest handoff note left by the task's last runs, if they were stopped; else None.
 
-    Runs that never started (a failed start) are skipped; the first other run back that was not dropped ends the
-    search, so a merged or failed run in between means the note is stale. A dropped run with no note (its plan was
-    rejected, or writing the note failed) is passed over for the older dropped run's note.
+    Runs that never started (a failed start) are skipped; the first other run back that was not stopped ends the
+    search, so a merged or failed run in between means the note is stale. A stopped run with no note (its plan was
+    rejected, or writing the note failed) is passed over for the older stopped run's note.
     """
     query = (
         select(Run.id, Run.outcome)
@@ -69,7 +69,7 @@ async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id
         .order_by(Run.created_at.desc(), Run.id.desc())
     )
     for run_id, outcome in (await session.execute(query)).all():
-        if outcome != RunOutcome.DROPPED:
+        if outcome != RunOutcome.STOPPED:
             return None
         if store.exists(key := handoff_key(run_id)):
             return key

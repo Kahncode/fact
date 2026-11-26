@@ -1,4 +1,4 @@
-"""Dropping a `Standard` run: it ends `dropped` with a handoff note and no workspace; a restart gets the note."""
+"""Stopping a `Standard` run: it ends `stopped` with a handoff note and no workspace; a restart gets the note."""
 
 import asyncio
 
@@ -15,11 +15,10 @@ from fact.core.activity_contract import (
     WaitForPRClosedInput,
 )
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
-from fact.core.gates import STATUS, WorkflowStatus
 from fact.core.types import RunResult, StepResult
 from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
-from gate_harness import POLL_S, open_gate
+from gate_harness import POLL_S, open_gate, until_status
 from standard_harness import STANDARD, FakeActivities, finished, run_standard, started_standard
 from standard_inputs import PR, run_input
 from temporalio import activity
@@ -56,10 +55,7 @@ class AgentWorks(FakeActivities):
 
 
 async def _at_stage(handle: WorkflowHandle, stage: str) -> None:
-    while True:
-        if (await handle.query(STATUS, result_type=WorkflowStatus)).stage == stage:
-            return
-        await asyncio.sleep(POLL_S)
+    await until_status(handle, lambda s: s.stage == stage)
 
 
 def _order(fakes: FakeActivities) -> list[str]:
@@ -67,20 +63,20 @@ def _order(fakes: FakeActivities) -> list[str]:
     return [name for name, _ in fakes.calls if name in names]
 
 
-async def test_drop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
+async def test_stop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
     fakes = FakeActivities(test_failures=100, gate_decisions=None)
-    async with started_standard(fakes, "run-drop-gate") as (_, handle):
+    async with started_standard(fakes, "run-stop-gate") as (_, handle):
         await open_gate(handle)
         await handle.cancel(reason="restart on the new prompts")
         result: RunResult = await handle.result()
 
     assert (result.outcome, result.summary, result.prs) == (
-        RunOutcome.DROPPED,
-        "dropped: restart on the new prompts",
+        RunOutcome.STOPPED,
+        "stopped: restart on the new prompts",
         [],
     )
-    assert finished(fakes) == RunOutcome.DROPPED
-    assert _order(fakes) == [WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED]  # dropped once the note is there
+    assert finished(fakes) == RunOutcome.STOPPED
+    assert _order(fakes) == [WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED]  # stopped once the note is there
     (note,) = fakes.of(WRITE_HANDOFF)
     assert (note.run_id, note.reason, note.stage_id, note.attempt) == (
         "run-1",
@@ -92,27 +88,27 @@ async def test_drop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
     assert note.steps[0].summary == "implement done"
     assert fakes.of(OPEN_CHANGE_SET) == []
     (notified,) = [n for n in fakes.of("notify") if n.kind != NotificationKind.GATE_WAITING]
-    assert (notified.kind, notified.title) == (NotificationKind.RUN_FINISHED, "task:M1-99 ended dropped")
+    assert (notified.kind, notified.title) == (NotificationKind.RUN_FINISHED, "task:M1-99 ended stopped")
     reports = [(r.event, r.detail) for r in fakes.of(REPORT_STATUS)]
-    assert reports[-1] == ("dropped", "restart on the new prompts")  # labels cleared, said why
+    assert reports[-1] == ("stopped", "restart on the new prompts")  # labels cleared, said why
     assert [e for e, _ in reports].count("gate_opened") == 1  # the gate was never answered
 
 
-async def test_drop_in_review_keeps_the_pr_for_the_next_run() -> None:
+async def test_stop_in_review_keeps_the_pr_for_the_next_run() -> None:
     fakes = ReviewWaits()
-    async with started_standard(fakes, "run-drop-review") as (_, handle):
+    async with started_standard(fakes, "run-stop-review") as (_, handle):
         await _at_stage(handle, REVIEW_STAGE)
         await handle.cancel(reason="")
         result: RunResult = await handle.result()
         history = await handle.fetch_history()
 
-    assert (result.outcome, result.summary, result.prs) == (RunOutcome.DROPPED, "dropped", [PR])
+    assert (result.outcome, result.summary, result.prs) == (RunOutcome.STOPPED, "stopped", [PR])
     (note,) = fakes.of(WRITE_HANDOFF)
     assert (note.stage_id, note.prs, note.reason) == (REVIEW_STAGE, [PR], "")
     assert [s.stage_id for s in note.steps] == ["implement", "review", "learn"]
     assert _order(fakes) == [WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED]
 
-    replayed = WorkflowHistory.from_json("run-drop-review", history.to_json())
+    replayed = WorkflowHistory.from_json("run-stop-review", history.to_json())
     replayer = Replayer(workflows=[STANDARD], data_converter=pydantic_data_converter, workflow_runner=sandbox_runner())
     await replayer.replay_workflow(replayed)
 
@@ -135,14 +131,14 @@ async def test_an_ordinary_run_has_no_handoff() -> None:
     assert fakes.of(WRITE_HANDOFF) == []
 
 
-async def test_drop_during_a_session_tears_down_once_it_stopped() -> None:
+async def test_stop_during_a_session_tears_down_once_it_stopped() -> None:
     fakes = AgentWorks()
-    async with started_standard(fakes, "run-drop-agent") as (_, handle):
+    async with started_standard(fakes, "run-stop-agent") as (_, handle):
         await _at_stage(handle, "implement")
         await handle.cancel(reason="wrong approach")
         result: RunResult = await handle.result()
 
-    assert (result.outcome, result.summary) == (RunOutcome.DROPPED, "dropped: wrong approach")
+    assert (result.outcome, result.summary) == (RunOutcome.STOPPED, "stopped: wrong approach")
     assert _order(fakes) == ["session_stopped", WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED]
     (note,) = fakes.of(WRITE_HANDOFF)
     assert (note.stage_id, note.attempt, note.steps) == ("implement", 1, [])

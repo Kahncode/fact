@@ -174,12 +174,12 @@ async def test_id_taken_in_temporal_moves_to_the_next(app: FastAPI, client: Asyn
     assert response.json()["workflow_id"] == "run-task-M1-02-2"
 
 
-async def test_restart_after_a_drop_gets_the_handoff_note(app: FastAPI, client: AsyncClient) -> None:
+async def test_restart_after_a_stop_gets_the_handoff_note(app: FastAPI, client: AsyncClient) -> None:
     fake = _FailingClient()
     app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
     first = (await _start(client, task_key="task:M1-02")).json()
     assert fake.inputs[0].handoff_ref is None
-    update = {"status": "finished", "outcome": "dropped", "started_at": "2026-11-01T00:00:00Z"}
+    update = {"status": "finished", "outcome": "stopped", "started_at": "2026-11-01T00:00:00Z"}
     await client.patch(f"/api/v1/runs/{first['run_id']}", json=update)
     app.state.artifacts.put_bytes(handoff_key(first["run_id"]), b"## Handoff\n")
 

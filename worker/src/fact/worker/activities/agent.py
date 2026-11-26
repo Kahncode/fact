@@ -205,7 +205,7 @@ class AgentActivities:
         return harness
 
     async def _handoff(self, spec: AgentStepInput, step: StepContext) -> str:
-        """Return the handoff note of a dropped run of this task for `$handoff`; "" if there is none or it is unreadable."""
+        """Return the handoff note of a stopped run of this task for `$handoff`; "" if there is none or it is unreadable."""
         if not spec.handoff_ref:
             return ""
         note = await self._reporter.download_text(spec.handoff_ref)

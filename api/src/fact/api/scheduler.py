@@ -2,7 +2,7 @@
 What the scheduler may start: ready tasks on each project's default branch, and the runs counted against the caps.
 
 A task with a run in progress is not offered. A task whose last run ended any way but `failed` (needs a person,
-dropped, PR open or closed) is not offered again: a person restarts it with `fact run`. A task whose runs failed is
+stopped, PR open or closed) is not offered again: a person restarts it with `fact run`. A task whose runs failed is
 offered again until `concurrency.max_failed_runs` failed in a row (counted from the last run a person started), then
 held with `Hold.FAILURE_CAP` (`run_history_hold`). A start that never reached Temporal (`finished` and never started)
 does not count. Tasks whose dependencies are not done are listed held with `Hold.DEPENDENCY`, for the preview.

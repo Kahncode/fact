@@ -38,7 +38,7 @@ def step_key(run_id: str, stage_id: str, attempt: int, name: str) -> str:
 
 
 def handoff_key(run_id: str) -> str:
-    """Key `runs/<run>/handoff.md` of the note a dropped run leaves for the next run of its task."""
+    """Key `runs/<run>/handoff.md` of the note a stopped run leaves for the next run of its task."""
     key = f"runs/{run_id}/handoff.md"
     validate_key(key)
     return key

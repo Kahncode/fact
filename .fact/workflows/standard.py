@@ -2,7 +2,7 @@
 Standard: from a task to a PR.
 
 When the run's `require_plan_approval` is on, an `approve_plan` gate comes first, before any workspace exists: it
-shows the task's title, path and acceptance criteria; approve goes on, reject ends the run `dropped` with the note.
+shows the task's title, path and acceptance criteria; approve goes on, reject ends the run `stopped` with the note.
 Prepare the workspace, run each repository's setup commands, implement, loop lint and test with fix sessions until
 green, then review once: a separate session checks the change against the task's acceptance criteria and the review
 checklist. An unmet criterion or a medium or high finding sends the change to an `address_review` session, then
@@ -25,7 +25,7 @@ losing the change over, so the PR still opens with the implement session's title
 conventional title).
 
 A person is notified when a gate opens, when the PRs are ready for review (CI green, not merged by fact), and when the run ends `failed` or
-`needs_human` (`run_failed`) or `merged`, `closed` or `dropped` (`run_finished`).
+`needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`).
 """
 
 from temporalio import workflow
@@ -102,8 +102,8 @@ class Standard(FactWorkflow):
         return result
 
     async def _steps(self) -> RunResult:
-        if self.input.require_plan_approval and (dropped := await self._approve_plan()) is not None:
-            return dropped
+        if self.input.require_plan_approval and (stopped := await self._approve_plan()) is not None:
+            return stopped
         return await self._to_pr()
 
     async def _to_pr(self) -> RunResult:
@@ -129,7 +129,7 @@ class Standard(FactWorkflow):
         return await self._ci_green(prs)
 
     async def _approve_plan(self) -> RunResult | None:
-        """Ask a person to approve the task as planned: None if approved, else the run's end, `dropped`."""
+        """Ask a person to approve the task as planned: None if approved, else the run's end, `stopped`."""
         task = self.input.task
         details = {
             "summary": f"Approve the plan for {task.key}: {task.title}",
@@ -141,7 +141,7 @@ class Standard(FactWorkflow):
         if answer.decision == GateDecision.APPROVE:
             return None
         text = f"plan rejected: {answer.note}" if answer.note else "plan rejected"
-        return RunResult(outcome=RunOutcome.DROPPED, summary=limit_text(text, SUMMARY_BYTES))
+        return RunResult(outcome=RunOutcome.STOPPED, summary=limit_text(text, SUMMARY_BYTES))
 
     async def _checks_green(self) -> RunResult | None:
         """Loop the checks with fix sessions, and ask a person each time they stay red; None once they are green."""

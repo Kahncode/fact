@@ -9,7 +9,7 @@ Prompt templates for this project's agent steps. `agent_step` renders `.fact/pro
 | `$context` | Text the workflow passes, such as failing check output |
 | `$workspace` | The workspace root, which holds `WORKSPACE.md` and every repository's worktree |
 | `$stage_id` | The step's stage, such as `implement` |
-| `$handoff` | After a dropped run of the task: its handoff note (a `## Handoff from a dropped run` section with the reason, the last stage reached, the open PRs and each agent step's summary); empty otherwise |
+| `$handoff` | After a stopped run of the task: its handoff note (a `## Handoff from a stopped run` section with the reason, the last stage reached, the open PRs and each agent step's summary); empty otherwise |
 
 Write `$$` for a literal `$`; an unknown placeholder fails the step.
 

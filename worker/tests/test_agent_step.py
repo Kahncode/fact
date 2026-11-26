@@ -47,6 +47,7 @@ class FakeHarness:
         self.error = error
         self.delay = delay
         self.requests: list[HarnessRequest] = []
+        self.started = asyncio.Event()  # set once every message is sent: the session id is known
 
     async def run(
         self, request: HarnessRequest, transcript_path: Path, on_message: OnMessage | None = None
@@ -57,6 +58,7 @@ class FakeHarness:
                 f.write(json.dumps(m) + "\n")
                 if on_message is not None:
                     on_message(m)
+        self.started.set()
         await asyncio.sleep(self.delay)
         if self.error is not None:
             raise self.error
@@ -299,8 +301,9 @@ async def test_heartbeats_carry_turn_count(env: Env, monkeypatch: pytest.MonkeyP
 
 async def test_cancel_keeps_the_transcript(env: Env) -> None:
     activity_env = ActivityEnvironment()
-    task = asyncio.create_task(activity_env.run(env.activities(FakeHarness(delay=30)).agent_step, env.input()))
-    await asyncio.sleep(0.3)
+    harness = FakeHarness(delay=30)
+    task = asyncio.create_task(activity_env.run(env.activities(harness).agent_step, env.input()))
+    await harness.started.wait()
     activity_env.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -311,8 +314,9 @@ async def test_cancel_keeps_the_transcript(env: Env) -> None:
 
 async def test_worker_shutdown_fails_as_interrupted_with_the_session(env: Env) -> None:
     activity_env = ActivityEnvironment()
-    task = asyncio.create_task(activity_env.run(env.activities(FakeHarness(delay=30)).agent_step, env.input()))
-    await asyncio.sleep(0.3)
+    harness = FakeHarness(delay=30)
+    task = asyncio.create_task(activity_env.run(env.activities(harness).agent_step, env.input()))
+    await harness.started.wait()
     activity_env.cancel(ActivityCancellationDetails(worker_shutdown=True))
     with pytest.raises(ApplicationError) as info:
         await task

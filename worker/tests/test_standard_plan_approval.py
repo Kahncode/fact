@@ -54,7 +54,7 @@ async def test_approve_continues_the_run() -> None:
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
-async def test_reject_drops_the_run_with_the_note() -> None:
+async def test_reject_stops_the_run_with_the_note() -> None:
     fakes = FakeActivities(gate_decisions=None)
     async with started_standard(fakes, "run-plan-reject", _gated_input()) as (_, handle):
         gate = await open_gate(handle)
@@ -62,7 +62,7 @@ async def test_reject_drops_the_run_with_the_note() -> None:
         await answer(handle, gate.gate_id, GateDecision.REJECT, "out of scope this quarter")
         result: RunResult = await handle.result()
 
-    assert result.outcome == RunOutcome.DROPPED
+    assert result.outcome == RunOutcome.STOPPED
     assert result.summary == "plan rejected: out of scope this quarter"
     assert result.prs == []
     (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
@@ -71,7 +71,7 @@ async def test_reject_drops_the_run_with_the_note() -> None:
         "out of scope this quarter",
         StepOutcome.NEEDS_HUMAN,
     )
-    assert finished(fakes) == RunOutcome.DROPPED
+    assert finished(fakes) == RunOutcome.STOPPED
     assert fakes.of(PREPARE_WORKSPACE) == []
     assert fakes.of(AGENT_STEP) == []
     assert fakes.of(TEARDOWN_WORKSPACE) == []
@@ -82,7 +82,7 @@ async def test_the_task_hears_of_the_gate_and_the_rejection() -> None:
     await run_standard(fakes, "run-plan-report", _gated_input())
 
     reports = fakes.of(REPORT_STATUS)
-    assert [r.event for r in reports] == ["run_started", "gate_opened", "gate_answered", "dropped"]
+    assert [r.event for r in reports] == ["run_started", "gate_opened", "gate_answered", "stopped"]
     assert "Approve the plan for task:M1-99" in reports[1].detail
     assert "fact gate run-1 approve|reject" in reports[1].detail
     assert reports[3].detail == "plan rejected"

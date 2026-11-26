@@ -14,7 +14,7 @@ Use Temporal with the Python SDK. Workflows are Python code, one or more per pro
 | Risk | What it means for us | Mitigation |
 | --- | --- | --- |
 | Determinism | Workflow code is replayed, so it cannot do I/O, read the clock or use randomness directly | Keep workflow code thin; all side effects live in activities; replay tests in CI |
-| Constant change vs runs in flight | Changing a workflow can break runs that started on the old code | Pinned only: a run always finishes on the version it started on, with no upgrades in flight. To move a run to new code, drop it and restart it. Old worker versions keep running until their runs end. |
+| Constant change vs runs in flight | Changing a workflow can break runs that started on the old code | Pinned only: a run always finishes on the version it started on, with no upgrades in flight. To move a run to new code, stop it and restart it. Old worker versions keep running until their runs end. |
 | History size limits | 2 MB per payload, 50 MB or 51,200 events per run history | Never put logs, transcripts or diffs in payloads; store them in object storage, keep only their links in the factory DB, and pass those links. Long planning sessions use continue-as-new |
 | One more process to run | Temporal server beside the API and worker | One `dev` command starts all three |
 
@@ -25,6 +25,6 @@ Use Temporal with the Python SDK. Workflows are Python code, one or more per pro
 - Gates are Temporal **updates**: the UI or the MCP server sends approve or reject with a note, and gets an error back if the gate is no longer open.
 - Steering is a **signal**: "add this instruction" is queued and added to the next agent attempt's prompt, never interrupting a running one.
 - Status is a **query**: current stage, attempt and pending gate, for the UI and the MCP server.
-- Every step ends with a typed outcome: `passed`, `failed_checks`, `failed_error`, `needs_human`, `over_budget`, `stopped_by_monitor`, `dropped` or `rate_limited` (an agent step the usage limit refused; `FactWorkflow.agent` waits for the reset and resumes it, so a workflow never sees it). Workflows branch on these outcomes, never on parsed agent text.
+- Every step ends with a typed outcome: `passed`, `failed_checks`, `failed_error`, `needs_human`, `over_budget`, `stopped_by_monitor`, `stopped` or `rate_limited` (an agent step the usage limit refused; `FactWorkflow.agent` waits for the reset and resumes it, so a workflow never sees it). Workflows branch on these outcomes, never on parsed agent text.
 - Every run has one `run_id` carried on every log line, event and telemetry record.
 - Picking up work is a Temporal **Schedule**, not a cron or a loop in a process: `fact-scheduler` starts a short `SchedulerTick` workflow every 30 s with overlap `SKIP`, and pausing it (from `fact scheduler off` or the Temporal UI) stops new runs. It is the only background job in fact. The tick's reads, the Claude usage check and the starts are activities; the usage check gets the tick's `workflow.now()`, so the gate follows workflow time.

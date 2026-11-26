@@ -1,4 +1,4 @@
-"""Dropping a run through the API (a cancel with a reason), and finding the handoff note for the task's next run."""
+"""Stopping a run through the API (a cancel with a reason), and finding the handoff note for the task's next run."""
 
 import asyncio
 from collections.abc import AsyncIterator
@@ -26,14 +26,14 @@ T0 = datetime(2026, 11, 1, tzinfo=UTC)
 
 @workflow.defn(name="waits", sandboxed=False)
 class Waits:
-    """Waits until cancelled, then returns the reason it was given, as `FactWorkflow.drop` reads it."""
+    """Waits until cancelled, then returns the reason it was given, as `FactWorkflow.stop` reads it."""
 
     @workflow.run
     async def run(self) -> str:
         try:
             await workflow.wait_condition(lambda: False)
         except asyncio.CancelledError:
-            return f"dropped: {workflow.cancellation_reason()}"
+            return f"stopped: {workflow.cancellation_reason()}"
         return "never"
 
 
@@ -60,27 +60,27 @@ async def _run(client: AsyncClient, workflow_id: str) -> str:
     return response.json()["id"]
 
 
-async def test_drop_cancels_the_workflow_with_the_reason(
+async def test_stop_cancels_the_workflow_with_the_reason(
     app: FastAPI, client: AsyncClient, env: WorkflowEnvironment
 ) -> None:
     app.state.temporal = _Connection(env.client)
-    run_id = await _run(client, "run-drop-1")
+    run_id = await _run(client, "run-stop-1")
     async with Worker(env.client, task_queue=QUEUE, workflows=[Waits]):
-        handle = await env.client.start_workflow(Waits.run, id="run-drop-1", task_queue=QUEUE)
-        dropped = await client.post(f"/api/v1/runs/{run_id}/drop", json={"reason": "newer workflow"})
-        assert dropped.status_code == HTTPStatus.ACCEPTED, dropped.text
-        assert dropped.json() == {"run_id": run_id, "human_touches": 1}
-        assert await handle.result() == "dropped: newer workflow"
+        handle = await env.client.start_workflow(Waits.run, id="run-stop-1", task_queue=QUEUE)
+        stopped = await client.post(f"/api/v1/runs/{run_id}/stop", json={"reason": "newer workflow"})
+        assert stopped.status_code == HTTPStatus.ACCEPTED, stopped.text
+        assert stopped.json() == {"run_id": run_id, "human_touches": 1}
+        assert await handle.result() == "stopped: newer workflow"
 
 
-async def test_drop_refuses_a_finished_or_unknown_run(
+async def test_stop_refuses_a_finished_or_unknown_run(
     app: FastAPI, client: AsyncClient, env: WorkflowEnvironment
 ) -> None:
     app.state.temporal = _Connection(env.client)
-    assert (await client.post("/api/v1/runs/nope/drop", json={})).status_code == HTTPStatus.NOT_FOUND
-    run_id = await _run(client, "run-drop-2")
+    assert (await client.post("/api/v1/runs/nope/stop", json={})).status_code == HTTPStatus.NOT_FOUND
+    run_id = await _run(client, "run-stop-2")
     await client.patch(f"/api/v1/runs/{run_id}", json={"status": "finished", "outcome": "merged"})
-    response = await client.post(f"/api/v1/runs/{run_id}/drop", json={})
+    response = await client.post(f"/api/v1/runs/{run_id}/stop", json={})
     assert response.status_code == HTTPStatus.CONFLICT
     assert "already ended merged" in response.json()["detail"]
 
@@ -119,14 +119,14 @@ def _note(store: LocalArtifactStore, run_id: str) -> str:
 
 
 @pytest.mark.usefixtures("client")
-async def test_latest_handoff_follows_the_dropped_runs(app: FastAPI) -> None:
+async def test_latest_handoff_follows_the_stopped_runs(app: FastAPI) -> None:
     store: LocalArtifactStore = app.state.artifacts
     assert await _latest(app) is None
 
-    older = _note(store, await _add_run(app, RunOutcome.DROPPED, 1))
+    older = _note(store, await _add_run(app, RunOutcome.STOPPED, 1))
     assert await _latest(app) == older
-    newer = _note(store, await _add_run(app, RunOutcome.DROPPED, 2))
-    await _add_run(app, RunOutcome.DROPPED, 3)  # rejected at the plan gate: no note, the search goes on
+    newer = _note(store, await _add_run(app, RunOutcome.STOPPED, 2))
+    await _add_run(app, RunOutcome.STOPPED, 3)  # rejected at the plan gate: no note, the search goes on
     await _add_run(app, RunOutcome.FAILED, 4, started=False)  # a failed start is skipped
     await _add_run(app, None, 5)  # still running: not an ended run
     assert await _latest(app) == newer

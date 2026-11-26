@@ -80,8 +80,8 @@ async def test_merged_closes_the_task() -> None:
     assert await _report("merged") == [("close", KEY), ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))]
 
 
-@pytest.mark.parametrize("event", ["closed", "dropped"])
-async def test_closed_or_dropped_clears_labels_and_says_why(event: TaskEvent) -> None:
+@pytest.mark.parametrize("event", ["closed", "stopped"])
+async def test_closed_or_stopped_clears_labels_and_says_why(event: TaskEvent) -> None:
     calls = await _report(event, detail="superseded")
     assert calls[0] == ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))
     assert calls[1] == ("comment", (KEY, f"Run r1 ended {event}: superseded."))

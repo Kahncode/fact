@@ -4,7 +4,7 @@ The run's task, as a mixin of `FactWorkflow`: tell its source what the run is do
 Each event goes through the `report_status` control activity, which applies it as `fact.core.tasks.events` says
 (labels, comments, PR links, closing the issue). Reporting is best effort: a tracker outage must not fail a run.
 
-`TaskStatusSteps` uses the workflow's `input`, `handle`, `stop_if_dropped` and `_control`.
+`TaskStatusSteps` uses the workflow's `input`, `handle`, `raise_if_stopped` and `_control`.
 """
 
 from collections.abc import Sequence
@@ -27,11 +27,11 @@ with workflow.unsafe.imports_passed_through():
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
 
-# how a run's end reaches its task: merged closes it, closed or dropped clears its labels; other ends say nothing yet
+# how a run's end reaches its task: merged closes it, closed or stopped clears its labels; other ends say nothing yet
 END_EVENTS: dict[RunOutcome, TaskEvent] = {
     RunOutcome.MERGED: "merged",
     RunOutcome.CLOSED: "closed",
-    RunOutcome.DROPPED: "dropped",
+    RunOutcome.STOPPED: "stopped",
 }
 
 
@@ -51,11 +51,11 @@ class TaskStatusSteps:
         try:
             await self._control(REPORT_STATUS, spec, type(None))
         except ActivityError as exc:
-            self.stop_if_dropped()  # a drop that cancelled the report must still stop the run
+            self.raise_if_stopped()  # a stop that cancelled the report must still stop the run
             workflow.logger.warning("report_status %s failed for run %s: %s", event, run.run_id, exc.cause or exc)
 
     async def report_run_end(self: FactWorkflow, result: RunResult) -> None:
-        """Report a `merged`, `closed` or `dropped` end, with the run's summary; other outcomes report nothing."""
+        """Report a `merged`, `closed` or `stopped` end, with the run's summary; other outcomes report nothing."""
         if (event := END_EVENTS.get(result.outcome)) is not None:
             await self.report_task(event, detail=result.summary)
 

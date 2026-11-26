@@ -24,6 +24,7 @@ dev = [
     "fact-worker",
     "fact-sdk",
     "fact-cli",
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.uv.sources]
@@ -67,3 +68,5 @@ testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests"
 addopts = "--import-mode=importlib" # same test file names across packages
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+# A deadlocked test fails with every thread's stack instead of hanging the run; the slowest test takes about 5 s.
+timeout = 60

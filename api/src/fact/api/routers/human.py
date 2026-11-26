@@ -1,7 +1,7 @@
 """
-The person in the loop, through Temporal: answer a gate, steer a run, read its live status, drop a run.
+The person in the loop, through Temporal: answer a gate, steer a run, read its live status, stop a run.
 
-A gate is answered by an update, steering is a signal, the status a query, and a drop cancels the workflow.
+A gate is answered by an update, steering is a signal, the status a query, and a stop cancels the workflow.
 
 Handlers are called by name from `fact.core.gates`; the API never imports `fact.sdk`.
 """
@@ -50,7 +50,7 @@ class InstructionIn(BaseModel):
     text: str = Field(min_length=1, max_length=STEER_MAX_CHARS)
 
 
-class DropIn(BaseModel):
+class StopIn(BaseModel):
     reason: str = Field(default="", max_length=NOTE_MAX_CHARS)
 
 
@@ -127,12 +127,12 @@ async def live_status(run_id: str, request: Request, session: Session) -> Workfl
         raise _rpc_error(run, exc) from exc
 
 
-@router.post("/runs/{run_id}/drop", status_code=status.HTTP_202_ACCEPTED)
-async def drop(run_id: str, body: DropIn, request: Request, session: Session) -> Touched:
+@router.post("/runs/{run_id}/stop", status_code=status.HTTP_202_ACCEPTED)
+async def stop(run_id: str, body: StopIn, request: Request, session: Session) -> Touched:
     """
-    Cancel the run's workflow with a reason; it ends `dropped`, leaving a handoff note, its branch and its PRs.
+    Cancel the run's workflow with a reason; it ends `stopped`, leaving a handoff note, its branch and its PRs.
 
-    Accepted, not done: the run's own worker version handles the cancellation, and the run shows `dropped` once its
+    Accepted, not done: the run's own worker version handles the cancellation, and the run shows `stopped` once its
     note is written and its workspace is gone. Start the task again then.
     """
     run, handle = await _handle(request, session, run_id)
@@ -142,5 +142,5 @@ async def drop(run_id: str, body: DropIn, request: Request, session: Session) ->
         await handle.cancel(reason=body.reason)
     except RPCError as exc:
         raise _rpc_error(run, exc) from exc
-    log.info("run_dropped", run_id=run.id, reason=body.reason)
+    log.info("run_stopped", run_id=run.id, reason=body.reason)
     return await _touch(session, run)

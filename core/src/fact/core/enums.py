@@ -17,7 +17,7 @@ class RunOutcome(StrEnum):
     CLOSED = "closed"
     ABANDONED = "abandoned"
     FAILED = "failed"
-    DROPPED = "dropped"  # a person dropped the run (`fact drop`), or rejected its plan at the `approve_plan` gate
+    STOPPED = "stopped"  # a person stopped the run (`fact stop`), or rejected its plan at the `approve_plan` gate
 
 
 class RunTrigger(StrEnum):
@@ -47,7 +47,7 @@ class StepOutcome(StrEnum):
     NEEDS_HUMAN = "needs_human"
     OVER_BUDGET = "over_budget"
     STOPPED_BY_MONITOR = "stopped_by_monitor"
-    DROPPED = "dropped"
+    STOPPED = "stopped"
     RATE_LIMITED = "rate_limited"  # the agent hit the subscription usage limit; the workflow waits and resumes it
 
 

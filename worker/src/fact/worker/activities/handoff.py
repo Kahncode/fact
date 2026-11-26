@@ -1,5 +1,5 @@
 """
-`write_handoff`: store a dropped run's handoff note in the artifact store, through the API, as `handoff_key(run_id)`.
+`write_handoff`: store a stopped run's handoff note in the artifact store, through the API, as `handoff_key(run_id)`.
 
 Idempotent: the key is the run's, so the control queue's retry policy may write it again.
 """

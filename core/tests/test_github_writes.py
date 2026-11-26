@@ -112,8 +112,8 @@ async def test_merged_closes_as_completed_and_clears_running() -> None:
     assert github.labels == set()  # `fact:needs-human` was not there: its 404 is not an error
 
 
-@pytest.mark.parametrize("event", ["closed", "dropped"])
-async def test_closed_or_dropped_clears_running_and_comments(event: TaskEvent) -> None:
+@pytest.mark.parametrize("event", ["closed", "stopped"])
+async def test_closed_or_stopped_clears_running_and_comments(event: TaskEvent) -> None:
     github = FakeGitHub(labels={RUNNING, NEEDS_HUMAN})
     writes = await _report(github, event, detail="no longer wanted")
     assert github.labels == set()
