@@ -35,12 +35,15 @@ RECORD_GATE_ANSWERED = "record_gate_answered"
 NOTIFY = "notify"
 WRITE_HANDOFF = "write_handoff"
 REPORT_STATUS = "report_status"
+CLASSIFY_SIGNALS = "classify_signals"
 
 Check = Literal["lint", "test", "build", "setup"]
 # a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
 TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "stopped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 MergeMethod = Literal["squash", "merge", "rebase"]
+# a reason to want a person's review that `classify_signals` finds with no LLM (`06-workflow-authoring.md`, Classify)
+SignalName = Literal["schema_change", "api_change", "api_breaking", "always_review", "task_closed"]
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
@@ -235,3 +238,24 @@ class ReportStatusInput(_Input):
     run_url: str = ""
     detail: str = ""  # what a gate needs from a person, or why the run ended
     prs: list[PRRef] = Field(default_factory=list)  # for `prs_opened`
+
+
+class ClassifySignalsInput(_Input):
+    """The change set to classify: each repository's branch against the merge base with its default branch."""
+
+    run_id: str
+    project: str  # the project whose `.fact/project.yaml` (in its registered checkout) holds the globs and source
+    task_key: str
+    handle: WorkspaceHandle
+
+
+class ChangedPath(_Input):
+    repo: str  # full name, a key of the workspace's repositories
+    path: str  # relative to the repository, with `/`
+
+
+class ClassifySignal(_Input):
+    """A signal `classify_signals` raised, with the changed paths that raised it (none for `task_closed`)."""
+
+    name: SignalName
+    paths: list[ChangedPath] = Field(default_factory=list)

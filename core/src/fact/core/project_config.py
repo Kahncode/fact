@@ -61,6 +61,14 @@ class WorkflowsConfig(_Model):
         return self
 
 
+class ClassifyConfig(_Model):
+    """Path globs (repository-relative, `**` spans folders) whose change raises a classify signal with no LLM."""
+
+    schema_paths: list[str] = []  # database schema: migrations, models
+    api_paths: list[str] = []  # the published API surface, such as an OpenAPI snapshot
+    always_review_paths: list[str] = []  # never merged without a person, such as `.fact/**` and `.github/**`
+
+
 class ProjectConfig(_Model):
     name: str
     repositories: list[RepositoryConfig] = Field(min_length=1)
@@ -70,6 +78,9 @@ class ProjectConfig(_Model):
     merge_policy: Literal["human"] = "human"
     require_plan_approval: bool = True
     workflows: WorkflowsConfig
+    classify: ClassifyConfig = ClassifyConfig()
+    auto_merge: bool = True  # merge a change set classified `auto_merge` once CI is green
+    merge_method: Literal["squash", "merge", "rebase"] = "squash"
 
 
 class RepoConfig(_Model):

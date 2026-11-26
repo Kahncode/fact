@@ -13,3 +13,5 @@
 *.jpeg filter=lfs diff=lfs merge=lfs -text
 *.gif filter=lfs diff=lfs merge=lfs -text
 *.webp filter=lfs diff=lfs merge=lfs -text
+# Generated snapshot: LF on every platform so the script regenerates it byte for byte
+api/openapi.json text eol=lf
