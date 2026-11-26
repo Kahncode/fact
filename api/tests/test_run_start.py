@@ -206,8 +206,6 @@ async def test_start_runs_the_project_workflow(app: FastAPI, client: AsyncClient
         started = first.json()
         forced = await _start(client, task_key="task:M1-03", override_deps=True)
         assert forced.status_code == HTTPStatus.CREATED, forced.text
-        again = await _start(client, task_key="task:M1-02")
-        assert again.json()["workflow_id"] == "run-task-M1-02-2"
         got: RunInput = await env.client.get_workflow_handle(started["workflow_id"], result_type=RunInput).result()
 
     assert started["workflow_id"] == "run-task-M1-02-1"
@@ -224,6 +222,35 @@ async def test_start_runs_the_project_workflow(app: FastAPI, client: AsyncClient
     assert (run["status"], run["workflow_id"], run["task_key"]) == ("queued", "run-task-M1-02-1", "task:M1-02")
 
 
+async def _finish(client: AsyncClient, run_id: str, outcome: str = "merged") -> None:
+    update = {"status": "finished", "outcome": outcome, "started_at": "2026-11-01T00:00:00Z"}
+    assert (await client.patch(f"/api/v1/runs/{run_id}", json=update)).status_code == HTTPStatus.OK
+
+
+async def test_start_refused_while_the_task_has_an_active_run(app: FastAPI, client: AsyncClient) -> None:
+    app.state.temporal = _Connection(_FailingClient())  # type: ignore[arg-type]
+    first = (await _start(client, task_key="task:M1-02")).json()
+    for state in ("queued", "running", "waiting"):
+        await client.patch(f"/api/v1/runs/{first['run_id']}", json={"status": state})
+        again = await _start(client, task_key="task:M1-02")
+        assert again.status_code == HTTPStatus.CONFLICT, again.text
+        assert first["run_id"] in again.json()["detail"]
+    assert len((await client.get("/api/v1/runs")).json()) == 1
+
+
+async def test_start_after_every_earlier_run_ended(app: FastAPI, client: AsyncClient) -> None:
+    fake = _FailingClient(RPCError("down", RPCStatusCode.UNAVAILABLE, b""))
+    app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
+    assert (await _start(client, task_key="task:M1-02")).status_code == HTTPStatus.BAD_GATEWAY  # failed start
+    first = (await _start(client, task_key="task:M1-02")).json()
+    await _finish(client, first["run_id"], "failed")
+    second = (await _start(client, task_key="task:M1-02")).json()
+    await _finish(client, second["run_id"])
+    again = await _start(client, task_key="task:M1-02")
+    assert again.status_code == HTTPStatus.CREATED, again.text
+    assert again.json()["workflow_id"] == "run-task-M1-02-4"
+
+
 async def test_scheduler_start_refused_once_the_task_has_a_run(app: FastAPI, client: AsyncClient) -> None:
     fake = _FailingClient(RPCError("down", RPCStatusCode.UNAVAILABLE, b""))
     app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
@@ -232,6 +259,11 @@ async def test_scheduler_start_refused_once_the_task_has_a_run(app: FastAPI, cli
     assert started.status_code == HTTPStatus.CREATED, started.text
     again = await _start(client, task_key="task:M1-02", scheduled=True)
     assert again.status_code == HTTPStatus.CONFLICT, again.text
+    active = await _start(client, task_key="task:M1-02")
+    assert active.status_code == HTTPStatus.CONFLICT, active.text  # not even by hand while the run is active
+    await _finish(client, started.json()["run_id"])
+    again = await _start(client, task_key="task:M1-02", scheduled=True)
+    assert again.status_code == HTTPStatus.CONFLICT, again.text  # the scheduler never restarts an ended run
     by_hand = await _start(client, task_key="task:M1-02")
     assert by_hand.status_code == HTTPStatus.CREATED  # `fact run` still can
     runs = {r["id"]: r["trigger"] for r in (await client.get("/api/v1/runs")).json()}

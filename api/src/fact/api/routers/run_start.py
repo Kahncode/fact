@@ -6,6 +6,7 @@ from fact.api.deps import get_artifacts, get_session
 from fact.api.run_start import (
     FoundTask,
     StartError,
+    active_run_id,
     find_task,
     latest_handoff,
     next_run_number,
@@ -130,6 +131,9 @@ async def start_run(body: RunStart, request: Request, session: Session, store: S
     wf_type = workflow_type(found)
     if body.scheduled and (refusal := await scheduler_refusal(session, settings, found)):
         raise HTTPException(status.HTTP_409_CONFLICT, refusal)
+    if active := await active_run_id(session, found.ref.name, found.check.task.key):
+        detail = f"{found.check.task.key} already has an active run: {active} (stop it first with `fact stop`)"
+        raise HTTPException(status.HTTP_409_CONFLICT, detail)
     trigger = RunTrigger.SCHEDULER if body.scheduled else RunTrigger.MANUAL
     for _ in range(RESERVE_ATTEMPTS):
         run = await _reserve(session, found, wf_type, trigger)
