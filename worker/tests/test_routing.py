@@ -30,9 +30,9 @@ def shipped(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
 
 
 @pytest.mark.usefixtures("shipped")
-def test_shipped_table_routes_complex_implement_to_opus() -> None:
+def test_shipped_table_routes_every_step_to_opus() -> None:
     assert choose("complex", "implement") == Route(harness="claude-code", model="opus")
-    assert choose("standard", "implement") == Route(harness="claude-code", model="sonnet")
+    assert choose("standard", "implement") == Route(harness="claude-code", model="opus")
     assert choose("trivial", "review").model == "opus"
 
 

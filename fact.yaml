@@ -37,7 +37,7 @@ projects:
 routing:
   default:
     harness: claude-code
-    model: sonnet
+    model: opus # temporarily opus for every step; set back to sonnet to restore the rules below
   rules:
     complex.implement:
       model: opus
