@@ -190,7 +190,7 @@ Single-context, with `docs/spec/05-domain-model.md` as the glossary and the deci
 
 ### 3. Git workflow
 
-Branch first, before editing any files (planning sessions that only edit docs follow `docs/agents/domain.md` instead: stay on the current branch unless it is `main`):
+Branch first, before editing any files (planning sessions that only edit docs follow `docs/agents/domain.md` instead: they commit on the `planning` branch, rebase on `origin/main` and push straight to `main`):
 
 ```bash
 git checkout -b feat/<task-name>
@@ -216,6 +216,7 @@ All three must pass. Then update the context: this file, `docs/spec/` and the pa
 ### ALWAYS DO
 
 - Read `docs/spec/README.md` first and only the sections your task points to.
+- Treat `docs/spec/` as the target application, not the code today: parts of it may not be built yet, and the code is the truth for what exists. Your issue may have been written before the spec was last updated; where they disagree, follow the spec for the design and the issue for what to build in this task. Never build spec beyond your task's scope, and never change the spec to match the code.
 - Keep `docs/spec/` and package READMEs in sync with significant changes.
 - Ask before refactoring more than 50 lines at once.
 - Run ruff, black and pytest before committing.

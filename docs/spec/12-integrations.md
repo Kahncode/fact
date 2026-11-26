@@ -37,6 +37,9 @@ The issue tracker is where work starts and where its status is reported; GitHub 
 | fact | `fact:running` | The factory (retired, see Status) | A run is in progress |
 | Type | `type:incident`, `type:bug`, `type:feature`, `type:chore`, `type:epic` | You or the planner | Picks the workflow in triage; one per issue. `type:epic` is a parent with no work of its own, closed when its sub-issues are |
 | Complexity | `complexity:trivial`, `complexity:standard`, `complexity:complex` | You or the planner | How large or risky the change is; the default is standard |
+| Priority | `priority:urgent`, `priority:high`, `priority:medium`, `priority:low` | You or the planner | Orders ready tasks within a project (see `08-planning.md`); the default is medium |
+
+Linear has native priority (Urgent, High, Medium, Low, or No priority, which counts as medium) and fact reads that instead of a label. GitHub's native Priority issue field and native issue types (both org-oriented; `Kahncode/fact` is a personal repository) are not read for now; mapping them (Priority field values one to one, Bug→`bug`, Feature→`feature`, Task→`chore`) is a later option, listed in `16-decisions.md`.
 
 `uv run fact github labels sync <owner/repo>` creates these labels on a repository (and fixes colour, description and case of existing ones; it never deletes labels).
 

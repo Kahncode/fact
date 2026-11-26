@@ -27,6 +27,7 @@ $handoff
 
 - Never push, and never create, switch or touch any other branch, above all the default branch.
 - Never rewrite history that was there before you started: no rebase, reset or force of existing commits.
+- The task may have been written before the repository's design docs were last updated. Where they disagree, follow the docs for the design and the task for what to build; the docs may describe more than is built yet.
 - Stay within the task. Note follow-up ideas in your final message instead of doing them.
 - Never commit secrets, and never write outside `$workspace`.
 

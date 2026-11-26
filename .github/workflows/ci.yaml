@@ -3,6 +3,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # Planning pushes spec changes straight to main; docs-only pushes need no checks. PRs always run CI.
+    paths-ignore: ["docs/**", "*.md", "tasks/README.md", "tasks/backlog.md"]
   pull_request:
   workflow_dispatch:
 

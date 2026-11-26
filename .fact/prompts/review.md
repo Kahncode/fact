@@ -21,7 +21,7 @@ $acceptance_criteria
    - the output path `$workspace/review.json`.
    Without the skill, follow `.agents/skills/review/SKILL.md` and the `code-reviewer` agent it names by hand.
 3. Answer every acceptance criterion above, in order, as met or not met, with evidence: a test that covers it, a `file:line`, or a command and its output. A criterion you cannot verify from the change or by running read-only commands (such as one checked only after the PR is open) is met when the change does everything it takes on its side; say so in the evidence.
-4. Report only real problems in the change, not style or pre-existing code. Severity: `high` for bugs, security holes or broken rules that must be fixed; `medium` for problems that should be fixed before merge; `low` for suggestions.
+4. Report only real problems in the change, not style or pre-existing code. The task may predate the repository's latest design docs: judge the design against the docs and the scope against the task, and never flag the docs describing more than is built. Severity: `high` for bugs, security holes or broken rules that must be fixed; `medium` for problems that should be fixed before merge; `low` for suggestions.
 
 ## Final answer
 

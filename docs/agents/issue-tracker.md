@@ -33,7 +33,7 @@ fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.y
 
 Where a skill's instructions differ from this file, this file wins.
 
-- **`/grill-with-docs`**: write decisions into `docs/spec/` as they are made (`docs/agents/domain.md`), never into `GLOSSARY.md`, `docs/adr/` or `docs/decisions*.md`. Commit the spec changes before `/to-tickets`, so `## Read first` can point at the updated sections.
+- **`/grill-with-docs`**: write decisions into `docs/spec/` as they are made (`docs/agents/domain.md`), never into `GLOSSARY.md`, `docs/adr/` or `docs/decisions*.md`. Push the spec changes to `main` (`docs/agents/domain.md`, Planning goes straight to `main`) before creating any issue, so `## Read first` points at sections that exist and no run starts without them.
 - **`/to-spec`**: publish one parent issue labelled `fact:planned`, never `fact:ready` (ignore the skill's `ready-for-agent`), and `type:epic` unless the parent has work of its own after its sub-issues (then give it `## Acceptance criteria` and its real type). Point at the `docs/spec/` sections it relies on. Skip `/to-spec` for work that fits in one leaf issue.
 - **`/to-tickets`**: pass the parent issue number; every ticket becomes its sub-issue. Write each ticket with this file's body sections (`## Goal`, `## Read first`, `## Do`, `## Out of scope`, `## Acceptance criteria`), not the skill's template, and do list exact files and spec sections in `## Read first`. Label each ticket `fact:ready` plus its `type:*` and `complexity:*`, and add blocked-by links between tickets in dependency order.
 - **`/implement` and `/implement-spec`**: not used for fact's own issues; the factory runs them.

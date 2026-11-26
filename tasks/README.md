@@ -25,6 +25,7 @@ id: M0-03                  # <milestone>-<NN>, unique, never reused
 title: Settings and fact.yaml loading
 type: feature              # feature | chore | bug
 complexity: standard       # trivial | standard | complex
+priority: medium           # urgent | high | medium | low (optional, default medium; any other value fails validation)
 status: planned            # planned | ready | done
 depends_on: [M0-01]        # ids that must be done before this starts
 human_actions: []          # things only a person can do, before or during the task

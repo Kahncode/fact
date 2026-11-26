@@ -40,6 +40,7 @@
 - **Who started a run (26 Nov 2026):** each run records `started_by`: a person or the scheduler (later a `@fact` comment). Notifications go to the whole project for now; later to the person who started the run or is assigned.
 - **Assets in git LFS:** images and other binary assets are stored with git LFS (`.gitattributes`); the logo lives in `web/public/brand/`.
 - **M4 UI (26 Nov 2026):** no auth in M4; dark mode waits for user accounts (it is a user preference); TypeScript strict everywhere, API types generated from FastAPI's OpenAPI; every notification also fires a desktop notification; `fact dev` always starts Vite, and `fact use` builds the UI for a pinned factory. Details in `11-ui-and-notifications.md`.
+- **Task priority (26 Nov 2026):** four levels, `urgent`, `high`, `medium`, `low`; none means `medium`. On GitHub a `priority:*` label, in a task file a `priority:` field, on Linear its native priority. The scheduler orders each project's ready tasks by effective priority (inherited from the tasks they block), then dependency depth, then id. Projects are ordered independently: they will run on separate runner pools and do not compete; until then the shared `concurrency.max_runs` goes round-robin across projects, and inheritance stays within a project. Several `priority:*` labels: the highest wins. The planner asks for a priority and suggests one. Order only: no preemption, no exception to caps or the usage reserve; `fact run` starts anything by hand. No priority defaults by type. Details in `08-planning.md`.
 - **Human actions:** fact needs a way to request and track actions only a person can do, such as downloading the GitHub App private key. In the backlog.
 
 **Still open**
@@ -47,3 +48,4 @@
 - [x] Python version, resolved 24 Nov 2026
 
   fact targets Python 3.15 (final since 9 Oct 2026). temporalio 1.36.1, claude-agent-sdk 0.2.188 and every core dependency install from binary wheels on it; the template moves to 3.15 too.
+- [ ] GitHub native issue metadata: read the Priority issue field (GA July 2026) and native issue types when a repository has them, with the field or type winning over the `priority:*` / `type:*` label. Both are aimed at organisations; revisit when fact serves an organisation repository.
