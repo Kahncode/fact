@@ -11,6 +11,7 @@ from fact.core.activity_contract import (
     AGENT_STEP,
     CONTROL_QUEUE,
     MARK_TASK_DONE,
+    NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
@@ -26,6 +27,7 @@ from fact.core.activity_contract import (
     GateAnsweredInput,
     GateOpenedInput,
     MarkTaskDoneInput,
+    NotifyInput,
     OpenChangeSetInput,
     PostCostCommentInput,
     RunFinishedInput,
@@ -131,6 +133,11 @@ class FakeActivities:
     async def record_gate_answered(self, spec: GateAnsweredInput) -> None:
         self._call(RECORD_GATE_ANSWERED, spec)
 
+    @activity.defn(name=NOTIFY)
+    async def notify(self, spec: NotifyInput) -> int:
+        self._call(NOTIFY, spec)
+        return len(self.of(NOTIFY))
+
     @activity.defn(name=PREPARE_WORKSPACE)
     async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
         self._call(PREPARE_WORKSPACE, spec)
@@ -225,6 +232,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.wait_for_ci,
         fakes.record_gate_opened,
         fakes.record_gate_answered,
+        fakes.notify,
     ]
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(

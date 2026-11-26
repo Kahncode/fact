@@ -8,7 +8,7 @@ under these names and takes these inputs. Everything here crosses the Temporal b
 from datetime import datetime
 from typing import Any, Literal
 
-from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import Complexity, PRRef, RouteOverride, Task, WorkspaceHandle
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,6 +29,7 @@ RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 RECORD_GATE_OPENED = "record_gate_opened"
 RECORD_GATE_ANSWERED = "record_gate_answered"
+NOTIFY = "notify"
 
 Check = Literal["lint", "test", "build", "setup"]
 
@@ -161,3 +162,14 @@ class GateAnsweredInput(_Input):
     opened_at: datetime
     answered_at: datetime
     wait_seconds: float  # human wait time: all of the step's wall time
+
+
+class NotifyInput(_Input):
+    """A notification for a person; a second one with the same `dedupe_key` is the same notification."""
+
+    run_id: str
+    kind: NotificationKind
+    title: str = Field(max_length=300)
+    body: str = ""
+    link: str | None = None
+    dedupe_key: str = Field(max_length=300)  # such as `<run id>:gate:<gate id>`: one per run state

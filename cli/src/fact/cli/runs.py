@@ -23,7 +23,7 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(1)
 
 
-def _call(method: str, path: str, **kwargs: Any) -> Any:  # noqa: ANN401
+def call_api(method: str, path: str, **kwargs: Any) -> Any:  # noqa: ANN401
     """Call the API and return its JSON; HTTP errors come back as `httpx.HTTPStatusError` for the caller to read."""
     with projects.make_client() as client:
         try:
@@ -46,7 +46,7 @@ def _detail(e: httpx.HTTPStatusError) -> Any:  # noqa: ANN401
         return e.response.text
 
 
-def _api_error(e: httpx.HTTPStatusError) -> typer.Exit:
+def api_error(e: httpx.HTTPStatusError) -> typer.Exit:
     return _fail(f"API answered {e.response.status_code}: {_detail(e)}")
 
 
@@ -61,14 +61,14 @@ def run(
     """Start the project's workflow for a task."""
     body = {"task_key": task_key, "project": project, "override_deps": force_deps}
     try:
-        started = _call("POST", f"{API}/runs/start", json=body)
+        started = call_api("POST", f"{API}/runs/start", json=body)
     except httpx.HTTPStatusError as e:
         detail = _detail(e)
         if e.response.status_code == HTTP_CONFLICT and isinstance(detail, dict) and "missing_deps" in detail:
             missing = ", ".join(detail["missing_deps"])
             msg = f"{task_key} has unfinished dependencies: {missing}. Use --force-deps to start anyway."
             raise _fail(msg) from e
-        raise _api_error(e) from e
+        raise api_error(e) from e
     typer.echo(f"Started {started['workflow_id']} ({started['workflow_type']}, project {started['project']})")
     typer.echo(f"Run:      {started['run_id']}")
     typer.echo(f"Temporal: {started['temporal_url']}")
@@ -86,9 +86,9 @@ def list_runs(
     """List runs, newest first."""
     params = {k: v for k, v in {"project": project, "status": status}.items() if v is not None}
     try:
-        runs = _call("GET", f"{API}/runs", params=params)
+        runs = call_api("GET", f"{API}/runs", params=params)
     except httpx.HTTPStatusError as e:
-        raise _api_error(e) from e
+        raise api_error(e) from e
     if not runs:
         typer.echo("No runs.")
         return
@@ -109,12 +109,12 @@ def _duration(start: str | None, end: str | None) -> str:
 
 def _find_run(ref: str) -> dict[str, Any]:
     if ref.startswith(WORKFLOW_ID_PREFIX):
-        matches = _call("GET", f"{API}/runs", params={"workflow_id": ref})
+        matches = call_api("GET", f"{API}/runs", params={"workflow_id": ref})
         if not matches:
             msg = f"no run with workflow id {ref}"
             raise _fail(msg)
         ref = matches[0]["id"]
-    return _call("GET", f"{API}/runs/{quote(ref, safe='')}")
+    return call_api("GET", f"{API}/runs/{quote(ref, safe='')}")
 
 
 def _links(step: dict[str, Any], base: str) -> str:
@@ -127,7 +127,7 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     try:
         run_detail = _find_run(run_ref)
     except httpx.HTTPStatusError as e:
-        raise _api_error(e) from e
+        raise api_error(e) from e
     r = run_detail
     typer.echo(f"{r['workflow_id']}  {r['task_key']}  ({r['workflow_type']})")
     typer.echo(f"Run:      {r['id']}")
@@ -158,7 +158,7 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
 
 
 def _live(run_id: str) -> dict[str, Any]:
-    return _call("GET", f"{API}/runs/{quote(run_id, safe='')}/status")
+    return call_api("GET", f"{API}/runs/{quote(run_id, safe='')}/status")
 
 
 def _gate_line(run_id: str) -> str:
@@ -193,9 +193,9 @@ def gate(
                 raise _fail(msg)
             gate_id = str(open_gate["gate_id"])
         path = f"{API}/runs/{quote(run_id, safe='')}/gates/{quote(gate_id, safe='')}"
-        _call("POST", path, json={"decision": decision.value, "note": note})
+        call_api("POST", path, json={"decision": decision.value, "note": note})
     except httpx.HTTPStatusError as e:
-        raise _api_error(e) from e
+        raise api_error(e) from e
     typer.echo(f"Answered gate {gate_id} of {run_ref}: {decision.value}")
 
 
@@ -206,7 +206,7 @@ def steer(
     """Add instructions to a run's next agent session; a running session is not interrupted."""
     try:
         run_id = _find_run(run_ref)["id"]
-        _call("POST", f"{API}/runs/{quote(run_id, safe='')}/instructions", json={"text": text})
+        call_api("POST", f"{API}/runs/{quote(run_id, safe='')}/instructions", json={"text": text})
     except httpx.HTTPStatusError as e:
-        raise _api_error(e) from e
+        raise api_error(e) from e
     typer.echo(f"Queued instructions for {run_ref}'s next agent session.")

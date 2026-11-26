@@ -1,5 +1,5 @@
 """
-ORM models: projects, repositories, runs, steps, events.
+ORM models: projects, repositories, runs, steps, events, notifications.
 
 Only Postgres-compatible column types. Enum values are stored as plain strings (see `fact.core.enums`).
 """
@@ -108,3 +108,19 @@ class Event(Base):
     type: Mapped[str] = mapped_column(String(50))
     at: Mapped[datetime] = _ts(nullable=False, default_now=True)
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
+class Notification(Base):
+    """Something a person should look at: a run waiting at a gate, PRs ready, a run that ended badly."""
+
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[str | None] = mapped_column(ForeignKey("runs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(30))
+    title: Mapped[str] = mapped_column(String(300))
+    body: Mapped[str] = mapped_column(Text, default="")
+    link: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _ts(nullable=False, default_now=True)
+    read_at: Mapped[datetime | None] = _ts()
+    dedupe_key: Mapped[str] = mapped_column(String(300), unique=True)  # one notification per run state

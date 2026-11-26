@@ -12,7 +12,7 @@ Plain SQLAlchemy 2 async ORM on SQLite (aiosqlite). `fact.core.db` has `Base` (c
 
 ### Models
 
-`fact.core.models` has `Project`, `Repository`, `Run`, `Step` and `Event`; `fact.core.enums` has the `StrEnum`s (`RunStatus`, `RunOutcome`, `StepKind`, `StepStatus`, `StepOutcome`), stored as plain strings with no DB check. Only Postgres-compatible types are used (`String`, `Text`, `Integer`, `Float`, `Numeric(12, 6)` for USD, `DateTime(timezone=True)`, `JSON`). SQLite returns naive datetimes; treat them as UTC. New models must be imported in `migrations/env.py` (via `fact.core.models`) so autogenerate sees them.
+`fact.core.models` has `Project`, `Repository`, `Run`, `Step`, `Event` and `Notification` (a run's `gate_waiting`, `prs_ready`, `run_failed` or `run_finished` message for a person; `run_id` nullable, `read_at` set once read, `dedupe_key` unique so one notification exists per run state); `fact.core.enums` has the `StrEnum`s (`RunStatus`, `RunOutcome`, `StepKind`, `StepStatus`, `StepOutcome`, `NotificationKind`), stored as plain strings with no DB check. Only Postgres-compatible types are used (`String`, `Text`, `Integer`, `Float`, `Numeric(12, 6)` for USD, `DateTime(timezone=True)`, `JSON`). SQLite returns naive datetimes; treat them as UTC. New models must be imported in `migrations/env.py` (via `fact.core.models`) so autogenerate sees them.
 
 ### Migrations
 
@@ -40,7 +40,7 @@ In code: `fact.core.migrate.upgrade(url)`. It is synchronous (the async `env.py`
 
 ## Activity contract
 
-`fact.core.activity_contract` is the contract between workflow code (`fact.sdk`) and the worker: the task queues (`CONTROL_QUEUE`, `SANDBOX_QUEUE`), activity names (`prepare_workspace`, `teardown_workspace`, `agent_step`, `shell_step`, `open_change_set`, `mark_task_done`, `record_run_started`, `record_run_finished`, `record_gate_opened`, `record_gate_answered`, among others), the `Check` literal and the frozen input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `OpenChangeSetInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`, `GateOpenedInput`, `GateAnsweredInput`). Workflows call activities by these names, so `fact.sdk` never imports `fact.worker`.
+`fact.core.activity_contract` is the contract between workflow code (`fact.sdk`) and the worker: the task queues (`CONTROL_QUEUE`, `SANDBOX_QUEUE`), activity names (`prepare_workspace`, `teardown_workspace`, `agent_step`, `shell_step`, `open_change_set`, `mark_task_done`, `record_run_started`, `record_run_finished`, `record_gate_opened`, `record_gate_answered`, `notify`, among others), the `Check` literal and the frozen input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `OpenChangeSetInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`, `GateOpenedInput`, `GateAnsweredInput`, `NotifyInput`). Workflows call activities by these names, so `fact.sdk` never imports `fact.worker`.
 
 ## Gates, status and steering
 

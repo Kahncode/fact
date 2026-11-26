@@ -17,10 +17,13 @@ run `needs_human`, with no PR for the checks and with the PR open for CI. An age
 run `failed`. A `learn` session that does not pass, or whose activity fails, is the exception: its docs are not worth
 losing the change over, so the PR still opens with the implement session's title and summary (else the task's
 conventional title).
+
+A person is notified when a gate opens, when the PRs are ready (CI green), and when the run ends `failed` or
+`needs_human`.
 """
 
 from temporalio import workflow
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.sdk.review import Review, parse_review, review_context
@@ -76,7 +79,14 @@ class Standard(FactWorkflow):
 
     @workflow.run
     async def run(self, run_input: RunInput) -> RunResult:
-        return await self.execute(run_input, self._steps)
+        try:
+            result = await self.execute(run_input, self._steps)
+        except FailureError as exc:
+            summary = limit_text(f"the run failed: {exc.cause or exc}", SUMMARY_BYTES)
+            await self.notify_run_end(RunResult(outcome=RunOutcome.FAILED, prs=self.prs, summary=summary))
+            raise
+        await self.notify_run_end(result)
+        return result
 
     async def _steps(self) -> RunResult:
         await self.prepare()

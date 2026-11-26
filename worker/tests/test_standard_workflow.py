@@ -7,6 +7,7 @@ from fact.core.activity_contract import (
     AGENT_INTERRUPTED,
     AGENT_STEP,
     MARK_TASK_DONE,
+    NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
@@ -63,6 +64,7 @@ async def test_green_path() -> None:
         POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         TEARDOWN_WORKSPACE,
+        NOTIFY,
     ]
     assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [

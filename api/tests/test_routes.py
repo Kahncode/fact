@@ -42,6 +42,18 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
     ],
     ("/api/v1/artifacts/{key:path}", "PUT"): ["test_artifacts.test_upload_download"],
     ("/api/v1/artifacts/{key:path}", "GET"): ["test_artifacts.test_upload_download"],
+    ("/api/v1/notifications", "POST"): [
+        "test_notifications.test_same_dedupe_key_is_one_notification",
+        "test_notifications.test_notification_errors",
+    ],
+    ("/api/v1/notifications", "GET"): [
+        "test_notifications.test_same_dedupe_key_is_one_notification",
+        "test_notifications.test_unread_filter_newest_first_and_mark_read",
+    ],
+    ("/api/v1/notifications/{notification_id}/read", "POST"): [
+        "test_notifications.test_unread_filter_newest_first_and_mark_read",
+        "test_notifications.test_notification_errors",
+    ],
 }
 
 

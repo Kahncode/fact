@@ -1,9 +1,9 @@
 """
-The person in the loop: gates (an update), the status query and steering (a signal), as a mixin of `FactWorkflow`.
+The person in the loop as a mixin of `FactWorkflow`: gates (an update), status (a query), steering, notifications.
 
 A gate waits on workflow state only, with no timer and no activity, so it costs nothing however long it stays open
 and survives worker restarts. Its step (kind `gate`) is recorded through control activities, best effort: an API
-outage must not lose a person's answer.
+outage must not lose a person's answer. Opening a gate also creates a `gate_waiting` notification, once per gate.
 
 `HumanSteps` uses the workflow's `input`, `next_attempt` and `_control`; `FactWorkflow` calls its `__init__`.
 """
@@ -15,12 +15,14 @@ from temporalio.exceptions import ActivityError, ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
+        NOTIFY,
         RECORD_GATE_ANSWERED,
         RECORD_GATE_OPENED,
         GateAnsweredInput,
         GateOpenedInput,
+        NotifyInput,
     )
-    from fact.core.enums import StepOutcome
+    from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
     from fact.core.gates import (
         ANSWER_GATE,
         STATUS,
@@ -32,11 +34,15 @@ with workflow.unsafe.imports_passed_through():
         StageOutcome,
         WorkflowStatus,
     )
+    from fact.core.types import RunResult
 
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
 
 STEERING_HEADING = "## Additional instructions"
+TITLE_MAX_CHARS = 300
+KEY_MAX_CHARS = 300  # `NotifyInput` refuses longer: a ValidationError would fail the workflow task
+BAD_ENDS = frozenset({RunOutcome.FAILED, RunOutcome.NEEDS_HUMAN})
 
 
 class HumanSteps:
@@ -68,12 +74,54 @@ class HumanSteps:
         self._open_gates[gate_id] = gate
         workflow.logger.info("gate %s (%s) is open", gate_id, kind)
         step_id = await self._record_gate(RECORD_GATE_OPENED, self._opened_input(gate), str)
+        await self._notify_gate(gate)
         await workflow.wait_condition(lambda: gate_id in self._answers)
         answer = self._answers[gate_id]
         outcome = StepOutcome.PASSED if answer.decision == GateDecision.APPROVE else StepOutcome.NEEDS_HUMAN
         self.note_outcome(gate.stage_id, gate.attempt, outcome)
         await self._record_gate(RECORD_GATE_ANSWERED, self._answered_input(gate, answer, step_id, outcome), type(None))
         return answer
+
+    async def notify(
+        self: FactWorkflow, kind: NotificationKind, title: str, body: str = "", link: str | None = None, key: str = ""
+    ) -> None:
+        """
+        Tell a person through a notification, best effort: a failed one is logged, and the run goes on.
+
+        One notification per run and `key` (`kind` if empty): calling again with the same one changes nothing.
+        """
+        run_id = self.input.run_id
+        spec = NotifyInput(
+            run_id=run_id,
+            kind=kind,
+            title=title[:TITLE_MAX_CHARS],
+            body=body,
+            link=link or self.input.run_url or None,
+            dedupe_key=f"{run_id}:{key or kind}"[:KEY_MAX_CHARS],
+        )
+        try:
+            await self._control(NOTIFY, spec, int)
+        except ActivityError as exc:
+            workflow.logger.warning("notify failed for %s: %s", spec.dedupe_key, exc.cause or exc)
+
+    async def notify_run_end(self: FactWorkflow, result: RunResult) -> None:
+        """Notify how the run ended: `prs_ready` with PRs open, `run_failed` if it failed or needs a person."""
+        key = self.input.task.key
+        link = result.prs[0].url if result.prs else None
+        if result.outcome == RunOutcome.PR_OPENED:
+            kind, title = NotificationKind.PRS_READY, f"{key}: {len(result.prs) or 'no'} PR(s) ready for review"
+        elif result.outcome in BAD_ENDS:
+            kind, title = NotificationKind.RUN_FAILED, f"{key} ended {result.outcome}"
+        else:
+            kind, title = NotificationKind.RUN_FINISHED, f"{key} ended {result.outcome}"
+        await self.notify(kind, title, result.summary, link)
+
+    async def _notify_gate(self: FactWorkflow, gate: OpenGate) -> None:
+        summary = str(gate.details.get("summary", ""))
+        answer = f"Answer with `fact gate {self.input.run_id} approve|reject`."
+        body = f"{summary}\n\n{answer}" if summary else answer
+        title = f"{self.input.task.key} waits for you at gate {gate.gate_id} ({gate.kind})"
+        await self.notify(NotificationKind.GATE_WAITING, title, body, key=f"gate:{gate.gate_id}")
 
     @workflow.update(name=ANSWER_GATE)
     def answer_gate(self, answer: GateAnswer) -> None:

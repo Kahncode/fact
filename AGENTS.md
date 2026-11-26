@@ -84,6 +84,8 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Show a run and its steps | `uv run fact status <run id or workflow id>`   |
 | Answer a run's open gate | `uv run fact gate <run> approve\|reject` (`--note`, `--gate`) |
 | Send instructions to a run | `uv run fact steer <run> TEXT`               |
+| List unread notifications | `uv run fact inbox` (`--all` includes read)   |
+| Mark a notification read | `uv run fact inbox read <id>`                  |
 | Check GitHub App access | `uv run fact github check <owner/repo>`         |
 | Create fact's labels on a repo | `uv run fact github labels sync <owner/repo>` |
 | Lint (autofix)          | `uv run ruff check . --fix`                     |

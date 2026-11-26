@@ -4,7 +4,7 @@ from importlib.metadata import version
 from typing import Annotated
 
 import typer
-from fact.cli import dev, github, projects, runs, use
+from fact.cli import dev, github, inbox, projects, runs, use
 
 app = typer.Typer(name="fact", no_args_is_help=True, help="fact: turn tasks into reviewed GitHub PRs.")
 app.command("dev")(dev.dev)
@@ -14,6 +14,7 @@ app.command("runs")(runs.list_runs)
 app.command("status")(runs.status)
 app.command("gate")(runs.gate)
 app.command("steer")(runs.steer)
+app.add_typer(inbox.app, name="inbox")
 app.add_typer(projects.app, name="projects")
 app.add_typer(github.app, name="github")
 

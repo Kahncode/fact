@@ -1,10 +1,15 @@
 """Shared fixtures for the CLI tests."""
 
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from fact.core.settings import CONFIG_VAR, Settings, get_settings, reset_settings
+
+# Test modules import shared helpers (such as `api_bridge`) by name; `--import-mode=importlib` adds no path.
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
 
 
 @pytest.fixture

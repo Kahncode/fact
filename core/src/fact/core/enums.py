@@ -42,3 +42,10 @@ class StepOutcome(StrEnum):
     OVER_BUDGET = "over_budget"
     STOPPED_BY_MONITOR = "stopped_by_monitor"
     DROPPED = "dropped"
+
+
+class NotificationKind(StrEnum):
+    GATE_WAITING = "gate_waiting"  # a run waits at a gate for a person's answer
+    PRS_READY = "prs_ready"  # a run's PRs are open and green, ready for review
+    RUN_FAILED = "run_failed"  # a run ended badly: failed, or gave up and needs a person
+    RUN_FINISHED = "run_finished"  # a run ended any other way worth telling a person about

@@ -2,7 +2,7 @@
 
 Temporal workers and activities: runners (where a run's sandbox lives) and harnesses (which coding agent runs in it).
 
-Task queue names, activity names and activity input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `CriterionResult`, `OpenChangeSetInput`, `PostCostCommentInput`, `WaitForCIInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`, `GateOpenedInput`, `GateAnsweredInput`) live in `fact.core.activity_contract`, so workflow code in `fact.sdk` never imports this package; the worker modules re-export the old names. `python -m fact.worker` registers `prepare_workspace`, `teardown_workspace`, `open_change_set`, `post_cost_comment`, `wait_for_ci`, the gate activities and the control activities below on the `control` queue, and `shell_step` and `agent_step` on `sandbox` (at most `concurrency.sandboxes` at once, via `max_concurrent_activities`). It also runs one workflow worker per registered project; see below.
+Task queue names, activity names and activity input models (`AgentStepInput`, `ShellStepInput`, `CheckResult`, `CriterionResult`, `OpenChangeSetInput`, `PostCostCommentInput`, `WaitForCIInput`, `MarkTaskDoneInput`, `RunStartedInput`, `RunFinishedInput`, `GateOpenedInput`, `GateAnsweredInput`, `NotifyInput`) live in `fact.core.activity_contract`, so workflow code in `fact.sdk` never imports this package; the worker modules re-export the old names. `python -m fact.worker` registers `prepare_workspace`, `teardown_workspace`, `open_change_set`, `post_cost_comment`, `wait_for_ci`, `notify`, the gate activities and the control activities below on the `control` queue, and `shell_step` and `agent_step` on `sandbox` (at most `concurrency.sandboxes` at once, via `max_concurrent_activities`). It also runs one workflow worker per registered project; see below.
 
 ## Workflow loading and versioning
 
@@ -106,7 +106,15 @@ A missing GitHub App, a refusal, and GitHub 401, 404 or 422 are non-retryable `A
 - `record_gate_opened(GateOpenedInput) -> str`: creates the gate's step (`POST /api/v1/runs/{id}/steps`, kind `gate`, the gate's stage and attempt, `queued_at` and `started_at` = `opened_at`, the workflow time), PATCHes it to `waiting` with `outputs` `gate_id`, `kind`, `details`, PATCHes the run to `waiting`, and returns the step id. On a 409 (a retry already created it) it finds the step by stage and attempt in `GET /runs/{id}`, so a retry is idempotent.
 - `record_gate_answered(GateAnsweredInput)`: PATCHes the step `finished` with `outcome` (`passed` for approve, `needs_human` for reject), `started_at`/`ended_at` (opened and answered, in workflow time), `wait_seconds` (the whole wall time, so the step's machine time is 0 and the run's `human_wait_seconds` gets it) and `outputs` plus `decision` and `note`; then the run back to `running`. With `step_id` None (the open was not recorded) it creates the step first.
 
-A 4xx is a non-retryable `ApplicationError`; a 5xx or network error is left to `INFRA_RETRY`. Answering a gate (the `answer_gate` update) is done by a client; the API and CLI for it are M2-02.
+A 4xx is a non-retryable `ApplicationError`; a 5xx or network error is left to `INFRA_RETRY`. Answering a gate (the `answer_gate` update) is done by a client: `POST /api/v1/runs/{id}/gates/{gate_id}` or `fact gate` (M2-02).
+
+## Notify activity
+
+`fact.worker.activities.notify.NotifyActivities(api_base_url, http_client)`, `control` queue (M2-03). Not reported as a step.
+
+- `notify(NotifyInput) -> int`: `POST /api/v1/notifications` with the run id, `kind`, `title`, `body`, `link` and `dedupe_key`, and returns the notification's id. The API keeps one notification per `dedupe_key` (200 with the existing one on a repeat), so a retry never duplicates it. A 4xx is a non-retryable `ApplicationError`; a 5xx or network error is left to the retry policy.
+
+`FactWorkflow.notify` (in `fact.sdk.human`) calls it best effort, with dedupe key `<run_id>:<key or kind>`: a failure only logs a warning. `FactWorkflow.gate` notifies `gate_waiting` once per gate; `Standard` calls `notify_run_end` when the run ends. `tests/test_standard_notify.py` covers `Standard`'s notifications against the fake activities.
 
 ## Workflow tests
 

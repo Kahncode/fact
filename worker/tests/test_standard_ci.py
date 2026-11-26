@@ -2,6 +2,7 @@
 
 from fact.core.activity_contract import (
     AGENT_STEP,
+    NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     RECORD_GATE_ANSWERED,
@@ -39,7 +40,7 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     assert [(w.attempt, w.pr.head_sha) for w in waits] == [(1, PR.head_sha), (2, "fix1")]  # CI on the new head
     assert result.prs == [PR.model_copy(update={"head_sha": "fix1"})]
     assert fakes.of(POST_COST_COMMENT)[-1].prs == result.prs
-    assert [n for n, _ in fakes.calls][-3:] == [POST_COST_COMMENT, "record_run_finished", TEARDOWN_WORKSPACE]
+    assert [n for n, _ in fakes.calls][-4:] == [POST_COST_COMMENT, "record_run_finished", TEARDOWN_WORKSPACE, NOTIFY]
 
 
 async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
