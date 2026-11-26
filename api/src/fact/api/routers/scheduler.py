@@ -67,7 +67,7 @@ async def _handle(request: Request) -> ScheduleHandle:
 async def ready(request: Request, session: Session) -> ReadyTasks:
     """Tasks the scheduler may start, read from each project's default branch, and the runs counted against the caps."""
     settings: Settings = request.app.state.settings
-    return await find_ready(settings, session)
+    return await find_ready(settings, session, close_epics=True)  # the tick: closes finished epics
 
 
 class ActiveRuns(BaseModel):

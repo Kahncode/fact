@@ -32,6 +32,7 @@ class Hold(StrEnum):
     """Why a ready task does not start on this tick."""
 
     DEPENDENCY = "dependency"  # a dependency is not done
+    PARENT = "parent"  # an ancestor (parent issue) is not marked ready: its label gates the task
     FAILURE_CAP = "failure_cap"  # its last `concurrency.max_failed_runs` runs failed: a person restarts it
     CAP = "cap"  # `concurrency.max_runs` or the project's `max_runs` is reached
     USAGE = "usage"  # a Claude usage window is inside its reserve
@@ -49,8 +50,9 @@ class ReadyTask(_Model):
     task_id: str
     depth: int = 0  # dependency depth among the project's task files: shallower tasks start first
     waiting_on: list[str] = Field(default_factory=list)  # dependencies not done yet
+    gated_by: str | None = None  # the nearest ancestor not marked ready
     failed_runs: int = 0  # failed runs in a row, counted since the last run a person started
-    hold: Hold | None = None  # DEPENDENCY or FAILURE_CAP, set by `find_ready_tasks`
+    hold: Hold | None = None  # PARENT, DEPENDENCY or FAILURE_CAP, set by `find_ready_tasks`
 
 
 class ProjectLoad(_Model):
@@ -125,6 +127,8 @@ def _order(task: ReadyTask) -> tuple[int, int, int, str, str]:
 
 
 def _held_detail(task: ReadyTask) -> str:
+    if task.hold == Hold.PARENT:
+        return f"waits for its ancestor {task.gated_by} to be marked ready"
     if task.hold == Hold.DEPENDENCY:
         return "waits on " + ", ".join(task.waiting_on)
     if task.hold == Hold.FAILURE_CAP:

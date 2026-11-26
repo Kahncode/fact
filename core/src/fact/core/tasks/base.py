@@ -41,11 +41,16 @@ class TaskKey:
 
 @dataclass(frozen=True)
 class ReadyItem:
-    """A task marked ready, with its dependency depth (shallower tasks start first) and its dependencies not done."""
+    """
+    A task marked ready, with its dependency depth (shallower tasks start first) and what holds it back, if anything.
+
+    The scheduler may start it only when `waiting_on` is empty and `gated_by` is None.
+    """
 
     task: Task
     depth: int = 0
-    waiting_on: tuple[str, ...] = ()  # keys; empty for a task the scheduler may start
+    waiting_on: tuple[str, ...] = ()  # keys of the dependencies not done
+    gated_by: str | None = None  # key of the nearest ancestor (parent issue) not marked ready
 
 
 def parse_key(key: str) -> TaskKey:
@@ -79,8 +84,17 @@ class TaskSource(Protocol):
     A source whose state lives elsewhere (a file task's lives in its file and in fact's DB) may only log the writes.
     """
 
-    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
-        """Tasks marked ready whose dependencies are all done; with `include_waiting`, also the others (`waiting_on`)."""
+    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
+        """
+        Tasks marked ready, not gated by an ancestor, whose dependencies are all done.
+
+        `include_waiting`: also the others (`waiting_on`, `gated_by`). `close_epics`: close the ready epics with nothing
+        left to wait on (only the scheduler's tick asks; epics are never listed).
+        """
+        ...
+
+    async def not_ready_ancestor(self, key: str) -> str | None:
+        """Key of the nearest ancestor of task `key` not marked ready (its gate); None when there is none."""
         ...
 
     async def get(self, key: str) -> Task | None:
