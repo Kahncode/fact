@@ -84,7 +84,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Show a run, its steps and why it waits | `uv run fact status <run id or workflow id>` |
 | Answer a run's open gate | `uv run fact gate <run> approve\|reject` (`--note`, `--gate`) |
 | Send instructions to a run | `uv run fact steer <run> TEXT`               |
-| Stop a run (restart its task with `fact run`) | `uv run fact stop <run>` (`--reason`) |
+| Stop a run (then `fact run` can restart its task; a task has one active run at a time) | `uv run fact stop <run>` (`--reason`) |
 | Turn the scheduler on/off, show it and preview its next tick | `uv run fact scheduler on\|off\|status` |
 | Run every ready task    | `uv run fact dev`, then `uv run fact scheduler on` |
 | List unread notifications | `uv run fact inbox` (`--all` includes read)   |
