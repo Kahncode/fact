@@ -1,24 +1,24 @@
 """File task source: reads the markdown task files in `tasks/` (format in `tasks/README.md`)."""
 
+import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fact.core.types import Task
+from fact.core.logging import get_logger
+from fact.core.tasks.base import FILE_PREFIX, ReadyItem
+from fact.core.types import PRRef, Task
 from pydantic import ValidationError
 
-KEY_PREFIX = "task:"
+log = get_logger(__name__)
+
+KEY_PREFIX = FILE_PREFIX
 STATUSES = ("planned", "ready", "done")
 _ID_RE = re.compile(r"^M(\d+)-(\d+)$")
 _FILE_RE = re.compile(r"^(\d+)-.+\.md$")
 _CRITERION_RE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(.+?)\s*$")
-
-
-def branch_name(key: str) -> str:
-    """`task:M1-02` becomes `fact/task-m1-02`."""
-    return f"fact/task-{key.removeprefix(KEY_PREFIX).lower()}"
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,11 @@ def _cycle_errors(entries: dict[str, _Entry]) -> list[str]:
 
 
 class FileTaskSource:
-    """Task files live at `<root>/<folder>/<milestone>/<NN>-<slug>.md`. Every call re-reads the files."""
+    """
+    Task files live at `<root>/<folder>/<milestone>/<NN>-<slug>.md`. Every call re-reads the files.
+
+    Implements `TaskSource`. The write-back methods only log: a file task's state lives in its file and in fact's DB.
+    """
 
     def __init__(self, root: Path, folder: str = "tasks") -> None:
         self.root = root
@@ -159,9 +163,12 @@ class FileTaskSource:
         """Every parsable task, in folder and file order. Use `validate()` to find the broken ones."""
         return [e.task for e in self._scan()[0]]
 
-    def get(self, key: str) -> Task | None:
+    def find(self, key: str) -> Task | None:
         entry = self._entries().get(key)
         return entry.task if entry else None
+
+    async def get(self, key: str) -> Task | None:
+        return await asyncio.to_thread(self.find, key)
 
     def status(self, key: str) -> str | None:
         entry = self._entries().get(key)
@@ -174,10 +181,13 @@ class FileTaskSource:
             return _is_finished(dep, entries)
         return entry.status == "done"
 
-    def deps_done(self, task: Task) -> bool:
+    def all_deps_done(self, task: Task) -> bool:
         """Check that every dependency is `done` or finished (its file is gone, see `validate`)."""
         entries = self._entries()
         return all(self._dep_done(d, entries) for d in task.depends_on)
+
+    async def deps_done(self, task: Task) -> bool:
+        return await asyncio.to_thread(self.all_deps_done, task)
 
     def ready(self) -> list[Task]:
         """Tasks with status `ready` whose dependencies are all done."""
@@ -187,6 +197,15 @@ class FileTaskSource:
             for e in entries.values()
             if e.status == "ready" and all(self._dep_done(d, entries) for d in e.task.depends_on)
         ]
+
+    async def list_ready(self) -> list[ReadyItem]:
+        """`ready()` with each task's dependency depth (`depths()`)."""
+
+        def read() -> list[ReadyItem]:
+            depths = self.depths()
+            return [ReadyItem(task, depths.get(task.key, 0)) for task in self.ready()]
+
+        return await asyncio.to_thread(read)
 
     def depths(self) -> dict[str, int]:
         """
@@ -235,3 +254,19 @@ class FileTaskSource:
             raise KeyError(msg)
         (worktree / entry.task.path).unlink()
         return entry.task.path
+
+    async def comment(self, key: str, text: str) -> None:
+        log.info("task_write_back_skipped", source="files", action="comment", task_key=key, chars=len(text))
+
+    async def set_labels(self, key: str, add: list[str], remove: list[str]) -> None:
+        log.info("task_write_back_skipped", source="files", action="set_labels", task_key=key, add=add, remove=remove)
+
+    async def write_context(self, key: str, section: str) -> None:
+        log.info("task_write_back_skipped", source="files", action="write_context", task_key=key, chars=len(section))
+
+    async def link_prs(self, key: str, prs: list[PRRef]) -> None:
+        urls = [pr.url for pr in prs]
+        log.info("task_write_back_skipped", source="files", action="link_prs", task_key=key, prs=urls)
+
+    async def close(self, key: str) -> None:
+        log.info("task_write_back_skipped", source="files", action="close", task_key=key)

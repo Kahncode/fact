@@ -8,13 +8,12 @@ needs a person, dropped, PR closed) is restarted by a person with `fact run`. A 
 
 import asyncio
 
-from fact.api.projects import local_path
-from fact.api.run_start import counts_as_run, default_branch
-from fact.api.task_ref import TaskReadError, fetch, ready_tasks
+from fact.api.run_start import counts_as_run
+from fact.api.task_ref import TaskReadError, project_tasks
 from fact.core.enums import RunStatus
 from fact.core.logging import get_logger
 from fact.core.models import Project, Run
-from fact.core.project_config import ConfigError, load_project_config
+from fact.core.project_config import ConfigError
 from fact.core.scheduler import ProjectLoad, ReadyTask, ReadyTasks
 from fact.core.settings import ProjectRef, Settings
 from sqlalchemy import func, select
@@ -24,26 +23,15 @@ log = get_logger(__name__)
 ACTIVE = (RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING)
 
 
-def _read_ready(ref: ProjectRef) -> list[ReadyTask]:
-    """Fetch, then read the project's ready tasks from `origin/<default>`; none without a local files source."""
-    path = local_path(ref)
-    if path is None:
-        return []
-    config = load_project_config(path)
-    if config.task_source.kind != "files":
-        return []
-    branch = default_branch(ref, config)
-    fetch(path, branch)
-    found = ready_tasks(path, branch, config.task_source.path)
-    return [ReadyTask(project=ref.name, task_key=t.key, task_id=t.id, depth=depth) for t, depth in found]
-
-
-async def _ready_in(ref: ProjectRef) -> list[ReadyTask]:
+async def _ready_in(settings: Settings, ref: ProjectRef) -> list[ReadyTask]:
+    """Read the project's ready tasks from its task source (`files`: on `origin/<default>`); none without one."""
     try:
-        return await asyncio.to_thread(_read_ready, ref)  # git is blocking
+        async with project_tasks(settings, ref) as tasks:
+            found = await tasks.source.list_ready() if tasks else []
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
         return []
+    return [ReadyTask(project=ref.name, task_key=r.task.key, task_id=r.task.id, depth=r.depth) for r in found]
 
 
 async def _run_tasks(session: AsyncSession) -> set[tuple[str, str]]:
@@ -66,7 +54,8 @@ async def _active_by_project(session: AsyncSession) -> dict[str, int]:
 
 async def find_ready(settings: Settings, session: AsyncSession) -> ReadyTasks:
     """Every project's ready tasks that never ran, and the active runs against `concurrency.max_runs` and each cap."""
-    found = await asyncio.gather(*(_ready_in(ref) for ref in settings.projects))  # one slow remote delays no other
+    # one slow remote delays no other
+    found = await asyncio.gather(*(_ready_in(settings, ref) for ref in settings.projects))
     tasks = [t for project_tasks in found for t in project_tasks]
     ran = await _run_tasks(session)
     active = await _active_by_project(session)

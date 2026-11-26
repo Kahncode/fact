@@ -23,7 +23,8 @@ from fact.core.activity_contract import (
 from fact.core.enums import RunStatus
 from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, load_project_config
-from fact.core.tasks.files import FileTaskSource
+from fact.core.settings import Settings, get_settings
+from fact.core.tasks import TaskSource, source_for
 from fact.worker.git_push import run_git
 from fact.worker.loader import home_sha_of
 from temporalio import activity
@@ -64,27 +65,28 @@ async def _git(args: list[str], worktree: Path) -> None:
         raise RuntimeError(msg)
 
 
-def _task_source(worktree: Path) -> FileTaskSource | None:
+def _task_source(worktree: Path, settings: Settings) -> TaskSource | None:
     try:
-        config = load_project_config(worktree).task_source
+        config = load_project_config(worktree)
     except ConfigError as exc:
         raise _non_retryable(str(exc)) from exc
-    return FileTaskSource(worktree, config.path) if config.kind == "files" else None
+    return source_for(config, settings, worktree)
 
 
 class ControlActivities:
-    def __init__(self, api_base_url: str, http_client: httpx.AsyncClient) -> None:
+    def __init__(self, api_base_url: str, http_client: httpx.AsyncClient, settings: Settings | None = None) -> None:
         self._base = api_base_url.rstrip("/") + API_PREFIX
         self._http = http_client
+        self._settings = settings
 
     @activity.defn(name=MARK_TASK_DONE)
     async def mark_task_done(self, spec: MarkTaskDoneInput) -> bool:
         """Commit `chore(<id>): mark done`, deleting the task file, on the run's branch; False when nothing to do."""
         with bind_run(spec.run_id):
             worktree = _home_worktree(spec)
-            source = _task_source(worktree)
+            source = _task_source(worktree, self._settings or get_settings())
             if source is None:
-                log.info("mark_task_done_skipped", reason="the task source is not files")
+                log.info("mark_task_done_skipped", reason="the task source cannot be read")
                 return False
             rel = spec.task.path  # where the task was on the default branch when the run started
             if rel is None:

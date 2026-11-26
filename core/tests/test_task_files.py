@@ -44,7 +44,7 @@ def test_parses_task(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "README.md").write_text("# not a task", encoding="utf-8")
     (tmp_path / "tasks" / "M1" / "notes.md").write_text("no front matter", encoding="utf-8")
     src = FileTaskSource(tmp_path)
-    task = src.get("task:M1-02")
+    task = src.find("task:M1-02")
     assert task is not None
     assert (task.id, task.title, task.type, task.complexity) == ("M1-02", "Title M1-02", "chore", "trivial")
     assert task.depends_on == ["M1-01", "M1-03"]
@@ -52,18 +52,18 @@ def test_parses_task(tmp_path: Path) -> None:
     assert task.path == "tasks/M1/02-x.md"
     assert task.body.startswith("## Goal")
     assert [t.id for t in src.all()] == ["M1-02", "M1-03"]
-    assert src.get("task:M9-99") is None
+    assert src.find("task:M9-99") is None
     assert src.validate() == []
 
 
 def test_front_matter_can_set_plan_approval(tmp_path: Path) -> None:
     path = _task(tmp_path, "M1-02")
-    task = FileTaskSource(tmp_path).get("task:M1-02")
+    task = FileTaskSource(tmp_path).find("task:M1-02")
     assert task is not None
     assert task.require_plan_approval is None  # unset: the project decides
     text = path.read_text(encoding="utf-8").replace("human_actions", "require_plan_approval: false\nhuman_actions")
     path.write_text(text, encoding="utf-8")
-    task = FileTaskSource(tmp_path).get("task:M1-02")
+    task = FileTaskSource(tmp_path).find("task:M1-02")
     assert task is not None
     assert task.require_plan_approval is False
 
@@ -81,9 +81,9 @@ def test_ready_and_blocked(tmp_path: Path) -> None:
     _task(tmp_path, "M1-04", status="planned", deps="M1-01")
     src = FileTaskSource(tmp_path)
     assert [t.id for t in src.ready()] == ["M1-02"]
-    blocked = src.get("task:M1-03")
+    blocked = src.find("task:M1-03")
     assert blocked is not None
-    assert not src.deps_done(blocked)
+    assert not src.all_deps_done(blocked)
     assert src.status("task:M1-04") == "planned"
     assert src.validate() == []
 
@@ -163,7 +163,7 @@ def test_bom_and_bad_yaml(tmp_path: Path) -> None:
     bad = _task(tmp_path, "M1-03")
     bad.write_text("---\nid: [unclosed\n---\n", encoding="utf-8")
     src = FileTaskSource(tmp_path)
-    assert src.get("task:M1-02") is not None
+    assert src.find("task:M1-02") is not None
     assert len(src.validate()) == 1
     assert "03-x.md" in src.validate()[0]
 

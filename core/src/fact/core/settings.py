@@ -99,6 +99,14 @@ def config_file() -> Path:
     return Path(override).expanduser() if override else REPO_ROOT / "fact.yaml"
 
 
+def project_path(ref: ProjectRef) -> Path | None:
+    """Return the checkout path of a project; a relative path is relative to the folder of fact.yaml."""
+    if ref.path is None:
+        return None
+    path = ref.path.expanduser()
+    return path if path.is_absolute() else (config_file().resolve().parent / path).resolve()
+
+
 def _dotenv_path() -> Path:
     return config_file().parent / ".env"
 

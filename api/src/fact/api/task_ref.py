@@ -1,15 +1,20 @@
-"""Read a project's task files as they are on `origin/<default branch>`, not as the working tree has them."""
+"""Open a project's task source; a `files` source reads the files as on `origin/<default branch>`, not the working tree."""
 
+import asyncio
 import io
 import os
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from fact.core.logging import get_logger
-from fact.core.tasks.files import KEY_PREFIX, FileTaskSource
+from fact.core.project_config import ProjectConfig, load_project_config
+from fact.core.settings import ProjectRef, Settings, project_path
+from fact.core.tasks import TaskSource, dependency_key, source_for
 from fact.core.types import Task
 
 log = get_logger(__name__)
@@ -66,26 +71,53 @@ def _extract(repo: Path, ref: str, folder: str, dest: Path) -> None:
         tar.extractall(dest, filter="data")
 
 
-def read_task(repo: Path, branch: str, folder: str, key: str) -> TaskCheck | None:
+def default_branch(ref: ProjectRef, config: ProjectConfig) -> str:
+    home = next((r for r in config.repositories if r.full_name.lower() == ref.home.lower()), config.repositories[0])
+    return home.default_branch
+
+
+def _snapshot(repo: Path, branch: str, folder: str, dest: Path) -> None:
+    fetch(repo, branch)
+    _extract(repo, f"origin/{branch}", folder, dest)
+
+
+@dataclass(frozen=True)
+class ProjectTasks:
+    """A project's config and its task source, as on its default branch."""
+
+    config: ProjectConfig
+    source: TaskSource
+
+
+@asynccontextmanager
+async def project_tasks(settings: Settings, ref: ProjectRef) -> AsyncIterator[ProjectTasks | None]:
     """
-    Read task `key` from `origin/<branch>` of the checkout at `repo`, and which of its dependencies are not done.
+    Open the project's task source; None without a local checkout or while its kind cannot be read.
 
-    Returns None when the task is not on that branch. Call `fetch` first to see the latest state.
+    A `files` source reads a snapshot of `origin/<default branch>`, fetched first (offline: the last fetched state),
+    so it sees the tasks as merged, not as the working tree has them. The snapshot lasts as long as the context.
     """
+    path = project_path(ref)
+    if path is None:
+        yield None
+        return
+    config = await asyncio.to_thread(load_project_config, path)
     with tempfile.TemporaryDirectory(prefix="fact-tasks-") as tmp:
-        _extract(repo, f"origin/{branch}", folder, Path(tmp))
-        source = FileTaskSource(Path(tmp), folder)
-        task = source.get(key)
-        if task is None:
-            return None
-        missing = [d for d in task.depends_on if not source.deps_done(task.model_copy(update={"depends_on": [d]}))]
-        return TaskCheck(task=task, missing_deps=[KEY_PREFIX + d for d in missing])
+        root = Path(tmp)
+        if config.task_source.kind == "files":  # git is blocking
+            await asyncio.to_thread(_snapshot, path, default_branch(ref, config), config.task_source.path, root)
+        source = source_for(config, settings, root)
+        yield ProjectTasks(config, source) if source is not None else None
 
 
-def ready_tasks(repo: Path, branch: str, folder: str) -> list[tuple[Task, int]]:
-    """Tasks `ready` on `origin/<branch>` with every dependency done, each with its dependency depth."""
-    with tempfile.TemporaryDirectory(prefix="fact-tasks-") as tmp:
-        _extract(repo, f"origin/{branch}", folder, Path(tmp))
-        source = FileTaskSource(Path(tmp), folder)
-        depths = source.depths()
-        return [(task, depths.get(task.key, 0)) for task in source.ready()]
+async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
+    """Read task `key` and which of its dependencies are not done; None when the source has no such task."""
+    task = await source.get(key)
+    if task is None:
+        return None
+    missing = [
+        dependency_key(task, d)
+        for d in task.depends_on
+        if not await source.deps_done(task.model_copy(update={"depends_on": [d]}))
+    ]
+    return TaskCheck(task=task, missing_deps=missing)

@@ -27,6 +27,7 @@ from fact.worker.activities.notify import NotifyActivities
 from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.activities.shell import ShellActivities
+from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.client import connect
 from fact.worker.deployments import deployment_config, set_current_version
@@ -98,7 +99,8 @@ def _activity_workers(
     harness = ClaudeCodeHarness()
     agent = AgentActivities({harness.name: harness}, reporter, settings)
     change_set = ChangeSetActivities(github, reporter)
-    control_steps = ControlActivities(settings.api_url, http)
+    control_steps = ControlActivities(settings.api_url, http, settings)
+    task_status = TaskStatusActivities(settings)
     gates = GateActivities(settings.api_url, http)
     notify = NotifyActivities(settings.api_url, http)
     handoff = HandoffActivities(settings.api_url, http)
@@ -121,6 +123,7 @@ def _activity_workers(
             control_steps.mark_task_done,
             control_steps.record_run_started,
             control_steps.record_run_finished,
+            task_status.report_status,
             gates.record_gate_opened,
             gates.record_gate_answered,
             notify.notify,

@@ -32,8 +32,11 @@ RECORD_GATE_OPENED = "record_gate_opened"
 RECORD_GATE_ANSWERED = "record_gate_answered"
 NOTIFY = "notify"
 WRITE_HANDOFF = "write_handoff"
+REPORT_STATUS = "report_status"
 
 Check = Literal["lint", "test", "build", "setup"]
+# a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
+TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "dropped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
@@ -203,3 +206,15 @@ class HandoffInput(_Input):
     attempt: int | None = None
     steps: list[HandoffStep] = Field(default_factory=list)  # agent steps, in order
     prs: list[PRRef] = Field(default_factory=list)  # left open, for the next run to reuse
+
+
+class ReportStatusInput(_Input):
+    """A status change for the task's source: labels, comments, PR links or closing, as `fact.core.tasks.events`."""
+
+    run_id: str
+    project: str  # the project whose `.fact/project.yaml` names the task source
+    task_key: str
+    event: TaskEvent
+    run_url: str = ""
+    detail: str = ""  # what a gate needs from a person, or why the run ended
+    prs: list[PRRef] = Field(default_factory=list)  # for `prs_opened`

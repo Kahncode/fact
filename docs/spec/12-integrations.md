@@ -2,7 +2,7 @@
 
 The issue tracker is where work starts and where its status is reported; GitHub is where code lands and humans review. Task ingestion is modular: markdown task files in the repository bootstrap fact until GitHub Issues is live; GitHub Issues is the first tracker, Linear the second, and others plug in behind the same interface.
 
-**Task source interface**: `list_ready()`, `get(issue)`, `comment(issue, text)`, `set_labels(issue, add, remove)`, `write_context(issue, section)`, `link_prs(issue, prs)`, `close(issue)`. Issue keys carry their source, for example `gh:acme/app#123` or `lin:APP-123`, and branch names use a safe form such as `fact/gh-123`.
+**Task source interface**: `list_ready()`, `get(issue)`, `comment(issue, text)`, `set_labels(issue, add, remove)`, `write_context(issue, section)`, `link_prs(issue, prs)`, `close(issue)`. Issue keys carry their source, for example `gh:acme/app#123` or `lin:APP-123`, and branch names use a safe form such as `fact/gh-123`. In code: `fact.core.tasks.TaskSource`, chosen per project by `source_for`; the file source (`task:M1-02`) implements it with write-backs that only log, and also `deps_done(task)` and `mark_done(worktree, key)`. A run reports status changes through the `report_status` control activity.
 
 **Where a project's issues live** (set in `.fact/project.yaml`):
 

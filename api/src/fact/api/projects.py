@@ -1,27 +1,17 @@
 """Sync the project registry from `fact.yaml` (and each project's `.fact/project.yaml`) into the DB."""
 
-from pathlib import Path
-
 from fact.core.logging import get_logger
 from fact.core.models import Project, Repository
 from fact.core.project_config import RepositoryConfig, load_project_config
-from fact.core.settings import ProjectRef, Settings, config_file
+from fact.core.settings import ProjectRef, Settings, project_path
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 log = get_logger(__name__)
 
 
-def local_path(ref: ProjectRef) -> Path | None:
-    """Return the checkout path of a project; a relative path is relative to the folder of fact.yaml."""
-    if ref.path is None:
-        return None
-    path = ref.path.expanduser()
-    return path if path.is_absolute() else (config_file().resolve().parent / path).resolve()
-
-
 def _repositories(ref: ProjectRef) -> list[RepositoryConfig]:
-    path = local_path(ref)
+    path = project_path(ref)
     return load_project_config(path).repositories if path else []
 
 

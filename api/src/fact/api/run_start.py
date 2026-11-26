@@ -1,19 +1,17 @@
 """Start a run: find the task's project, read the task from its default branch, and build the workflow input."""
 
-import asyncio
 import re
 from dataclasses import dataclass
 from urllib.parse import quote
 
-from fact.api.projects import local_path
-from fact.api.task_ref import TaskCheck, TaskReadError, fetch, read_task
+from fact.api.task_ref import TaskCheck, TaskReadError, check_task, project_tasks
 from fact.core.artifacts import ArtifactStore, handoff_key
 from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
 from fact.core.models import Project, Run
-from fact.core.project_config import ConfigError, ProjectConfig, load_project_config
+from fact.core.project_config import ConfigError, ProjectConfig
 from fact.core.settings import ProjectRef, Settings
-from fact.core.tasks.files import branch_name
+from fact.core.tasks import branch_name
 from fact.core.types import RepoCheckout, RunInput, RunLimits
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,22 +96,12 @@ def temporal_link(settings: Settings, wf_id: str) -> str:
     return f"{settings.temporal.ui_url.rstrip('/')}/namespaces/{ns}/workflows/{quote(wf_id, safe='')}"
 
 
-def default_branch(ref: ProjectRef, config: ProjectConfig) -> str:
-    home = next((r for r in config.repositories if r.full_name.lower() == ref.home.lower()), config.repositories[0])
-    return home.default_branch
-
-
-def _lookup(ref: ProjectRef, task_key: str) -> FoundTask | None:
-    path = local_path(ref)
-    if path is None:
-        return None
-    config = load_project_config(path)
-    if config.task_source.kind != "files":
-        return None
-    branch = default_branch(ref, config)
-    fetch(path, branch)
-    check = read_task(path, branch, config.task_source.path, task_key)
-    return FoundTask(ref, config, check) if check else None
+async def _lookup(settings: Settings, ref: ProjectRef, task_key: str) -> FoundTask | None:
+    async with project_tasks(settings, ref) as tasks:
+        if tasks is None:
+            return None
+        check = await check_task(tasks.source, task_key)
+        return FoundTask(ref, tasks.config, check) if check else None
 
 
 def _candidates(settings: Settings, project: str | None) -> list[ProjectRef]:
@@ -127,13 +115,15 @@ def _candidates(settings: Settings, project: str | None) -> list[ProjectRef]:
     return refs
 
 
-async def _search(refs: list[ProjectRef], task_key: str, *, strict: bool) -> tuple[list[FoundTask], list[str]]:
-    """Look in each project in a thread (git is blocking); unless `strict`, a broken project is skipped, not fatal."""
+async def _search(
+    settings: Settings, refs: list[ProjectRef], task_key: str, *, strict: bool
+) -> tuple[list[FoundTask], list[str]]:
+    """Look in each project's task source; unless `strict`, a broken project is skipped, not fatal."""
     found: list[FoundTask] = []
     skipped: list[str] = []
     for ref in refs:
         try:
-            f = await asyncio.to_thread(_lookup, ref, task_key)
+            f = await _lookup(settings, ref, task_key)
         except (ConfigError, TaskReadError) as exc:
             if strict:
                 raise
@@ -147,7 +137,7 @@ async def _search(refs: list[ProjectRef], task_key: str, *, strict: bool) -> tup
 
 async def find_task(settings: Settings, task_key: str, project: str | None) -> FoundTask:
     """Find the project whose task source holds `task_key`: the given project, else every project with a path."""
-    found, skipped = await _search(_candidates(settings, project), task_key, strict=project is not None)
+    found, skipped = await _search(settings, _candidates(settings, project), task_key, strict=project is not None)
     if not found:
         where = f"project {project}" if project else "any project"
         detail = f"Task {task_key} not found on the default branch of {where}"
