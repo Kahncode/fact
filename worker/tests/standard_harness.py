@@ -5,7 +5,6 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from types import ModuleType
 
 from fact.core.activity_contract import (
@@ -43,7 +42,7 @@ from temporalio.worker import Worker
 
 WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
 WORKFLOW_QUEUE = "wf-test"
-IDENTITY = "test-worker"  # kept out of recorded histories instead of the host name
+IDENTITY = "test-worker"  # a fixed worker identity instead of the host name
 REPO = "acme/widget"
 BRANCH = "fact/task-m1-99"
 PR = PRRef(repo=REPO, number=7, url=f"https://github.com/{REPO}/pull/7", head_sha="abc123")
@@ -222,8 +221,6 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
 _standard = load_standard()
 STANDARD = _standard.Standard
 MAX_FIX_ATTEMPTS = _standard.MAX_FIX_ATTEMPTS
-HISTORY = Path(__file__).parent / "histories" / "standard_green.json"
-RECORD_VAR = "FACT_RECORD_HISTORIES"  # set to 1 to re-record the saved histories from the green path
 
 
 async def run_standard(fakes: FakeActivities, workflow_id: str) -> tuple[RunResult, WorkflowHistory]:

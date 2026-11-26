@@ -30,7 +30,6 @@ An agent step that hits the Claude Code usage limit is not a failure. The harnes
   - These pauses don't count against `MAX_RESUMES`. Cap them at `MAX_LIMIT_PAUSES = 20` per `agent` call; past that the step ends `needs_human`.
   - Waiting has no upper bound: a full 7d window means a wait of days.
   - The run's state while sleeping reads as waiting, with the reason `usage limit until <time>`, visible in `fact status`.
-- Re-record the replay histories (the workflow changed): `FACT_RECORD_HISTORIES=1 uv run pytest worker/tests/test_standard_workflow.py`.
 - Tests:
   - harness parsing (fixture stream with a rejected `rate_limit_event`, and one with the limit error result);
   - the activity outcome and the `PUT` call;

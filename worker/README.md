@@ -101,13 +101,7 @@ A missing GitHub App, a refusal, and GitHub 401, 404 or 422 are non-retryable `A
 
 ## Workflow tests
 
-`tests/test_loader.py`, `tests/test_deployments.py` and `tests/test_pinned_run.py` cover loading, deployment config and a pinned run that records its version (`test_pinned_run.py` starts a Temporal dev server and is skipped when `temporal` is not on PATH). `tests/test_standard_workflow.py` runs `.fact/workflows/standard.py` in a time-skipping Temporal environment with fake activities registered under the real names, and replays `tests/histories/standard_green.json`; `tests/test_standard_review.py`, `tests/test_standard_learn.py` and `tests/test_standard_ci.py` cover the review, learn and CI fix stages; `tests/test_wait_for_ci.py` runs the `wait_for_ci` activity against mocked GitHub responses (pending then success, failure with a job log, expired log, timeout, no checks, transient error, App not installed). The shared fakes and helpers (`FakeActivities`, `run_standard`, `load_standard`) live in `tests/standard_harness.py`, imported as `standard_harness` because `tests/conftest.py` puts `worker/tests` on `sys.path`. Re-record that history after an intended workflow change:
-
-```
-FACT_RECORD_HISTORIES=1 uv run pytest worker/tests/test_standard_workflow.py
-```
-
-`tests/histories/` is excluded from detect-secrets.
+`tests/test_loader.py`, `tests/test_deployments.py` and `tests/test_pinned_run.py` cover loading, deployment config and a pinned run that records its version (`test_pinned_run.py` starts a Temporal dev server and is skipped when `temporal` is not on PATH). `tests/test_standard_workflow.py` runs `.fact/workflows/standard.py` in a time-skipping Temporal environment with fake activities registered under the real names, and replays the green run's history to check the workflow is deterministic; `tests/test_standard_review.py`, `tests/test_standard_learn.py` and `tests/test_standard_ci.py` cover the review, learn and CI fix stages; `tests/test_wait_for_ci.py` runs the `wait_for_ci` activity against mocked GitHub responses (pending then success, failure with a job log, expired log, timeout, no checks, transient error, App not installed). The shared fakes and helpers (`FakeActivities`, `run_standard`, `load_standard`) live in `tests/standard_harness.py`, imported as `standard_harness` because `tests/conftest.py` puts `worker/tests` on `sys.path`. No histories are committed: runs in flight stay on the worker build that started them (see versioning above), so a workflow change never has to replay an older history.
 
 ## Prompts
 

@@ -100,7 +100,6 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 - Project workflows import the step library from `fact.sdk` and subclass its workflow base class (`fact.sdk.workflow.FactWorkflow`).
 - Queue names, activity names and activity inputs live in `fact.core.activity_contract`; `fact.sdk` calls activities by name and never imports `fact.worker`.
 - `python -m fact.worker` loads each project's `.fact/workflows/` from a detached checkout of its default branch at `pinned_dir/projects/<project>/<sha>` and runs them on queue and deployment `wf-<project>` (`workflow_queue`), pinned to build id `<factory SHA[:12]>+<home SHA>`; workflow changes apply at the next worker restart (see `worker/README.md`).
-- After an intended workflow change, re-record replay histories: `FACT_RECORD_HISTORIES=1 uv run pytest worker/tests/test_standard_workflow.py`.
 - Each package owns its tests in its own `tests/`.
 - Logging goes through `fact.core.logging` (structlog): call `configure_logging(env, level)` once at process start, get loggers with `get_logger(name)`, and wrap run/step work in `bind_run(run_id, step_id)` so every line carries `run_id`.
 - Settings come only from `fact.core.settings.get_settings()`, which loads `fact.yaml`:

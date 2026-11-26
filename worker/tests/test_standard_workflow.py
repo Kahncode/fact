@@ -1,8 +1,6 @@
-"""`.fact/workflows/standard.py` against fake activities registered under the real names, plus a replay test."""
+"""`.fact/workflows/standard.py` against fake activities registered under the real names, replaying the green run's history."""
 
 import json
-import os
-from pathlib import Path
 
 import pytest
 from fact.core.activity_contract import (
@@ -24,12 +22,10 @@ from fact.sdk.sessions import MAX_RESUMES
 from fact.worker.loader import sandbox_runner
 from standard_harness import (
     BRANCH,
-    HISTORY,
     LEARNED,
     MAX_FIX_ATTEMPTS,
     MET,
     PR,
-    RECORD_VAR,
     RUN_URL,
     STANDARD,
     FakeActivities,
@@ -44,7 +40,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.worker import Replayer
 
 
-async def test_green_path(tmp_path: Path) -> None:
+async def test_green_path() -> None:
     fakes = FakeActivities()
     result, history = await run_standard(fakes, "run-green")
 
@@ -85,11 +81,10 @@ async def test_green_path(tmp_path: Path) -> None:
     assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])] * 2
     assert finished(fakes) == RunOutcome.PR_OPENED
 
-    if os.environ.get(RECORD_VAR):
-        HISTORY.parent.mkdir(exist_ok=True)
-        HISTORY.write_text(history.to_json(), encoding="utf-8")
-    else:
-        (tmp_path / "green.json").write_text(history.to_json(), encoding="utf-8")  # proves the history serializes
+    # Replay through JSON: the code is deterministic and the history serializes with our converter.
+    replayed = WorkflowHistory.from_json("run-green", history.to_json())
+    replayer = Replayer(workflows=[STANDARD], data_converter=pydantic_data_converter, workflow_runner=sandbox_runner())
+    await replayer.replay_workflow(replayed)
 
 
 async def test_two_failures_then_green() -> None:
@@ -150,13 +145,6 @@ async def test_teardown_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=TEARDOWN_WORKSPACE)
     result, _ = await run_standard(fakes, "run-teardown-broken")
     assert result.outcome == RunOutcome.PR_OPENED
-
-
-async def test_replay_green_history() -> None:
-    assert HISTORY.exists(), f"missing {HISTORY.name}: run this file with {RECORD_VAR}=1 to record it"
-    history = WorkflowHistory.from_json("run-green", HISTORY.read_text(encoding="utf-8"))
-    replayer = Replayer(workflows=[STANDARD], data_converter=pydantic_data_converter, workflow_runner=sandbox_runner())
-    await replayer.replay_workflow(history)
 
 
 async def test_failed_implement_ends_the_run_without_checks() -> None:
