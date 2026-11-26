@@ -62,6 +62,7 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 ".claude/hooks/*" = ["INP001", "T201", "S603", "S607", "PLW1510", "C901", "PLR0911", "FBT001"] # hook scripts talk through stdout/stderr and run git/formatters
 ".agents/skills/*/*.py" = ["INP001", "T201", "S603", "S607", "PLW1510"] # standalone skill scripts
 ".fact/workflows/*.py" = ["INP001"] # project workflows are loaded by path, not imported as a package
+"scripts/*.py" = ["INP001", "T201"] # standalone development scripts that print
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests", "scripts/tests"]
