@@ -2,7 +2,7 @@
 The steps of `FactWorkflow` that act on its PRs: open or update them, comment the cost, wait for CI and fix it.
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
-`next_attempt`, `agent`, `_control` and `_record`, and the `prs` and `_change_set` its `__init__` sets.
+`next_attempt`, `note_outcome`, `agent`, `_control` and `_record`, and the `prs` and `_change_set` its `__init__` sets.
 """
 
 from collections.abc import Sequence
@@ -57,6 +57,7 @@ class PullRequestSteps:
             raise RuntimeError(msg)
         spec = self._change_set.model_copy(update={"attempt": self.next_attempt(OPEN_PR_STAGE)})
         self.prs = await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
+        self.note_outcome(OPEN_PR_STAGE, spec.attempt, StepOutcome.PASSED)
         return self.prs
 
     async def post_cost_comment(self: FactWorkflow, prs: Sequence[PRRef]) -> None:
@@ -73,7 +74,7 @@ class PullRequestSteps:
             pr=pr,
             timeout_s=CI_TIMEOUT.total_seconds(),
         )
-        return await workflow.execute_activity(
+        result = await workflow.execute_activity(
             WAIT_FOR_CI,
             spec,
             result_type=StepResult,
@@ -82,6 +83,8 @@ class PullRequestSteps:
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=INFRA_RETRY,
         )
+        self.note_outcome(stage_id, spec.attempt, result.outcome)
+        return result
 
     async def until_ci_green(
         self: FactWorkflow,

@@ -5,9 +5,11 @@ Workflows call activities by name, so `fact.sdk` never imports `fact.worker`; th
 under these names and takes these inputs. Everything here crosses the Temporal boundary: small and JSON-serializable.
 """
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.gates import GateDecision
 from fact.core.types import Complexity, PRRef, RouteOverride, Task, WorkspaceHandle
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -25,6 +27,8 @@ POST_COST_COMMENT = "post_cost_comment"
 WAIT_FOR_CI = "wait_for_ci"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
+RECORD_GATE_OPENED = "record_gate_opened"
+RECORD_GATE_ANSWERED = "record_gate_answered"
 
 Check = Literal["lint", "test", "build", "setup"]
 
@@ -127,3 +131,33 @@ class RunStartedInput(_Input):
 class RunFinishedInput(_Input):
     run_id: str
     outcome: RunOutcome
+
+
+class GateOpenedInput(_Input):
+    """A gate opened: its step (kind `gate`) starts waiting, and so does the run."""
+
+    run_id: str
+    stage_id: str
+    attempt: int
+    gate_id: str
+    kind: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    opened_at: datetime  # workflow time, so the step's wall time is the wait
+
+
+class GateAnsweredInput(_Input):
+    """A gate answered: its step ends with the decision and the wait, and the run runs again."""
+
+    run_id: str
+    step_id: str | None  # from `record_gate_opened`; None if that could not create the step
+    stage_id: str
+    attempt: int
+    gate_id: str
+    kind: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    decision: GateDecision
+    note: str = ""
+    outcome: StepOutcome  # `passed` for approve, `needs_human` for reject
+    opened_at: datetime
+    answered_at: datetime
+    wait_seconds: float  # human wait time: all of the step's wall time

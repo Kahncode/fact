@@ -10,10 +10,12 @@ the review's criteria table) and comment the run's cost on it. Then wait for CI 
 to a `fix_ci` session with the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most
 `MAX_CI_FIX_ATTEMPTS` times. The cost comment is updated at the end of the run.
 
-A failing setup ends the run `failed`. If the checks never go green, or an agent reports itself blocked, the run ends
-`needs_human` with no PR (M2 turns that into a gate); CI that stays red or never finishes ends it `needs_human` with the
-PR open. An agent session that errors, including a review without a valid structured answer, ends the run `failed`. A `learn` session that does not pass, or whose activity fails, is the exception: its docs are not
-worth losing the change over, so the PR still opens with the implement session's title and summary (else the task's
+A failing setup ends the run `failed`. If the checks never go green, or CI stays red or never finishes, a `needs_human`
+gate opens: approve runs that loop once more (instructions sent with `steer` reach its fix sessions), reject ends the
+run `needs_human`, with no PR for the checks and with the PR open for CI. An agent reporting itself blocked ends the run
+`needs_human` with no PR. An agent session that errors, including a review without a valid structured answer, ends the
+run `failed`. A `learn` session that does not pass, or whose activity fails, is the exception: its docs are not worth
+losing the change over, so the PR still opens with the implement session's title and summary (else the task's
 conventional title).
 """
 
@@ -24,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.sdk.review import Review, parse_review, review_context
     from fact.sdk.types import (
         Check,
+        GateDecision,
         PRRef,
         RunInput,
         RunOutcome,
@@ -39,6 +42,7 @@ CHECKS: list[Check] = ["lint", "test"]
 MAX_FIX_ATTEMPTS = 3
 MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
+NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
 
 
 def _ended(stage: str, step: StepResult) -> RunResult:
@@ -61,10 +65,15 @@ def _ended(stage: str, step: StepResult) -> RunResult:
         Stage("open_pr", "Open PR", StepKind.GITHUB),
         Stage("wait_for_ci", "Wait for CI", StepKind.GITHUB, loops_to="fix_ci"),
         Stage("fix_ci", "Fix CI", StepKind.AGENT, loops_to="open_pr"),
+        Stage(NEEDS_HUMAN, "Needs a person", StepKind.GATE),
     ]
 )
 @workflow.defn(name="standard")
 class Standard(FactWorkflow):
+    def __init__(self) -> None:
+        super().__init__()
+        self._gates = 0  # `needs_human` gates opened so far, for unique gate ids
+
     @workflow.run
     async def run(self, run_input: RunInput) -> RunResult:
         return await self.execute(run_input, self._steps)
@@ -92,23 +101,39 @@ class Standard(FactWorkflow):
         return await self._ci_green(prs)
 
     async def _checks_green(self) -> RunResult | None:
-        """Loop the checks with fix sessions; return the run's end if they never go green, else None."""
-        checks = await self.until_green(CHECKS, fix_prompt="fix_checks", max_attempts=MAX_FIX_ATTEMPTS)
-        if checks == StepOutcome.PASSED:
-            return None
-        failed = ", ".join(c.name for c in self.check_results if c.outcome != StepOutcome.PASSED)
-        summary = f"checks still failing after {MAX_FIX_ATTEMPTS} fix sessions: {failed}"
-        return RunResult(outcome=RunOutcome.NEEDS_HUMAN, summary=limit_text(summary, SUMMARY_BYTES))
+        """Loop the checks with fix sessions, and ask a person each time they stay red; None once they are green."""
+        while True:
+            checks = await self.until_green(CHECKS, fix_prompt="fix_checks", max_attempts=MAX_FIX_ATTEMPTS)
+            if checks == StepOutcome.PASSED:
+                return None
+            failed = ", ".join(c.name for c in self.check_results if c.outcome != StepOutcome.PASSED)
+            summary = f"checks still failing after {MAX_FIX_ATTEMPTS} fix sessions: {failed}"
+            if (rejected := await self._ask("checks", summary)) is not None:
+                return rejected
 
     async def _ci_green(self, prs: list[PRRef]) -> RunResult:
-        """Wait for CI with fix sessions, update the cost comment, and end the run: `needs_human` if CI stays red."""
-        ci = await self.until_ci_green(prs, fix_prompt="fix_ci", max_attempts=MAX_CI_FIX_ATTEMPTS)
-        await self.post_cost_comment(self.prs)  # again, with the CI wait and fixes
-        urls = ", ".join(pr.url for pr in self.prs)
-        if ci != StepOutcome.PASSED:
-            summary = limit_text(f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}", SUMMARY_BYTES)
-            return RunResult(outcome=RunOutcome.NEEDS_HUMAN, prs=self.prs, summary=summary)
-        return RunResult(outcome=RunOutcome.PR_OPENED, prs=self.prs, summary=urls)
+        """Wait for CI with fix sessions, asking a person each time it stays red; update the cost comment, and end."""
+        while True:
+            ci = await self.until_ci_green(prs, fix_prompt="fix_ci", max_attempts=MAX_CI_FIX_ATTEMPTS)
+            prs = self.prs
+            urls = ", ".join(pr.url for pr in prs)
+            if ci == StepOutcome.PASSED:
+                result: RunResult | None = RunResult(outcome=RunOutcome.PR_OPENED, prs=prs, summary=urls)
+                break
+            summary = f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}"
+            if (result := await self._ask("wait_for_ci", summary)) is not None:
+                break
+        await self.post_cost_comment(prs)  # again, with the CI wait, the fixes and any human wait
+        return result
+
+    async def _ask(self, loop: str, summary: str) -> RunResult | None:
+        """Open a `needs_human` gate on an exhausted loop: None if approved (run it again), else the run's end."""
+        self._gates += 1
+        answer = await self.gate(f"{loop}-{self._gates}", NEEDS_HUMAN, {"loop": loop, "summary": summary})
+        if answer.decision == GateDecision.APPROVE:
+            return None
+        text = f"{summary}; rejected: {answer.note}" if answer.note else summary
+        return RunResult(outcome=RunOutcome.NEEDS_HUMAN, prs=self.prs, summary=limit_text(text, SUMMARY_BYTES))
 
     async def _address(self, review: Review) -> RunResult | None:
         """One round in v0: if the review asks for changes, address them and loop the checks; None when all is well."""

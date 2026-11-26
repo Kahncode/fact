@@ -2,6 +2,7 @@
 
 from fact.core.activity_contract import Check, CheckResult, CriterionResult
 from fact.core.enums import RunOutcome, StepKind, StepOutcome
+from fact.core.gates import GateAnswer, GateDecision, OpenGate, StageOutcome, WorkflowStatus
 from fact.core.types import (
     SUMMARY_MAX_BYTES,
     ArtifactRef,
@@ -29,6 +30,9 @@ __all__ = [
     "CheckResult",
     "Complexity",
     "CriterionResult",
+    "GateAnswer",
+    "GateDecision",
+    "OpenGate",
     "PRRef",
     "RepoCheckout",
     "Route",
@@ -37,12 +41,14 @@ __all__ = [
     "RunLimits",
     "RunOutcome",
     "RunResult",
+    "StageOutcome",
     "StepKind",
     "StepOutcome",
     "StepResult",
     "Task",
     "TaskType",
     "Usage",
+    "WorkflowStatus",
     "WorkspaceHandle",
     "WorkspaceSpec",
     "limit_text",

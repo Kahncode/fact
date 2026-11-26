@@ -39,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
     from fact.sdk.change_set import default_title, text_output
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
+    from fact.sdk.human import HumanSteps
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, NO_RETRY
     from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
@@ -50,12 +51,13 @@ __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "sta
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(PullRequestSteps):
-    """Base class for project workflows: run bookkeeping plus the step helpers (PR and CI ones in the mixin)."""
+class FactWorkflow(PullRequestSteps, HumanSteps):
+    """Base class for project workflows: run bookkeeping and step helpers; PR and CI steps, gates in the mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
     def __init__(self) -> None:
+        super().__init__()
         self._input: RunInput | None = None
         self._handle: WorkspaceHandle | None = None
         self._attempts: dict[str, int] = {}
@@ -113,6 +115,7 @@ class FactWorkflow(PullRequestSteps):
     def next_attempt(self, stage_id: str) -> int:
         """Return the next attempt number of `stage_id` (1, 2, ...): a run's steps are unique by stage and attempt."""
         self._attempts[stage_id] = self._attempts.get(stage_id, 0) + 1
+        self.note_stage(stage_id, self._attempts[stage_id])
         return self._attempts[stage_id]
 
     async def prepare(self) -> WorkspaceHandle:
@@ -139,6 +142,7 @@ class FactWorkflow(PullRequestSteps):
         The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
         answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried. With `pr_text`,
         a passed session's `title` and `summary` replace earlier ones for the PR (off for a review: it changes nothing).
+        Instructions queued by the `steer` signal go at the end of the next session's context, then are cleared.
         """
         resume: str | None = None
         for resumes in range(MAX_RESUMES + 1):
@@ -171,12 +175,12 @@ class FactWorkflow(PullRequestSteps):
             handle=self.handle,
             task=run.task,
             prompt_name=prompt.removesuffix(".md"),
-            context=context,
+            context=self.with_steering(context),
             complexity=run.complexity,
             home_repo=run.home_repo,
             resume_session_id=resume,
         )
-        return await workflow.execute_activity(
+        result = await workflow.execute_activity(
             AGENT_STEP,
             spec,
             result_type=StepResult,
@@ -185,6 +189,8 @@ class FactWorkflow(PullRequestSteps):
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=NO_RETRY,
         )
+        self.note_outcome(stage_id, spec.attempt, result.outcome)
+        return result
 
     async def until_green(
         self,
@@ -244,7 +250,7 @@ class FactWorkflow(PullRequestSteps):
             check=check,
             timeout_s=run.limits.shell_timeout_s,
         )
-        return await workflow.execute_activity(
+        result = await workflow.execute_activity(
             SHELL_STEP,
             spec,
             result_type=StepResult,
@@ -253,6 +259,8 @@ class FactWorkflow(PullRequestSteps):
             heartbeat_timeout=HEARTBEAT_TIMEOUT,
             retry_policy=INFRA_RETRY,
         )
+        self.note_outcome(stage_id, spec.attempt, result.outcome)
+        return result
 
     async def _control[T](self, name: str, arg: object, result_type: type[T]) -> T:
         return await workflow.execute_activity(

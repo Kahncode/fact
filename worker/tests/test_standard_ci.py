@@ -1,7 +1,16 @@
 """`Standard` after the PR opens: wait for CI, fix sessions with the failing jobs, push again, give up to a person."""
 
-from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET, POST_COST_COMMENT, TEARDOWN_WORKSPACE, WAIT_FOR_CI
+from fact.core.activity_contract import (
+    AGENT_STEP,
+    OPEN_CHANGE_SET,
+    POST_COST_COMMENT,
+    RECORD_GATE_ANSWERED,
+    RECORD_GATE_OPENED,
+    TEARDOWN_WORKSPACE,
+    WAIT_FOR_CI,
+)
 from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.gates import GateDecision
 from standard_harness import PR, FakeActivities, agent_sessions, finished, run_standard
 
 MAX_CI_FIX_ATTEMPTS = 2
@@ -46,6 +55,23 @@ async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
     assert len(fakes.of(POST_COST_COMMENT)) == COST_COMMENTS
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []
+    (gate,) = fakes.of(RECORD_GATE_OPENED)  # a person was asked first, and rejected
+    assert (gate.gate_id, gate.details["loop"]) == ("wait_for_ci-1", "wait_for_ci")
+    assert "CI not green" in gate.details["summary"]
+
+
+async def test_approve_waits_for_ci_and_fixes_once_more() -> None:
+    fakes = FakeActivities(ci_failures=MAX_CI_FIX_ATTEMPTS + 1, gate_decisions=[GateDecision.APPROVE])
+    result, _ = await run_standard(fakes, "run-ci-gate-approve")
+
+    assert result.outcome == RunOutcome.PR_OPENED
+    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    assert (answered.gate_id, answered.decision) == ("wait_for_ci-1", "approve")
+    waits = fakes.of(WAIT_FOR_CI)
+    assert len(waits) == MAX_CI_FIX_ATTEMPTS + 2  # the loop again, from the last pushed head
+    assert waits[-1].pr.head_sha == f"fix{MAX_CI_FIX_ATTEMPTS}"
+    assert result.prs == [PR.model_copy(update={"head_sha": f"fix{MAX_CI_FIX_ATTEMPTS}"})]
+    assert len(fakes.of(POST_COST_COMMENT)) == COST_COMMENTS
 
 
 async def test_ci_that_never_finishes_needs_a_human_without_a_fix() -> None:

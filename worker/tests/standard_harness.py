@@ -14,6 +14,8 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
+    RECORD_GATE_ANSWERED,
+    RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
     SANDBOX_QUEUE,
@@ -21,6 +23,8 @@ from fact.core.activity_contract import (
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
     AgentStepInput,
+    GateAnsweredInput,
+    GateOpenedInput,
     MarkTaskDoneInput,
     OpenChangeSetInput,
     PostCostCommentInput,
@@ -30,11 +34,13 @@ from fact.core.activity_contract import (
     WaitForCIInput,
 )
 from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.gates import GateDecision
 from fact.core.settings import REPO_ROOT
 from fact.core.types import PRRef, RepoCheckout, RunInput, RunResult, StepResult, Task, WorkspaceHandle, WorkspaceSpec
 from fact.worker.loader import sandbox_runner
+from gate_harness import answer
 from temporalio import activity
-from temporalio.client import Client, WorkflowHistory
+from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
@@ -92,6 +98,10 @@ class FakeActivities:
     ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
     fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
+    # How `record_gate_opened` answers each gate, in order, then reject; None: the test answers them itself.
+    # Answering inside the activity keeps the time-skipping server busy, so it never skips to the workflow's timeout.
+    gate_decisions: list[GateDecision] | None = field(default_factory=list)
+    client: Client | None = None  # set by `started_standard`, to answer gates
     calls: list[tuple[str, object]] = field(default_factory=list)
 
     def _call(self, name: str, spec: object) -> None:
@@ -107,6 +117,19 @@ class FakeActivities:
     @activity.defn(name=RECORD_RUN_FINISHED)
     async def record_run_finished(self, spec: RunFinishedInput) -> None:
         self._call(RECORD_RUN_FINISHED, spec)
+
+    @activity.defn(name=RECORD_GATE_OPENED)
+    async def record_gate_opened(self, spec: GateOpenedInput) -> str:
+        self._call(RECORD_GATE_OPENED, spec)
+        if self.gate_decisions is not None and self.client is not None:
+            decision = self.gate_decisions.pop(0) if self.gate_decisions else GateDecision.REJECT
+            handle = self.client.get_workflow_handle(activity.info().workflow_id)
+            await answer(handle, spec.gate_id, decision)
+        return f"step-{spec.gate_id}"
+
+    @activity.defn(name=RECORD_GATE_ANSWERED)
+    async def record_gate_answered(self, spec: GateAnsweredInput) -> None:
+        self._call(RECORD_GATE_ANSWERED, spec)
 
     @activity.defn(name=PREPARE_WORKSPACE)
     async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
@@ -200,6 +223,8 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.open_change_set,
         fakes.post_cost_comment,
         fakes.wait_for_ci,
+        fakes.record_gate_opened,
+        fakes.record_gate_answered,
     ]
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(
@@ -223,12 +248,23 @@ STANDARD = _standard.Standard
 MAX_FIX_ATTEMPTS = _standard.MAX_FIX_ATTEMPTS
 
 
-async def run_standard(fakes: FakeActivities, workflow_id: str) -> tuple[RunResult, WorkflowHistory]:
+@asynccontextmanager
+async def started_standard(
+    fakes: FakeActivities, workflow_id: str
+) -> AsyncIterator[tuple[WorkflowEnvironment, WorkflowHandle]]:
+    """Start `Standard` on a time-skipping server; the test drives it (gates, signals) and awaits the result."""
     env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter, identity=IDENTITY)
     async with env_cm as env, workers(env.client, fakes, STANDARD):
+        fakes.client = env.client
         handle = await env.client.start_workflow(
             STANDARD.run, run_input(), id=workflow_id, task_queue=WORKFLOW_QUEUE, result_type=RunResult
         )
+        yield env, handle
+
+
+async def run_standard(fakes: FakeActivities, workflow_id: str) -> tuple[RunResult, WorkflowHistory]:
+    """Run `Standard` to its end; `fakes.gate_decisions` answers its gates."""
+    async with started_standard(fakes, workflow_id) as (_, handle):
         result = await handle.result()
         history = await handle.fetch_history()
     return result, history

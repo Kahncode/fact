@@ -10,6 +10,7 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
+    RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
     SHELL_STEP,
@@ -119,6 +120,8 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
+    (gate,) = fakes.of(RECORD_GATE_OPENED)  # a person was asked first, and rejected
+    assert (gate.gate_id, gate.kind) == ("checks-1", "needs_human")
 
 
 async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
@@ -250,5 +253,6 @@ def test_standard_stage_manifest() -> None:
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
         {"id": "wait_for_ci", "label": "Wait for CI", "kind": "github", "loops_to": "fix_ci"},
         {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
+        {"id": "needs_human", "label": "Needs a person", "kind": "gate", "loops_to": None},
     ]
     assert json.loads(json.dumps(STANDARD.manifest()))[3]["loops_to"] == "implement"
