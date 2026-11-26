@@ -1,6 +1,6 @@
 # Decisions
 
-Implementation decisions that a future developer would ask "why" about. Design-level decisions are in `docs/spec/16-decisions.md`. Entries are append-only.
+Implementation decisions that a future developer would ask "why" about. Design-level decisions are in `docs/spec/16-decisions.md`. Entries are append-only. This file is full (300-line limit): new entries go in `docs/decisions-2.md`, starting with the scheduler (M2-07).
 
 ## Decisions
 

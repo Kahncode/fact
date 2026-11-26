@@ -7,6 +7,7 @@ from fact.api.run_start import (
     FoundTask,
     StartError,
     find_task,
+    has_run,
     latest_handoff,
     next_run_number,
     run_input,
@@ -43,6 +44,7 @@ class RunStart(BaseModel):
     task_key: str
     project: str | None = None
     override_deps: bool = False
+    only_if_never_run: bool = False  # the scheduler's start: 409 if the task already has a run (see `has_run`)
 
 
 class RunStarted(BaseModel):
@@ -114,6 +116,8 @@ async def start_run(body: RunStart, request: Request, session: Session, store: S
     found = await _find(settings, body)
     client = await temporal_client(request)  # after the checks: a refusal needs no Temporal
     wf_type = workflow_type(found)
+    if body.only_if_never_run and await has_run(session, found.ref.name, found.check.task.key):
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{found.check.task.key} already has a run")
     for _ in range(RESERVE_ATTEMPTS):
         run = await _reserve(session, found, wf_type)
         handoff = await latest_handoff(session, store, run.project_id, run.task_key)

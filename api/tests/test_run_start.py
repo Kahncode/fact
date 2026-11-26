@@ -1,6 +1,5 @@
 """`POST /api/v1/runs/start`: task read from origin, dependency refusal, workflow id numbering, and a real start."""
 
-import subprocess
 from collections.abc import AsyncIterator, Iterator
 from http import HTTPStatus
 from pathlib import Path
@@ -17,6 +16,7 @@ from fact.core.settings import CONFIG_VAR, ProjectRef, Settings, reset_settings
 from fact.core.types import RunInput, Task
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from task_repo import PROJECT, PROJECT_YAML, write
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -25,67 +25,11 @@ from temporalio.service import RPCError, RPCStatusCode
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
-PROJECT = "acme"
-PROJECT_YAML = """name: acme
-repositories:
-  - full_name: acme/home
-    role: backend
-task_source:
-  kind: files
-  path: tasks
-workflows:
-  default: standard
-"""
-
-
-def _task(task_id: str, deps: list[str], status: str = "ready", complexity: str = "standard") -> str:
-    return (
-        f"---\nid: {task_id}\ntitle: Task {task_id}\ntype: feature\ncomplexity: {complexity}\nstatus: {status}\n"
-        f"depends_on: [{', '.join(deps)}]\nhuman_actions: []\n---\n\n## Goal\n\nDo it.\n\n"
-        "## Acceptance criteria\n\n- [ ] it works\n"
-    )
-
-
-def _git(cwd: Path, *args: str) -> None:
-    ident = ["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
-    subprocess.run(["git", *ident, *args], cwd=cwd, check=True, capture_output=True)  # noqa: S603, S607
-
-
-def _write(root: Path, files: dict[str, str]) -> None:
-    for rel, text in files.items():
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-
-
-@pytest.fixture
-def checkout(tmp_path: Path) -> Path:
-    """Clone a bare origin; origin/main holds M1-01 (done), M1-02 (needs M1-01) and M1-03 (needs M1-02)."""
-    origin, work = tmp_path / "origin.git", tmp_path / "work"
-    _git(tmp_path, "init", "--bare", "-b", "main", str(origin))
-    _git(tmp_path, "clone", str(origin), str(work))
-    _git(work, "checkout", "-b", "main")
-    _write(
-        work,
-        {
-            ".fact/project.yaml": PROJECT_YAML,
-            "tasks/M1/01-one.md": _task("M1-01", [], status="done"),
-            "tasks/M1/02-two.md": _task("M1-02", ["M1-01"], complexity="complex"),
-            "tasks/M1/03-three.md": _task("M1-03", ["M1-02"]),
-        },
-    )
-    _git(work, "add", ".")
-    _git(work, "commit", "-m", "tasks")
-    _git(work, "push", "origin", "main")
-    # Only in the working tree: a start must not see it.
-    _write(work, {"tasks/M1/04-local.md": _task("M1-04", [])})
-    return work
-
 
 @pytest.fixture
 def settings(tmp_path: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
     broken = tmp_path / "broken"  # a valid config, but not a git checkout
-    _write(broken, {".fact/project.yaml": PROJECT_YAML})
+    write(broken, {".fact/project.yaml": PROJECT_YAML})
     config = tmp_path / "fact.yaml"
     config.write_text(
         f"data_dir: {(tmp_path / 'data').as_posix()}\n"
@@ -278,3 +222,14 @@ async def test_start_runs_the_project_workflow(app: FastAPI, client: AsyncClient
     assert [(r.full_name, r.branch) for r in got.repos] == [("acme/home", "fact/task-m1-02")]
     run = (await client.get(f"/api/v1/runs/{started['run_id']}")).json()
     assert (run["status"], run["workflow_id"], run["task_key"]) == ("queued", "run-task-M1-02-1", "task:M1-02")
+
+
+async def test_scheduler_start_refused_once_the_task_has_a_run(app: FastAPI, client: AsyncClient) -> None:
+    fake = _FailingClient(RPCError("down", RPCStatusCode.UNAVAILABLE, b""))
+    app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
+    assert (await _start(client, task_key="task:M1-02", only_if_never_run=True)).status_code == HTTPStatus.BAD_GATEWAY
+    started = await _start(client, task_key="task:M1-02", only_if_never_run=True)  # the failed start does not count
+    assert started.status_code == HTTPStatus.CREATED, started.text
+    again = await _start(client, task_key="task:M1-02", only_if_never_run=True)
+    assert again.status_code == HTTPStatus.CONFLICT, again.text
+    assert (await _start(client, task_key="task:M1-02")).status_code == HTTPStatus.CREATED  # `fact run` still can

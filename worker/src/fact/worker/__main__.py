@@ -3,6 +3,8 @@
 
 One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), plus the
 `control` and `sandbox` activity workers; the sandbox worker runs at most `concurrency.sandboxes` activities at once.
+The control worker also runs the scheduler's `SchedulerTick`, and startup creates or updates its `fact-scheduler`
+Schedule (`scheduler.py`).
 """
 
 import asyncio
@@ -23,6 +25,7 @@ from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.activities.notify import NotifyActivities
 from fact.worker.activities.pr_state import PRStateActivities
+from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.client import connect
@@ -32,6 +35,7 @@ from fact.worker.loader import ProjectWorkflows, WorkflowLoadError, factory_sha,
 from fact.worker.ping import CONTROL_QUEUE, SANDBOX_QUEUE, PingWorkflow, ping
 from fact.worker.reporting import StepReporter
 from fact.worker.runners import LocalWorktreeRunner, RunnerError
+from fact.worker.scheduler import SchedulerTick, ensure_schedule
 from temporalio.client import Client
 from temporalio.worker import Worker
 
@@ -101,10 +105,11 @@ def _activity_workers(
     cost = CostCommentActivities(github, settings.api_url, http)
     ci = CIActivities(github, reporter)
     pr_state = PRStateActivities(github)
+    scheduler = SchedulerActivities(settings.api_url, http)
     control = Worker(
         client,
         task_queue=CONTROL_QUEUE,
-        workflows=[PingWorkflow],
+        workflows=[PingWorkflow, SchedulerTick],
         activities=[
             ping,
             workspace.prepare_workspace,
@@ -120,6 +125,8 @@ def _activity_workers(
             gates.record_gate_answered,
             notify.notify,
             handoff.write_handoff,
+            scheduler.find_ready_tasks,
+            scheduler.start_scheduled_run,
         ],
     )
     sandbox = Worker(
@@ -147,6 +154,7 @@ async def run() -> None:
             await stack.enter_async_context(worker)
         for project in projects:
             await set_current_version(client, project)  # failing here beats runs that never start
+        await ensure_schedule(client, settings)
         queues = [CONTROL_QUEUE, SANDBOX_QUEUE, *(p.task_queue for p in projects)]
         log.info("worker_started", queues=queues, address=settings.temporal.address)
         await asyncio.Event().wait()  # until cancelled

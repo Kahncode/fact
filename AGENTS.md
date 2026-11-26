@@ -14,7 +14,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 
 - **Design:** `docs/spec/`, one file per section. Start from `docs/spec/README.md` and read only what your task points to.
 - **Architecture:** `docs/ARCHITECTURE.md`, index of components and what exists in code today.
-- **Decisions:** `docs/decisions.md`, implementation decisions (design decisions are in `docs/spec/16-decisions.md`).
+- **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` (new entries go there; design decisions are in `docs/spec/16-decisions.md`).
 - **Work:** `tasks/`, one markdown file per task, grouped by milestone. `tasks/README.md` explains the format. `tasks/backlog.md` holds ideas and problems not yet planned.
 
 ---
@@ -85,6 +85,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Answer a run's open gate | `uv run fact gate <run> approve\|reject` (`--note`, `--gate`) |
 | Send instructions to a run | `uv run fact steer <run> TEXT`               |
 | Drop a run (restart its task with `fact run`) | `uv run fact drop <run>` (`--reason`) |
+| Turn the scheduler on/off, show it | `uv run fact scheduler on\|off\|status` |
 | List unread notifications | `uv run fact inbox` (`--all` includes read)   |
 | Mark a notification read | `uv run fact inbox read <id>`                  |
 | Check GitHub App access | `uv run fact github check <owner/repo>`         |
@@ -107,6 +108,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 - Workflow handler names for people (`answer_gate` update, `status` query, `steer` signal) and their models live in `fact.core.gates`; clients call them by name and never import `fact.sdk`. A subclass of `FactWorkflow` that defines `__init__` must call `super().__init__()`.
 - Dropping a run (`fact drop`) cancels its workflow; `FactWorkflow.execute` turns the cancellation into outcome `dropped` (`fact.sdk.drop.DropSteps`), so project workflows need no drop handling of their own.
 - `python -m fact.worker` loads each project's `.fact/workflows/` from a detached checkout of its default branch at `pinned_dir/projects/<project>/<sha>` and runs them on queue and deployment `wf-<project>` (`workflow_queue`), pinned to build id `<factory SHA[:12]>+<home SHA>`; workflow changes apply at the next worker restart (see `worker/README.md`).
+- The scheduler is the only background job: the worker creates the Temporal Schedule `fact-scheduler` (paused unless `concurrency.scheduler_enabled`), whose `SchedulerTick` starts ready, never-run file tasks through `POST /runs/start` within `concurrency.max_runs` and each project's `max_runs` (`fact.core.scheduler`, `fact.worker.scheduler`).
 - Each package owns its tests in its own `tests/`.
 - Logging goes through `fact.core.logging` (structlog): call `configure_logging(env, level)` once at process start, get loggers with `get_logger(name)`, and wrap run/step work in `bind_run(run_id, step_id)` so every line carries `run_id`.
 - Settings come only from `fact.core.settings.get_settings()`, which loads `fact.yaml`:

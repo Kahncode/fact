@@ -4,7 +4,7 @@ from importlib.metadata import version
 from typing import Annotated
 
 import typer
-from fact.cli import dev, github, inbox, projects, runs, use
+from fact.cli import dev, github, inbox, projects, runs, scheduler, use
 
 app = typer.Typer(name="fact", no_args_is_help=True, help="fact: turn tasks into reviewed GitHub PRs.")
 app.command("dev")(dev.dev)
@@ -18,6 +18,7 @@ app.command("drop")(runs.drop)
 app.add_typer(inbox.app, name="inbox")
 app.add_typer(projects.app, name="projects")
 app.add_typer(github.app, name="github")
+app.add_typer(scheduler.app, name="scheduler")
 
 
 def _print_version(value: bool) -> None:  # noqa: FBT001

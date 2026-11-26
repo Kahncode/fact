@@ -12,6 +12,7 @@ from typing import Any, Literal, get_args
 
 from dotenv import dotenv_values
 from fact.core.enums import StepKind
+from fact.core.step_defaults import StepDefaults, StepDefaultsSettings
 from fact.core.types import Complexity, Route, RouteOverride
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import (
@@ -59,6 +60,9 @@ class ApiSettings(_Section):
 class ConcurrencySettings(_Section):
     sandboxes: int = 2
     planners: int = 1
+    max_runs: int = Field(default=2, ge=1)  # runs queued, running or waiting at once, all projects together
+    scheduler_enabled: bool = False  # create `fact-scheduler` unpaused; then `fact scheduler on|off` decides
+    scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # applied to the Schedule at worker start
 
 
 class RoutingSettings(_Section):
@@ -82,38 +86,11 @@ class RoutingSettings(_Section):
         return v
 
 
-class StepDefaults(_Section):
-    timeout_minutes: float = Field(default=30.0, gt=0)
-    max_turns: int | None = Field(default=None, ge=1)  # agent steps only; None: the harness's own limit
-
-
-class AgentStepDefaults(StepDefaults):
-    timeout_minutes: float = Field(default=60.0, gt=0)
-    max_turns: int | None = Field(default=100, ge=1)
-    # Harness permission mode, such as Claude Code's "auto" (a classifier approves or denies, nobody is asked) or
-    # "bypassPermissions" (checks off: only in an isolated runner). None: the harness default.
-    permission_mode: str | None = "auto"
-
-
-class ShellStepDefaults(StepDefaults):
-    timeout_minutes: float = Field(default=15.0, gt=0)
-
-
-class StepDefaultsSettings(_Section):
-    """
-    Limits per step kind. Typed fields, not a dict, so setting one value in YAML keeps the others' defaults.
-
-    Kinds without a field get `StepDefaults()`.
-    """
-
-    agent: AgentStepDefaults = Field(default_factory=AgentStepDefaults)
-    shell: ShellStepDefaults = Field(default_factory=ShellStepDefaults)
-
-
 class ProjectRef(_Section):
     name: str
     home: str  # GitHub "owner/repo" holding the project's .fact/ folder
     path: Path | None = None  # optional local checkout
+    max_runs: int = Field(default=1, ge=1)  # scheduler cap: runs queued, running or waiting (1: shared git hooks)
 
 
 def config_file() -> Path:

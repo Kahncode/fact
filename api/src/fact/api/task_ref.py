@@ -80,3 +80,12 @@ def read_task(repo: Path, branch: str, folder: str, key: str) -> TaskCheck | Non
             return None
         missing = [d for d in task.depends_on if not source.deps_done(task.model_copy(update={"depends_on": [d]}))]
         return TaskCheck(task=task, missing_deps=[KEY_PREFIX + d for d in missing])
+
+
+def ready_tasks(repo: Path, branch: str, folder: str) -> list[tuple[Task, int]]:
+    """Tasks `ready` on `origin/<branch>` with every dependency done, each with its dependency depth."""
+    with tempfile.TemporaryDirectory(prefix="fact-tasks-") as tmp:
+        _extract(repo, f"origin/{branch}", folder, Path(tmp))
+        source = FileTaskSource(Path(tmp), folder)
+        depths = source.depths()
+        return [(task, depths.get(task.key, 0)) for task in source.ready()]

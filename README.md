@@ -73,6 +73,20 @@ uv run fact inbox read 3
 
 `fact inbox` lists unread notifications, newest first, with a link to the PR or the run; `--all` includes those already read, and `fact inbox read <id>` marks one read. The web UI's Notifications page replaces this in M3.
 
+## Letting fact pick up work
+
+Instead of starting each task by hand, turn the scheduler on:
+
+```
+uv run fact scheduler on
+uv run fact scheduler status
+uv run fact scheduler off
+```
+
+Every 30 seconds it starts the tasks marked `status: ready` on the default branch whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`). A task that has already had a run is never started again by the scheduler, even if that run failed or was dropped; restart it with `fact run`. The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. See `docs/ARCHITECTURE.md`.
+
+## Workspaces
+
 Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run's PR is merged or closed, or the run is dropped; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
 
 ## GitHub App
@@ -89,7 +103,7 @@ To set up a task repository, `uv run fact github labels sync <owner/repo>` creat
 
 ## The API
 
-Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run dropped with `POST /api/v1/runs/{id}/drop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`.
+Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run dropped with `POST /api/v1/runs/{id}/drop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start.
 
 Every response carries an `X-Request-ID` header (send your own to propagate it), and each request produces one `request_completed` log line. Set `FACT_LOG_LEVEL` to override the log level (default DEBUG locally, INFO in `test` and `prod`); see `docs/ARCHITECTURE.md` for logging details.
 

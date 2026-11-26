@@ -10,12 +10,12 @@ from fact.api.task_ref import TaskCheck, TaskReadError, fetch, read_task
 from fact.core.artifacts import ArtifactStore, handoff_key
 from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
-from fact.core.models import Run
+from fact.core.models import Project, Run
 from fact.core.project_config import ConfigError, ProjectConfig, load_project_config
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks.files import branch_name
 from fact.core.types import RepoCheckout, RunInput, RunLimits
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = get_logger(__name__)
@@ -78,12 +78,27 @@ async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id
     return None
 
 
+def counts_as_run() -> ColumnElement[bool]:
+    """Match the runs that count: all but a start that never reached Temporal (see `_mark_start_failed`)."""
+    return or_(Run.status != RunStatus.FINISHED, Run.started_at.is_not(None), Run.ended_at.is_not(None))
+
+
+async def has_run(session: AsyncSession, project: str, task_key: str) -> bool:
+    query = (
+        select(Run.id)
+        .join(Project, Project.id == Run.project_id)
+        .where(Project.name == project, Run.task_key == task_key, counts_as_run())
+        .limit(1)
+    )
+    return await session.scalar(query) is not None
+
+
 def temporal_link(settings: Settings, wf_id: str) -> str:
     ns = quote(settings.temporal.namespace, safe="")
     return f"{settings.temporal.ui_url.rstrip('/')}/namespaces/{ns}/workflows/{quote(wf_id, safe='')}"
 
 
-def _default_branch(ref: ProjectRef, config: ProjectConfig) -> str:
+def default_branch(ref: ProjectRef, config: ProjectConfig) -> str:
     home = next((r for r in config.repositories if r.full_name.lower() == ref.home.lower()), config.repositories[0])
     return home.default_branch
 
@@ -95,7 +110,7 @@ def _lookup(ref: ProjectRef, task_key: str) -> FoundTask | None:
     config = load_project_config(path)
     if config.task_source.kind != "files":
         return None
-    branch = _default_branch(ref, config)
+    branch = default_branch(ref, config)
     fetch(path, branch)
     check = read_task(path, branch, config.task_source.path, task_key)
     return FoundTask(ref, config, check) if check else None

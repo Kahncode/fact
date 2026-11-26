@@ -188,6 +188,26 @@ class FileTaskSource:
             if e.status == "ready" and all(self._dep_done(d, entries) for d in e.task.depends_on)
         ]
 
+    def depths(self) -> dict[str, int]:
+        """
+        Dependency depth of every task, by key: 0 without a dependency still in the folder, else one past the deepest.
+
+        A cycle (which `validate` reports) is cut where it closes.
+        """
+        entries = self._entries()
+        depth: dict[str, int] = {}
+
+        def visit(key: str, path: set[str]) -> int:
+            if key not in depth:
+                deps = [KEY_PREFIX + d for d in entries[key].task.depends_on]
+                known = [d for d in deps if d in entries and d not in path]
+                depth[key] = max((visit(d, path | {key}) + 1 for d in known), default=0)
+            return depth[key]
+
+        for key in entries:
+            visit(key, set())
+        return depth
+
     def validate(self) -> list[str]:
         """Check the whole set. Returns error messages; an empty list means every task file is sound."""
         entries, errors = self._scan()

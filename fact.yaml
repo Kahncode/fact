@@ -8,13 +8,20 @@ temporal:
 api:
   host: 127.0.0.1
   port: 8000
+# max_runs caps runs queued, running or waiting, all projects together; each project also has its own max_runs.
+# The scheduler starts ready tasks every scheduler_interval_seconds; scheduler_enabled only sets whether the
+# fact-scheduler Schedule is created on or paused; after that, `fact scheduler on|off` decides.
 concurrency:
   sandboxes: 2
   planners: 1
+  max_runs: 2
+  scheduler_enabled: false
+  scheduler_interval_seconds: 30
 projects:
   - name: fact
     home: Kahncode/fact
     path: .
+    max_runs: 1 # one run per repository while git hooks are shared by every worktree (docs/decisions-2.md)
 # Harness and model per agent step: rules are "<complexity>.<stage>" with "*" wildcards. Most specific wins:
 # a step override, then <complexity>.<stage>, <complexity>.*, *.<stage>, then default. Unset fields fall through.
 routing:

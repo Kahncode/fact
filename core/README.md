@@ -4,7 +4,7 @@ Shared foundation: settings, logging, database, migrations, project config, shar
 
 ## Settings
 
-`fact.core.settings.get_settings()` loads `fact.yaml` (layering in `AGENTS.md`). `Settings.api_url` is the base URL clients use to reach the API (`http://<host>:<port>` from `api`; a wildcard bind host `0.0.0.0` or `::` becomes `127.0.0.1` or `::1`, IPv6 literals are bracketed). The worker and the `fact` CLI use it; don't rebuild the URL from `api.host`.
+`fact.core.settings.get_settings()` loads `fact.yaml` (layering in `AGENTS.md`). The per-step-kind limits (`StepDefaults`, `StepDefaultsSettings` and the agent and shell subclasses) live in `fact.core.step_defaults`; `fact.core.settings` re-exports `StepDefaults` and `StepDefaultsSettings`. Scheduler settings: `concurrency.max_runs` (default 2, runs queued, running or waiting across all projects), `concurrency.scheduler_enabled` (default false: the Schedule is created paused), `concurrency.scheduler_interval_seconds` (default 30) and `max_runs` on each `projects:` entry (default 1). `Settings.api_url` is the base URL clients use to reach the API (`http://<host>:<port>` from `api`; a wildcard bind host `0.0.0.0` or `::` becomes `127.0.0.1` or `::1`, IPv6 literals are bracketed). The worker and the `fact` CLI use it; don't rebuild the URL from `api.host`.
 
 ## Database
 
@@ -32,7 +32,7 @@ In code: `fact.core.migrate.upgrade(url)`. It is synchronous (the async `env.py`
 
 ## Task files
 
-`fact.core.tasks.FileTaskSource(root)` reads `tasks/` (format in `tasks/README.md`): `all()`, `get(key)`, `status(key)`, `deps_done(task)`, `ready()`, `validate()` (list of error strings) and `mark_done(worktree, key)` (deletes the task's file under `worktree` and returns its path). Statuses are not on `Task`; use `status()`. A dependency whose file is missing counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present. `branch_name(key)` returns the task branch name.
+`fact.core.tasks.FileTaskSource(root)` reads `tasks/` (format in `tasks/README.md`): `all()`, `get(key)`, `status(key)`, `deps_done(task)`, `ready()`, `validate()` (list of error strings) and `mark_done(worktree, key)` (deletes the task's file under `worktree` and returns its path) and `depths()` (each task's dependency depth by key: 0 with no dependency still in the folder, else one past its deepest dependency; a cycle is cut where it closes). Statuses are not on `Task`; use `status()`. A dependency whose file is missing counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present. `branch_name(key)` returns the task branch name.
 
 ## Shared types
 
@@ -45,6 +45,10 @@ In code: `fact.core.migrate.upgrade(url)`. It is synchronous (the async `env.py`
 ## Gates, status and steering
 
 `fact.core.gates` is the contract between a running workflow and whoever talks to it: the handler names `ANSWER_GATE` (`answer_gate`, an update taking a `GateAnswer`), `STATUS` (`status`, a query returning `WorkflowStatus`) and `STEER` (`steer`, a signal taking the text to add to the next agent session), so the API and CLI can call them by name without importing `fact.sdk`. Models: `GateDecision` (`approve`, `reject`), `GateAnswer` (`gate_id`, `decision`, `note` up to `NOTE_MAX_CHARS` 4000), `OpenGate` (`gate_id`, `kind`, `stage_id`, `attempt`, `details`, `opened_at`), `StageOutcome` and `WorkflowStatus` (`stage`, `attempt`, `gate`, `outcomes`); `STEER_MAX_CHARS` is 8000. They are re-exported from `fact.sdk.types`; the handlers are implemented by `fact.sdk.human.HumanSteps`.
+
+## Scheduler
+
+`fact.core.scheduler` is the scheduler's contract: `SCHEDULE_ID` (`fact-scheduler`, the Temporal Schedule), the workflow type `SchedulerTick` (control queue), the activity names `find_ready_tasks` and `start_scheduled_run`, and the models `ReadyTask` (`project`, `task_key`, `task_id`, `depth`), `ProjectLoad`, `ReadyTasks`, `StartScheduledRunInput` and `TickResult`. `plan_starts(ready)` is pure, so the tick workflow calls it: it orders tasks by dependency depth, then id (`M<n>-<n>` numerically), and takes them while `concurrency.max_runs` and each project's `max_runs` allow, counting runs queued, running or waiting; a project missing from `projects` gets nothing. The worker owns the Schedule (`fact.worker.scheduler`); the API serves `find_ready_tasks` and pauses or unpauses the Schedule.
 
 ## GitHub
 
