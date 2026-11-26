@@ -7,6 +7,7 @@ from fact.core.activity_contract import (
     AGENT_INTERRUPTED,
     AGENT_STEP,
     MARK_TASK_DONE,
+    MERGE_CHANGE_SET,
     NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
@@ -63,6 +64,7 @@ async def test_green_path() -> None:
         POST_COST_COMMENT,
         WAIT_FOR_CI,
         POST_COST_COMMENT,
+        MERGE_CHANGE_SET,  # refused by default in the fakes: a person reviews
         NOTIFY,  # PRs ready
         RECORD_GATE_OPENED,  # the review wait
         WAIT_FOR_PR_CLOSED,

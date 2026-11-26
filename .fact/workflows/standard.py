@@ -10,8 +10,9 @@ through the check loop again. Then a `learn` session updates the repositories' c
 READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch, open the PR (with
 the review's criteria table) and comment the run's cost on it. Then wait for CI on the PR's head commit: a failure goes
 to a `fix_ci` session with the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most
-`MAX_CI_FIX_ATTEMPTS` times. Once CI is green, the cost comment is updated, a person is told the PRs are ready, and
-the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
+`MAX_CI_FIX_ATTEMPTS` times. Once CI is green, the cost comment is updated and, while `MERGE_WHEN_GREEN` is on, fact
+merges the PRs itself (squash, at the head commit CI passed on) and the run ends `merged`. If the switch is off or
+GitHub refuses the merge, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
 closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. The cost comment is updated
 once more at the end.
 
@@ -23,7 +24,7 @@ run `failed`. A `learn` session that does not pass, or whose activity fails, is 
 losing the change over, so the PR still opens with the implement session's title and summary (else the task's
 conventional title).
 
-A person is notified when a gate opens, when the PRs are ready (CI green), and when the run ends `failed` or
+A person is notified when a gate opens, when the PRs are ready for review (CI green, not merged by fact), and when the run ends `failed` or
 `needs_human` (`run_failed`) or `merged`, `closed` or `dropped` (`run_finished`).
 """
 
@@ -53,6 +54,9 @@ MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
 NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
 APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
+# Interim, until the classify stage and auto-merge exist (issues #13, #14): merge every change set whose CI is green,
+# with no person, so fact can work through its own tasks unattended. #14 replaces this switch with classification.
+MERGE_WHEN_GREEN = True
 
 
 def _ended(stage: str, step: StepResult) -> RunResult:
@@ -164,8 +168,10 @@ class Standard(FactWorkflow):
         return await self._until_closed(prs)
 
     async def _until_closed(self, prs: list[PRRef]) -> RunResult:
-        """CI is green: tell a person, wait until every PR is merged or closed, and end the run that way."""
+        """CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed."""
         await self.post_cost_comment(prs)  # again, with the CI wait and the fixes, for the reviewer
+        if MERGE_WHEN_GREEN and await self.merge_change_set(prs):
+            return RunResult(outcome=RunOutcome.MERGED, prs=prs, summary=", ".join(pr.url for pr in prs))
         await self.notify_prs_ready(prs)
         outcome = await self.wait_for_pr_closed(prs)
         await self.post_cost_comment(prs)  # last, with the review wait
