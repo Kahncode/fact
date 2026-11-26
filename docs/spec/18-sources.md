@@ -9,3 +9,5 @@
 - [Temporal Python SDK guides, incl. Claude Agent SDK plugin](https://docs.temporal.io/tags/python-sdk)
 
 Base template for the factory API: [Kahncode/py-fastapi-template](https://github.com/Kahncode/py-fastapi-template)
+
+Software factory UX research (Warp Factories, Factory), read for the web UI: [docs/research/2026-11-software-factory-ux.md](../research/2026-11-software-factory-ux.md). Docs: [Warp Factories](https://docs.warp.dev/factories/), [Factory](https://docs.factory.com/).

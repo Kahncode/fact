@@ -4,9 +4,12 @@ Every step attempt writes one row with its timing, tokens and cost, plus a log f
 
 **How data flows**
 
-1. A step activity emits structured events to the factory API: `step_started`, `log`, `agent_message`, `tool_call`, `cost_update`, `step_finished`.
-2. The API writes rows to SQLite (`steps`, `events`) and the content to object storage at `runs/<run>/<step>/<attempt>/`: `output.log`, `transcript.jsonl` and other artifacts such as diffs. The rows keep only links to those objects. A dropped run's handoff note is stored per run, at `runs/<run>/handoff.md`.
-3. The UI subscribes over SSE and shows logs live; finished files are served as downloads.
+1. A step activity reports to the factory API when it starts and ends (one `steps` row per attempt: timings, tokens, cost, outcome, outputs). Nothing else about a step goes in the database.
+2. Its log and agent transcript are files in the artifact store at `runs/<run>/<step>/<attempt>/`: `output.log`, `transcript.jsonl` and other artifacts such as diffs; the row keeps only their keys. A dropped run's handoff note is stored per run, at `runs/<run>/handoff.md`.
+3. **Live (decided 26 Nov 2026, M4, not built yet):** while the step runs, the worker sends new log and transcript text to the API about once a second; the API appends it to those artifact files and pushes it to open log panels over SSE. The upload at step end stays as a final reconcile. Today both files are uploaded only when the step ends.
+4. Every past run stays inspectable: its stages, every step attempt, and each attempt's log, transcript and artifacts.
+
+The `events` table and `POST /runs/{id}/events` from M0 were never used; M4 removes them (a new migration).
 
 **What is measured**
 
@@ -18,7 +21,7 @@ Every step attempt writes one row with its timing, tokens and cost, plus a log f
 | Tokens and cost (USD) | step attempt, run, project, day | From the harness; priced from a table when missing |
 | Attempts and loops | step, run | e.g. implement ran 3 times before tests passed |
 | Human touches | run | Gate answers, extra instructions, manual commits; the metric Warp tracks |
-| Outcome | run | pr_opened (the workflow ended with its PRs open, without waiting for a merge; `Standard` waits since M2-05), needs_human (gave up, such as an exhausted checks loop), merged, closed, abandoned, failed, dropped (a person dropped the run with `fact drop`, or rejected its plan at the `approve_plan` gate) |
+| Outcome | run | pr_opened (the workflow ended with its PRs open, without waiting for a merge; `Standard` waits since M2-05), needs_human (gave up, such as an exhausted checks loop), no_changes (succeeded with nothing to change: no PR, issue closed; not built yet), merged, closed, abandoned, failed, dropped (a person dropped the run with `fact drop`, or rejected its plan at the `approve_plan` gate) |
 
 Logs and transcripts are kept forever for now, like rows; a retention setting can come later if storage grows.
 
