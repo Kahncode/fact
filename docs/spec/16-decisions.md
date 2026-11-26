@@ -17,7 +17,7 @@
 **Also decided**
 
 - **Hosting**: local-first for the first versions only. Remote hosting (Linux) and more users come later, so nothing in v0 may assume one machine forever.
-- **Platforms**: v0 runs on your Windows PC but must run on Windows, macOS and Linux. Tooling is cross-platform Python (no bash or make), paths use `pathlib`, and containers rely on Docker Desktop on Windows and macOS.
+- **Platforms**: v0 runs on your Windows PC but must run on Windows, macOS and Linux. Tooling is cross-platform Python (no bash or make), paths use `pathlib`, and containers rely on Docker Desktop on Windows and macOS. CI (26 Nov 2026): PRs are checked on Linux only and every check must pass to merge; Windows runs on `main` after each merge (and by hand), so a Windows break shows as a red `main` before a new factory version is pinned.
 - **Repository**: one monorepo, [Kahncode/fact](https://github.com/Kahncode/fact): a uv workspace of Python packages `core/`, `api/`, `worker/`, `sdk/` and `cli/` (namespace `fact.*`, each with its own `tests/`), plus `web/` for the UI, `docs/spec/` for this spec and `tasks/` for the bootstrap tasks.
 - **Auto-merge**: ~~none in v0~~ Reopened 26 Nov 2026: from M3, a project setting on by default; classify decides per change set, and fact's own repository is classified like any other (`06-workflow-authoring.md`, `14-dogfooding-and-safety.md`).
 - **Concurrency defaults**: 2 execution sandboxes and 1 planner at a time on your PC.
