@@ -20,6 +20,7 @@ from fact.core.activity_contract import (
     SANDBOX_QUEUE,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
+    WAIT_FOR_CI,
     AgentStepInput,
     MarkTaskDoneInput,
     OpenChangeSetInput,
@@ -27,6 +28,7 @@ from fact.core.activity_contract import (
     RunFinishedInput,
     RunStartedInput,
     ShellStepInput,
+    WaitForCIInput,
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.settings import REPO_ROOT
@@ -87,6 +89,10 @@ class FakeActivities:
     test_failures_after_address: int = 0  # `test` failures once `address_review` has run
     broken: str | None = None  # name of an activity that raises a non-retryable error
     checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
+    ci_failures: int = 0  # `wait_for_ci` steps that fail before one passes
+    ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
+    fix_ci_outcome: StepOutcome = StepOutcome.PASSED
+    fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
     calls: list[tuple[str, object]] = field(default_factory=list)
 
     def _call(self, name: str, spec: object) -> None:
@@ -131,6 +137,8 @@ class FakeActivities:
             if isinstance(self.learn, Exception):
                 raise self.learn
             return self.learn
+        if spec.prompt_name == "fix_ci":
+            return StepResult(outcome=self.fix_ci_outcome, summary="fixed CI")
         if spec.prompt_name == "address_review":
             self.test_failures += self.test_failures_after_address
             return StepResult(outcome=self.address_outcome, summary="addressed", outputs={"summary": "addressed"})
@@ -157,11 +165,26 @@ class FakeActivities:
     @activity.defn(name=OPEN_CHANGE_SET)
     async def open_change_set(self, spec: OpenChangeSetInput) -> list[PRRef]:
         self._call(OPEN_CHANGE_SET, spec)
-        return [PR]
+        pushes = len(self.of(OPEN_CHANGE_SET))
+        fixed = pushes - 1 if self.fix_ci_commits else 0
+        return [PR if fixed == 0 else PR.model_copy(update={"head_sha": f"fix{fixed}"})]
 
     @activity.defn(name=POST_COST_COMMENT)
     async def post_cost_comment(self, spec: PostCostCommentInput) -> None:
         self._call(POST_COST_COMMENT, spec)
+
+    @activity.defn(name=WAIT_FOR_CI)
+    async def wait_for_ci(self, spec: WaitForCIInput) -> StepResult:
+        self._call(WAIT_FOR_CI, spec)
+        if self.ci_timed_out:
+            return StepResult(
+                outcome=StepOutcome.FAILED_CHECKS, summary="CI still running", outputs={"timed_out": True}
+            )
+        if self.ci_failures > 0:
+            self.ci_failures -= 1
+            failure = {"name": "test (windows)", "conclusion": "failure", "url": "https://ci/1", "log_tail": "E boom"}
+            return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 failed", outputs={"failures": [failure]})
+        return StepResult(outcome=StepOutcome.PASSED, summary="CI passed")
 
     def of(self, name: str) -> list:
         return [arg for n, arg in self.calls if n == name]
@@ -177,6 +200,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.mark_task_done,
         fakes.open_change_set,
         fakes.post_cost_comment,
+        fakes.wait_for_ci,
     ]
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(

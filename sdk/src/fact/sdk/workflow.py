@@ -12,7 +12,6 @@ from datetime import timedelta
 from typing import Any, ClassVar
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
@@ -20,8 +19,6 @@ with workflow.unsafe.imports_passed_through():
         AGENT_STEP,
         CONTROL_QUEUE,
         MARK_TASK_DONE,
-        OPEN_CHANGE_SET,
-        POST_COST_COMMENT,
         PREPARE_WORKSPACE,
         RECORD_RUN_FINISHED,
         RECORD_RUN_STARTED,
@@ -31,8 +28,8 @@ with workflow.unsafe.imports_passed_through():
         AgentStepInput,
         Check,
         CheckResult,
-        CriterionResult,
         MarkTaskDoneInput,
+        OpenChangeSetInput,
         PostCostCommentInput,
         RunFinishedInput,
         RunStartedInput,
@@ -40,24 +37,21 @@ with workflow.unsafe.imports_passed_through():
     )
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
-    from fact.sdk.change_set import change_set_input, default_title, text_output
+    from fact.sdk.change_set import default_title, text_output
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
+    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, NO_RETRY
+    from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
     from fact.sdk.stages import Stage, stages
 
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
-HEARTBEAT_TIMEOUT = timedelta(minutes=2)  # agent and shell steps heartbeat every 30 s
-NO_RETRY = RetryPolicy(maximum_attempts=1)  # agent sessions are resumed only by `FactWorkflow.agent`, deliberately
-INFRA_RETRY = RetryPolicy(  # shell and control steps: only infrastructure errors raise, and those may pass on retry
-    initial_interval=timedelta(seconds=5), maximum_interval=timedelta(minutes=2), maximum_attempts=5
-)
 # the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow:
-    """Base class for project workflows: run bookkeeping plus the step helpers."""
+class FactWorkflow(PullRequestSteps):
+    """Base class for project workflows: run bookkeeping plus the step helpers (PR and CI ones in the mixin)."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -68,6 +62,8 @@ class FactWorkflow:
         self.check_results: list[CheckResult] = []  # from the last `until_green` round, for the PR description
         self.pr_title: str | None = None  # from the last agent session whose structured answer had a `title`
         self.pr_summary: str | None = None  # likewise, `summary`
+        self.prs: list[PRRef] = []  # from the last `open_change_set`, with the head SHA it pushed
+        self._change_set: OpenChangeSetInput | None = None  # its input, to push again after a CI fix
 
     @classmethod
     def manifest(cls) -> list[dict[str, Any]]:
@@ -220,16 +216,6 @@ class FactWorkflow:
         run = self.input
         spec = MarkTaskDoneInput(run_id=run.run_id, task=run.task, handle=self.handle, home_repo=run.home_repo)
         return await self._control(MARK_TASK_DONE, spec, bool)
-
-    async def open_change_set(self, title: str, summary: str, criteria: Sequence[CriterionResult] = ()) -> list[PRRef]:
-        """Push and open the PR; `criteria`, from a review, replace the task's plain list in its description."""
-        spec = change_set_input(self.input, self.handle, title, summary, self.check_results, criteria=list(criteria))
-        return await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
-
-    async def post_cost_comment(self, prs: Sequence[PRRef]) -> None:
-        """Comment the run's time and cost per step and per model on each PR, or update it; best effort."""
-        if prs:
-            await self._record(POST_COST_COMMENT, PostCostCommentInput(run_id=self.input.run_id, prs=list(prs)))
 
     def pr_text(self, fallback_summary: str = "") -> tuple[str, str]:
         """PR title and summary: what an agent wrote to its outputs, else a conventional title from the task."""

@@ -55,8 +55,7 @@ class ChangeSetActivities:
 
     @activity.defn(name=OPEN_CHANGE_SET)
     async def open_change_set(self, spec: OpenChangeSetInput) -> list[PRRef]:
-        attempt = activity.info().attempt if activity.in_activity() else 1
-        async with self._reporter.step(spec.run_id, OPEN_PR_STAGE, StepKind.GITHUB, attempt) as step:
+        async with self._reporter.step(spec.run_id, OPEN_PR_STAGE, StepKind.GITHUB, spec.attempt) as step:
             try:
                 pr = await self._open(spec, step)
             except PushRefusedError as exc:

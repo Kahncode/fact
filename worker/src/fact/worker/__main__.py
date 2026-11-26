@@ -16,6 +16,7 @@ from fact.core.logging import configure_logging, get_logger
 from fact.core.settings import Settings, get_settings
 from fact.worker.activities.agent import AgentActivities
 from fact.worker.activities.change_set import ChangeSetActivities
+from fact.worker.activities.ci import CIActivities
 from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.shell import ShellActivities
@@ -91,6 +92,7 @@ def _activity_workers(
     change_set = ChangeSetActivities(github, reporter)
     control_steps = ControlActivities(settings.api_url, http)
     cost = CostCommentActivities(github, settings.api_url, http)
+    ci = CIActivities(github, reporter)
     control = Worker(
         client,
         task_queue=CONTROL_QUEUE,
@@ -101,6 +103,7 @@ def _activity_workers(
             workspace.teardown_workspace,
             change_set.open_change_set,
             cost.post_cost_comment,
+            ci.wait_for_ci,
             control_steps.mark_task_done,
             control_steps.record_run_started,
             control_steps.record_run_finished,

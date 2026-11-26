@@ -16,6 +16,7 @@ from fact.core.activity_contract import (
     RECORD_RUN_STARTED,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
+    WAIT_FOR_CI,
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
@@ -61,6 +62,8 @@ async def test_green_path(tmp_path: Path) -> None:
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
+        WAIT_FOR_CI,
+        POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         TEARDOWN_WORKSPACE,
     ]
@@ -76,8 +79,10 @@ async def test_green_path(tmp_path: Path) -> None:
     assert pr_spec.run_url == RUN_URL
     assert [(c.name, c.outcome) for c in pr_spec.check_results] == [("lint", "passed"), ("test", "passed")]
     assert [c.model_dump() for c in pr_spec.criteria] == [MET]  # a low finding needs no address_review
-    (cost_spec,) = fakes.of(POST_COST_COMMENT)
-    assert (cost_spec.run_id, cost_spec.prs) == ("run-1", [PR])
+    assert pr_spec.attempt == 1
+    (ci_spec,) = fakes.of(WAIT_FOR_CI)
+    assert (ci_spec.stage_id, ci_spec.attempt, ci_spec.pr) == ("wait_for_ci", 1, PR)
+    assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])] * 2
     assert finished(fakes) == RunOutcome.PR_OPENED
 
     if os.environ.get(RECORD_VAR):
@@ -255,5 +260,7 @@ def test_standard_stage_manifest() -> None:
         {"id": "address_review", "label": "Address review", "kind": "agent", "loops_to": "checks"},
         {"id": "learn", "label": "Learn", "kind": "agent", "loops_to": None},
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
+        {"id": "wait_for_ci", "label": "Wait for CI", "kind": "github", "loops_to": "fix_ci"},
+        {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
     ]
     assert json.loads(json.dumps(STANDARD.manifest()))[3]["loops_to"] == "implement"

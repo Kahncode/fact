@@ -1,5 +1,6 @@
 import pytest
-from fact.sdk.types import CheckResult, StepKind, StepOutcome, StepResult
+from fact.sdk.failures import ci_failure_context
+from fact.sdk.types import CheckResult, PRRef, StepKind, StepOutcome, StepResult
 from fact.sdk.workflow import CONTEXT_MAX_BYTES, FactWorkflow, Stage, failure_context, stages
 
 
@@ -56,3 +57,16 @@ def test_failure_context_shows_command_and_output() -> None:
 def test_failure_context_is_capped() -> None:
     huge = _failed("test", {"command": ["pytest"], "exit_code": 1, "failure_output": "x" * (2 * CONTEXT_MAX_BYTES)})
     assert len(failure_context([huge]).encode()) == CONTEXT_MAX_BYTES
+
+
+def test_ci_failure_context_shows_each_failed_job() -> None:
+    pr = PRRef(repo="acme/widget", number=7, url="https://github.com/acme/widget/pull/7", head_sha="0123456789abcdef")
+    job = {"name": "test (windows)", "conclusion": "failure", "url": "https://ci/42", "log_tail": "E assert 1 == 2"}
+    failed = StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 failed", outputs={"failures": [job]})
+    no_jobs = StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="CI still running")
+
+    text = ci_failure_context([(pr, failed), (pr, no_jobs)])
+
+    assert "### test (windows): failure on acme/widget#7 at 0123456789ab\n\nhttps://ci/42" in text
+    assert "```\nE assert 1 == 2\n```" in text
+    assert "### acme/widget#7: failed_checks\n\nCI still running" in text

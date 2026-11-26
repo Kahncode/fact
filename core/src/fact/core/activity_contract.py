@@ -22,6 +22,7 @@ SHELL_STEP = "shell_step"
 OPEN_CHANGE_SET = "open_change_set"
 MARK_TASK_DONE = "mark_task_done"
 POST_COST_COMMENT = "post_cost_comment"
+WAIT_FOR_CI = "wait_for_ci"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 
@@ -92,6 +93,7 @@ class OpenChangeSetInput(_Input):
     check_results: list[CheckResult] = Field(default_factory=list)
     criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
     run_url: str = ""
+    attempt: int = 1  # of stage `open_pr`: a CI fix pushes and updates the PR again as the next attempt
 
 
 class MarkTaskDoneInput(_Input):
@@ -104,6 +106,15 @@ class MarkTaskDoneInput(_Input):
 class PostCostCommentInput(_Input):
     run_id: str
     prs: list[PRRef]  # each gets the run's cost comment, created or updated in place
+
+
+class WaitForCIInput(_Input):
+    run_id: str
+    stage_id: str
+    attempt: int
+    pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
+    timeout_s: float = 3600.0  # give up waiting for checks still running after this long
+    no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
 
 
 class RunStartedInput(_Input):
