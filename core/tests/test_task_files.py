@@ -172,3 +172,12 @@ def test_typo_below_highest_is_accepted_as_finished(tmp_path: Path) -> None:
     """Pins the heuristic: a deleted file cannot be told from a typo when its number is below the highest."""
     _task(tmp_path, "M1-09", deps="M1-05")
     assert FileTaskSource(tmp_path).validate() == []
+
+
+async def test_is_closed(tmp_path: Path) -> None:
+    _task(tmp_path, "M1-01", status="done")
+    _task(tmp_path, "M1-02", status="ready", name="y")
+    src = FileTaskSource(tmp_path)
+    assert await src.is_closed("task:M1-01") is True
+    assert await src.is_closed("task:M1-02") is False
+    assert await src.is_closed("task:M1-03") is True  # its file is gone

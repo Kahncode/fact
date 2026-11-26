@@ -9,3 +9,14 @@ task_source:
 require_plan_approval: false
 workflows:
   default: standard
+# Paths whose change needs a person's review, whatever the classifier says (`classify_signals`).
+classify:
+  schema_paths:
+    - core/migrations/**
+  api_paths:
+    - api/openapi.json
+  always_review_paths:
+    - .fact/**
+    - .github/**
+auto_merge: true
+merge_method: squash

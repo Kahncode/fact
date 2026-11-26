@@ -236,3 +236,15 @@ def test_mark_done_leaves_the_branch_alone(tmp_path: Path) -> None:
 def test_rejects_a_bad_repo() -> None:
     with pytest.raises(ValueError, match="owner/repo"):
         GitHubIssuesSource("not-a-repo", FakeApp(FakeGitHub()))  # type: ignore[arg-type]
+
+
+async def test_is_closed_for_any_reason() -> None:
+    github = FakeGitHub()
+    github.add(_issue(1))
+    github.add(_closed(2))
+    github.add(_closed(3, reason="not_planned"))
+    source = _source(github)
+    assert await source.is_closed("gh:acme/app#1") is False
+    assert await source.is_closed("gh:acme/app#2") is True
+    assert await source.is_closed("gh:acme/app#3") is True
+    assert await source.is_closed("gh:acme/app#99") is True  # gone

@@ -20,6 +20,11 @@ def test_loads_real_project_file() -> None:
     assert cfg.workflows.default == "standard"
     assert cfg.runner_pool == "local"
     assert cfg.require_plan_approval is False  # issues are approved by the `fact:ready` label
+    assert cfg.classify.schema_paths == ["core/migrations/**"]
+    assert cfg.classify.api_paths == ["api/openapi.json"]
+    assert cfg.classify.always_review_paths == [".fact/**", ".github/**"]
+    assert cfg.auto_merge is True
+    assert cfg.merge_method == "squash"
 
 
 def test_loads_real_repo_file() -> None:
@@ -68,3 +73,20 @@ def test_workflow_type_map(tmp_path: Path) -> None:
 def test_missing_file_named(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"repo.yaml"):
         load_repo_config(tmp_path)
+
+
+BASE = "name: p\nrepositories: [{full_name: a/b, role: x}]\nworkflows: {default: s}\n"
+
+
+def test_classify_and_merge_defaults(tmp_path: Path) -> None:
+    _write(tmp_path, "project.yaml", BASE)
+    cfg = load_project_config(tmp_path)
+    assert cfg.classify.schema_paths == cfg.classify.api_paths == cfg.classify.always_review_paths == []
+    assert cfg.auto_merge is True
+    assert cfg.merge_method == "squash"
+
+
+def test_merge_method_is_checked(tmp_path: Path) -> None:
+    _write(tmp_path, "project.yaml", BASE + "merge_method: fast-forward\n")
+    with pytest.raises(ConfigError, match="merge_method"):
+        load_project_config(tmp_path)
