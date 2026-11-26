@@ -48,7 +48,7 @@ def test_note_holds_stage_summaries_and_prs() -> None:
     assert "### review (attempt 1): passed\n\nTwo findings." in text
 
 
-def test_note_of_a_run_dropped_before_any_step() -> None:
+def test_note_of_a_run_stopped_before_any_step() -> None:
     text = render_handoff(_note(reason="", stage_id=None, attempt=None, steps=[], prs=[]))
     assert "- Reason: none given" in text
     assert "had not started a step" in text

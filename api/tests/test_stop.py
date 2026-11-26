@@ -119,7 +119,7 @@ def _note(store: LocalArtifactStore, run_id: str) -> str:
 
 
 @pytest.mark.usefixtures("client")
-async def test_latest_handoff_follows_the_dropped_runs(app: FastAPI) -> None:
+async def test_latest_handoff_follows_the_stopped_runs(app: FastAPI) -> None:
     store: LocalArtifactStore = app.state.artifacts
     assert await _latest(app) is None
 

@@ -54,7 +54,7 @@ async def test_approve_continues_the_run() -> None:
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
-async def test_reject_drops_the_run_with_the_note() -> None:
+async def test_reject_stops_the_run_with_the_note() -> None:
     fakes = FakeActivities(gate_decisions=None)
     async with started_standard(fakes, "run-plan-reject", _gated_input()) as (_, handle):
         gate = await open_gate(handle)
