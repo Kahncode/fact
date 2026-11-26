@@ -42,7 +42,7 @@ uv run fact status run-task-M1-02-1
 
 A project whose `.fact/project.yaml` sets `task_source.kind: github` takes its tasks from GitHub issues instead: `uv run fact run gh:owner/repo#12` starts issue 12 (it needs the GitHub App, below). fact's own work is GitHub issues on `Kahncode/fact`.
 
-`fact run` reads a file task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any, or another reason it waits (`Waiting:`).
+`fact run` reads a file task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway) or if the task already has a run queued, running or waiting (stop it first with `fact stop`), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any, or another reason it waits (`Waiting:`).
 
 An agent session that hits the Claude usage limit does not fail the run: the run waits until the limit resets (`fact status` shows `Waiting:  usage limit until <time> UTC`), however long that is, then resumes the same session. See `docs/spec/10-observability.md`.
 

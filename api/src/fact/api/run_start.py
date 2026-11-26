@@ -8,7 +8,7 @@ from fact.api.task_ref import TaskCheck, TaskReadError, check_task, project_task
 from fact.core.artifacts import ArtifactStore, handoff_key
 from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
-from fact.core.models import Run
+from fact.core.models import Project, Run
 from fact.core.project_config import ConfigError, ProjectConfig
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks import branch_name
@@ -74,6 +74,21 @@ async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id
         if store.exists(key := handoff_key(run_id)):
             return key
     return None
+
+
+ACTIVE_STATUSES = (RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING)
+
+
+async def active_run_id(session: AsyncSession, project: str, task_key: str) -> str | None:
+    """Id of the task's active run (queued, running or waiting), if any: a task has at most one at a time."""
+    query = (
+        select(Run.id)
+        .join(Project, Project.id == Run.project_id)
+        .where(Project.name == project, Run.task_key == task_key, Run.status.in_(ACTIVE_STATUSES))
+        .order_by(Run.created_at.desc(), Run.id.desc())
+        .limit(1)
+    )
+    return await session.scalar(query)
 
 
 def counts_as_run() -> ColumnElement[bool]:
