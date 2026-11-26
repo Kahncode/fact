@@ -1,6 +1,6 @@
 # Tasks
 
-Until fact can read GitHub Issues (end of M2), all work is planned as markdown files here. Claude Code runs them first. From late M1 fact runs them, and in M2 the files that are left move to GitHub issues.
+fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.yaml` has `task_source: {kind: github}`): an issue labelled `fact:ready` is a task the scheduler may start. Until M2, work was planned as markdown files here. The last one, M2-14, is run by hand with Claude Code (`next-task`); it then removes this folder's task tooling. The format below still applies to any project whose task source is `files`.
 
 ## Layout
 

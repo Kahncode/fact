@@ -15,11 +15,11 @@ def test_loads_real_project_file() -> None:
     cfg = load_project_config(REPO_ROOT)
     assert cfg.name == "fact"
     assert [(r.full_name, r.role, r.default_branch) for r in cfg.repositories] == [("Kahncode/fact", "factory", "main")]
-    assert cfg.task_source.kind == "files"
-    assert cfg.task_source.path == "tasks"
+    assert cfg.task_source.kind == "github"
+    assert cfg.task_source.repo == "Kahncode/fact"
     assert cfg.workflows.default == "standard"
     assert cfg.runner_pool == "local"
-    assert cfg.require_plan_approval is False  # file tasks are approved by `status: ready`
+    assert cfg.require_plan_approval is False  # issues are approved by the `fact:ready` label
 
 
 def test_loads_real_repo_file() -> None:

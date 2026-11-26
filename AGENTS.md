@@ -15,7 +15,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 - **Design:** `docs/spec/`, one file per section. Start from `docs/spec/README.md` and read only what your task points to.
 - **Architecture:** `docs/ARCHITECTURE.md`, index of components and what exists in code today.
 - **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` (new entries go there; design decisions are in `docs/spec/16-decisions.md`).
-- **Work:** `tasks/`, one markdown file per task, grouped by milestone. `tasks/README.md` explains the format. `tasks/backlog.md` holds ideas and problems not yet planned.
+- **Work:** GitHub issues on `Kahncode/fact` (`fact:ready` issues are tasks the scheduler may start; labels in `docs/spec/12-integrations.md`). `tasks/backlog.md` holds ideas and problems not yet planned. The file tasks under `tasks/` are the M0–M2 bootstrap; `tasks/README.md` explains their format.
 
 ---
 
@@ -36,7 +36,7 @@ fact/
 ├── web/                   React UI (from M3)
 ├── .fact/                 fact's own project config, workflows and prompts
 ├── docs/spec/             design, one file per section (start at README.md)
-├── tasks/                 work items by milestone (M0..), plus backlog.md
+├── tasks/                 backlog.md, and the file tasks left from the M0–M2 bootstrap
 ├── .github/workflows/     CI (ci.yaml)
 ├── .agents/skills/        shared agent skills (canonical)
 ├── .agents/agents/        subagent definitions (canonical)
@@ -130,9 +130,9 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 fact works on its own tasks, so the running factory is never the code an agent edits: it runs from a pinned checkout, and agents only work in worktrees under `workspaces_dir` (`<data_dir>/workspaces`). `LocalWorktreeRunner.prepare` refuses a workspace inside `pinned_dir` or inside the factory checkout that is running.
 
 - **Pin a version:** `uv run fact use main` fetches `origin`, checks `origin/main` (or any branch, tag or SHA) out as a detached worktree at `<data_dir>/pinned/factory/<sha>`, runs `uv sync --locked` there and writes the SHA to `<data_dir>/pinned/current`.
-- **Run fact on its own tasks:** `uv run fact dev --pinned` starts Temporal here and the API and worker from the pinned version (the checkout's own `.venv` Python, without the venv activation `fact dev` was started with), still reading this tree's `fact.yaml` and `.env` through `FACT_CONFIG`. Then `uv run fact run task:<id>` and review the PR it opens; the run stays open (`waiting`, stage `wait_for_review`) until you merge or close the PR, then ends `merged` or `closed`. After merging fact changes, run `fact use main` again and restart.
+- **Run fact on its own tasks:** `uv run fact dev --pinned` starts Temporal here and the API and worker from the pinned version (the checkout's own `.venv` Python, without the venv activation `fact dev` was started with), still reading this tree's `fact.yaml` and `.env` through `FACT_CONFIG`. Then `uv run fact run gh:Kahncode/fact#<n>` and review the PR it opens; the run stays open (`waiting`, stage `wait_for_review`) until you merge or close the PR, then ends `merged` or `closed`. After merging fact changes, run `fact use main` again and restart.
 - **Restart only once runs have ended:** a run is pinned to the worker build that started it, and one worker process runs only the newest build, so a run still waiting for review when the worker restarts on new code stalls and never sees its PR merge. After merging a run's PR, wait until it shows `merged` (within about 60 s) before `fact use main` and the restart. Drop runs still in progress or in review with `fact drop <run>` and wait until they show `dropped` before restarting: the drop is processed by the run's own worker version. A run whose version no worker runs anymore (or started before M2-06) never processes a drop; stop it and delete its `<data_dir>/workspaces/<run_id>` by hand, else the next run of the task gets a suffixed branch and a new PR.
-- **Restart a task on newer code:** `uv run fact drop <run> --reason "..."`; the run ends `dropped`, writes a handoff note (`runs/<run_id>/handoff.md` in the artifact store), tears its workspace down and keeps its remote branch and PR. Then `fact use main`, restart, and `uv run fact run task:<id>`: the new run resumes the task branch from `origin`, reuses the open PR and gets the note as `$handoff` in its prompts. Local commits the dropped run never pushed are lost.
+- **Restart a task on newer code:** `uv run fact drop <run> --reason "..."`; the run ends `dropped`, writes a handoff note (`runs/<run_id>/handoff.md` in the artifact store), tears its workspace down and keeps its remote branch and PR. Then `fact use main`, restart, and `uv run fact run gh:Kahncode/fact#<n>`: the new run resumes the task branch from `origin`, reuses the open PR and gets the note as `$handoff` in its prompts. Local commits the dropped run never pushed are lost.
 - **If a run goes wrong:** drop it as above, or stop `fact dev` (Ctrl-C), fix or finish the task by hand with Claude Code (the `next-task` skill) in this source tree, and pin the new version with `fact use main` once the fix is merged. A run that does not end `pr_opened`, `merged`, `closed` or `dropped` (failed, needs_human, including CI still red on its open PR) leaves its workspace in `<data_dir>/workspaces/<run_id>`, still holding the task branch and any unpushed commits; while it stays, new runs on that task use a suffixed branch (`<branch>-2`, ...) and a new PR. Deleting the folder frees the branch, and the next run resets it to the remote. Plain `uv run fact dev` runs from the source tree for developing fact by hand.
 
 ---

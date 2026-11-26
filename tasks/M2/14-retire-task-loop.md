@@ -5,8 +5,7 @@ type: feature
 complexity: standard
 status: planned
 depends_on: [M2-07, M2-13]
-human_actions:
-  - "Check whether a long-lived token from `claude setup-token` is accepted by the usage endpoint (`fetch_claude_usage`); if it is, put it in `.env` as FACT_CLAUDE__USAGE_TOKEN. If not, say so: fact then reads the Claude Code CLI login, else the windows recorded from runs."
+human_actions: []
 ---
 
 ## Goal
@@ -20,13 +19,14 @@ The scheduler covers everything `scripts/task_loop.py` did that's worth keeping,
 - `core/src/fact/core/claude_usage.py` (`fetch_claude_usage`, `read_cli_token`, `ClaudeUsage.blocked`)
 - The `SchedulerTick` workflow and `find_ready_tasks` activity from M2-07 (`worker/src/fact/worker/`)
 - `scripts/task_loop.py` (`keep_awake`, `wait_for_quota`: the behaviour being replaced)
-- `.agents/skills/next-task/SKILL.md` and `next_task.py` (the `resume` handling to remove)
+- `.agents/skills/next-task/` and `.agents/skills/plan-tasks/` (to delete)
 
 ## Do
 
 - **Usage gate.** Settings: `claude.usage_token` (secret, `FACT_CLAUDE__USAGE_TOKEN`) and `concurrency.usage_threshold` (default 0.9). A `claude_usage` control activity reads usage from:
   1. `fetch_claude_usage` with `claude.usage_token`, else with `read_cli_token()`;
   2. if the endpoint is unavailable, the windows from `GET /api/v1/usage` (M2-13) whose `resets_at` is still in the future.
+  Checked by hand (2026-11-26): the usage endpoint rejects a `claude setup-token` token with 403 Forbidden (the token is valid but lacks the scope), so fact's own setup leaves `claude.usage_token` unset and reads the CLI login, else the stored windows. Keep the setting for a token that has the scope, and say in its docs that setup-tokens don't work for it (they're meant for sessions; see the backlog item "Claude credentials for sessions and usage").
   `SchedulerTick` calls it before starting anything. When `ClaudeUsage.blocked(threshold)` isn't empty, the tick starts no run and logs which window is full and when it resets. Running steps are not touched; M2-13 handles them. The endpoint is called at most once per tick, and not at all when no task is ready.
 - **Failure cap.** Setting `concurrency.max_failed_runs` (default 3). `find_ready_tasks` skips a task whose last N runs all ended `failed` with no `passed` or `merged` run since. It's reported as needing a person until a new run is started by hand (`fact run`), which resets the count.
 - **Preview.** `fact scheduler status` shows, along with the Schedule state:
@@ -38,7 +38,8 @@ The scheduler covers everything `scripts/task_loop.py` did that's worth keeping,
 - **Retire the loop.**
   - Delete `scripts/task_loop.py`, `loop_recovery.py`, `loop_report.py`, `claude_run.py`, `claude_log.py` and `task_files.py`, plus `scripts/tests/test_loop_recovery.py`, `test_loop_report.py`, and anything in `conftest.py` that only served them. Keep `test_project_dot_agents.py` passing.
   - Remove the task-loop entries from `.vscode/launch.json`.
-  - Remove the `resume` field and `## Resume` handling from `tasks/README.md`, `.agents/skills/next-task/SKILL.md` and `next_task.py`.
+  - Delete the file-task skills `.agents/skills/next-task/` (with `next_task.py`) and `.agents/skills/plan-tasks/`: fact's work is GitHub issues now (M2-12), planned by hand on GitHub until M5's planner. Remove their mentions (`AGENTS.md` "If a run goes wrong", `docs/spec/15-milestones.md` M5, `tasks/backlog.md` M5 line).
+  - This task's file is the last one in `tasks/`. Remove the `resume` field from `tasks/README.md`, keep the format there for projects with `task_source: files`, and keep `tasks/backlog.md`. `test_real_tasks_folder_is_valid` must still pass on a folder with no task files.
   - Remove `.tmp/task-loop` mentions.
   - Update `AGENTS.md` (development commands: how to run every ready task is `fact dev` plus `fact scheduler on`), `docs/ARCHITECTURE.md`, and the backlog (drop the "Usage-aware scheduling" and "Task loop recovery" items).
 - Tests:
@@ -59,6 +60,7 @@ The scheduler covers everything `scripts/task_loop.py` did that's worth keeping,
 
 - [ ] `uv run pytest` passes.
 - [ ] `scripts/` holds no task-loop code and `grep -r task_loop` outside `.git` finds nothing.
+- [ ] `.agents/skills/` has no `next-task` or `plan-tasks`, and `grep -rE "next-task|plan-tasks"` outside `.git` finds only history (`docs/decisions*.md`).
 - [ ] With a usage window mocked over the threshold, the scheduler starts no run, and `fact scheduler status` shows the window and its reset time (test).
 - [ ] A task whose last 3 runs failed isn't started again by the scheduler, and `fact scheduler status` says why (test).
 - [ ] On Samuel's machine, `fact dev` plus `fact scheduler on` with one `ready` task starts it within a minute and the PC doesn't sleep during the run (checked by hand, noted in the PR).
