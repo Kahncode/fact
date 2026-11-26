@@ -36,10 +36,11 @@ class TaskReadError(RuntimeError):
 
 @dataclass(frozen=True)
 class TaskCheck:
-    """A task as it is on the default branch, with the dependencies that are not done yet."""
+    """A task as it is on the default branch, with the dependencies that are not done yet and its gate, if any."""
 
     task: Task
     missing_deps: list[str]
+    gated_by: str | None = None  # the nearest ancestor not marked ready
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -121,7 +122,7 @@ async def project_tasks(settings: Settings, ref: ProjectRef) -> AsyncIterator[Pr
 
 
 async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
-    """Read task `key` and which of its dependencies are not done; None when the source has no such task."""
+    """Read task `key`, which of its dependencies are not done and its ancestor not ready; None for no such task."""
     task = await source.get(key)
     if task is None:
         return None
@@ -130,4 +131,4 @@ async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
         for d in task.depends_on
         if not await source.deps_done(task.model_copy(update={"depends_on": [d]}))
     ]
-    return TaskCheck(task=task, missing_deps=missing)
+    return TaskCheck(task=task, missing_deps=missing, gated_by=await source.not_ready_ancestor(task.key))

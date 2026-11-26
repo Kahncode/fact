@@ -162,6 +162,7 @@
         "description": "Why a ready task does not start on this tick.",
         "enum": [
           "dependency",
+          "parent",
           "failure_cap",
           "cap",
           "usage"
@@ -455,6 +456,17 @@
             "default": 0,
             "title": "Failed Runs",
             "type": "integer"
+          },
+          "gated_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gated By"
           },
           "hold": {
             "anyOf": [

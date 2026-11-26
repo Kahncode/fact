@@ -194,6 +194,11 @@ class FileTaskSource:
     async def deps_done(self, task: Task) -> bool:
         return await asyncio.to_thread(self.all_deps_done, task)
 
+    async def not_ready_ancestor(self, key: str) -> str | None:
+        """None: file tasks have no parents."""
+        del key
+        return None
+
     def ready(self) -> list[Task]:
         """Tasks with status `ready` whose dependencies are all done."""
         entries = self._entries()
@@ -203,8 +208,9 @@ class FileTaskSource:
             if e.status == "ready" and all(self._dep_done(d, entries) for d in e.task.depends_on)
         ]
 
-    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
+    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
         """Tasks with status `ready` and their dependency depth (`depths()`); unless `include_waiting`, deps all done."""
+        del close_epics  # file tasks have no epics
 
         def read() -> list[ReadyItem]:
             entries, depths = self._entries(), self.depths()

@@ -66,6 +66,10 @@ async def _find(settings: Settings, body: RunStart) -> FoundTask:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except TaskReadError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    ancestor = found.check.gated_by
+    if ancestor and not body.override_deps:
+        message = f"{body.task_key} is under {ancestor}, which is not marked ready"
+        raise HTTPException(status.HTTP_409_CONFLICT, {"message": message, "not_ready_ancestor": ancestor})
     missing = found.check.missing_deps
     if missing and not body.override_deps:
         detail = {"message": f"{body.task_key} has unfinished dependencies", "missing_deps": missing}

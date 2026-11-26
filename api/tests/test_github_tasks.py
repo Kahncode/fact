@@ -8,13 +8,14 @@ from pathlib import Path
 import httpx
 import pytest
 from fact.api.app import create_app
+from fact.api.routers import run_start as run_start_router
 from fact.api.run_start import find_task, run_input
 from fact.api.scheduler import _ready_in
 from fact.core.github import GitHubAppConfigError, github_client
 from fact.core.github import app as github_app
 from fact.core.scheduler import Hold
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 from task_repo import write
 
@@ -34,17 +35,29 @@ ISSUES = {
     12: {"number": 12, "title": "Fix it", "body": "Depends on #3\n", "state": "open", "state_reason": None},
     13: {"number": 13, "title": "Then this", "body": "Depends on #12\n", "state": "open", "state_reason": None},
     3: {"number": 3, "title": "Done", "body": "", "state": "closed", "state_reason": "completed"},
+    20: {"number": 20, "title": "A plan", "body": "", "state": "open", "state_reason": None},
+    21: {"number": 21, "title": "Its step", "body": "", "state": "open", "state_reason": None},
 }
 for _n, _issue in ISSUES.items():
-    _issue["labels"] = [{"name": "fact:ready"}, {"name": "type:bug"}] if _n != 3 else []  # noqa: PLR2004
+    _issue["labels"] = [{"name": "fact:ready"}, {"name": "type:bug"}] if _n in {12, 13, 21} else []
+ISSUES[20]["labels"] = [{"name": "fact:planned"}]
+PARENTS = {21: 20}  # sub-issue -> parent
 
 
 def _github(request: httpx.Request) -> httpx.Response:
     parts = request.url.path.strip("/").split("/")
     if request.url.path == "/repos/acme/app/issues":
-        return httpx.Response(200, json=[i for i in ISSUES.values() if i["state"] == "open"])
+        ready = [i for i in ISSUES.values() if i["state"] == "open" and {"name": "fact:ready"} in i["labels"]]
+        return httpx.Response(200, json=ready)
     if parts[-2:] == ["dependencies", "blocked_by"]:
         return httpx.Response(200, json=[])
+    if parts[-1] == "sub_issues":
+        return httpx.Response(200, json=[ISSUES[c] for c, p in PARENTS.items() if p == int(parts[-2])])
+    if parts[-1] == "parent":
+        parent = PARENTS.get(int(parts[-2]))
+        return (
+            httpx.Response(200, json=ISSUES[parent]) if parent else httpx.Response(404, json={"message": "Not Found"})
+        )
     issue = ISSUES.get(int(parts[-1])) if parts[1:3] == ["acme", "app"] else None
     return httpx.Response(200, json=issue) if issue else httpx.Response(404, json={"message": "Not Found"})
 
@@ -105,6 +118,25 @@ async def test_start_refuses_open_dependencies_and_unknown_issues(client: AsyncC
     assert response.status_code == HTTPStatus.NOT_FOUND
 
 
+async def test_start_refuses_an_issue_under_a_parent_not_ready(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = await client.post("/api/v1/runs/start", json={"task_key": "gh:acme/app#21"})
+    assert response.status_code == HTTPStatus.CONFLICT, response.text
+    detail = response.json()["detail"]
+    assert detail["not_ready_ancestor"] == "gh:acme/app#20"
+    assert "gh:acme/app#20" in detail["message"]
+
+    async def no_temporal(_request: object) -> None:
+        raise HTTPException(HTTPStatus.SERVICE_UNAVAILABLE, "no Temporal in this test")
+
+    monkeypatch.setattr(run_start_router, "temporal_client", no_temporal)
+    # forced, the gate no longer refuses: the start goes on to Temporal
+    body = {"task_key": "gh:acme/app#21", "override_deps": True}
+    response = await client.post("/api/v1/runs/start", json=body)
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE, response.text
+
+
 async def test_start_without_a_github_app_is_a_bad_gateway(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -125,5 +157,7 @@ async def test_scheduler_reads_ready_issues(settings: Settings) -> None:
     assert [(t.task_key, t.task_id, t.hold) for t in ready] == [
         ("gh:acme/app#12", "12", None),
         ("gh:acme/app#13", "13", Hold.DEPENDENCY),
+        ("gh:acme/app#21", "21", Hold.PARENT),  # its parent #20 is fact:planned
     ]
     assert ready[1].waiting_on == ["gh:acme/app#12"]
+    assert ready[2].gated_by == "gh:acme/app#20"

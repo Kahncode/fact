@@ -89,6 +89,7 @@ uv run fact scheduler off
 
 Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`).
 
+- A sub-issue starts only when it and every parent above it are labelled `fact:ready`, so a plan under a `fact:planned` parent waits until you set the parent `fact:ready`. A parent waits for its open sub-issues; a `type:epic` parent with none left open is closed as completed without a run. `fact run` refuses an issue whose parent is not ready unless you pass `--force-deps`.
 - A task whose runs failed is retried, up to 3 failed runs in a row (`concurrency.max_failed_runs`); then it waits for you to start it with `fact run`, which resets the count. A task whose last run ended any other way (needs you, stopped, PR merged or closed) is never restarted by the scheduler.
 - It leaves part of your Claude subscription to you: while a usage window is at 90% or more (five-hour) or 95% or more (weekly), it starts no new run (`claude.reserve` in `fact.yaml`; `claude.usage_gate: false` turns this off, and it is off when `ANTHROPIC_API_KEY` is set). It reads usage from your local Claude Code login only when a task would start. Runs already going are not touched.
 - `fact scheduler status` shows what the next tick would start, why the others wait, and the usage it last read with each window's reset time.

@@ -21,7 +21,7 @@ Planning is everything before execution: refreshing the issue against today's co
 
 Today (M2-07, GitHub Issues since M2-09), each tick takes the tasks that are ready (file tasks `ready` on the default branch, or open issues labelled `fact:ready`) with every dependency done and no run in progress, orders them by dependency depth, then by id (file ids, then issue numbers; no priority yet, and one list across projects), and starts them within `concurrency.max_runs` and the project's `max_runs`, unless a Claude usage window is inside its reserve. A task whose runs failed is retried until `concurrency.max_failed_runs` (default 3) failed in a row (M2-14); a task whose last run needed a person, was stopped, or opened, merged or closed its PR is not started again by the scheduler; a person restarts it with `fact run`. The scheduler is created off: `fact scheduler on` turns it on, and `fact scheduler status` previews what it would start next.
 
-**Parent issues and sub-issues** (decided 26 Nov 2026, not built yet: today the GitHub source ignores sub-issue links and runs any `fact:ready` issue whose blocked-by dependencies are done).
+**Parent issues and sub-issues** (decided 26 Nov 2026; issue 47 built the parent gate, open sub-issues as dependencies and closing epics in the GitHub source; the `no_changes` outcome, strict blocked-by handling and `fact:needs-human` holds are not built yet).
 
 - fact runs only issues labelled `fact:ready`, never anything else.
 - **The parent's label is the gate, transitively.** A sub-issue runs only when it and every ancestor are `fact:ready`. A ready sub-issue under a `fact:planned` parent waits, so approving the plan is one label change on the parent.

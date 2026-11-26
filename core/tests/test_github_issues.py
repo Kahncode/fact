@@ -1,15 +1,17 @@
 """The GitHub Issues task source against a fake GitHub (`httpx.MockTransport`): listing, parsing, dependencies."""
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
 import pytest
-from fact.core.github import GitHubError, github_client
+from fact.core.github import GitHubError
 from fact.core.tasks import GitHubIssuesSource, ReadyItem, TaskSource, branch_name
 from fact.core.tasks.github_issues import acceptance_criteria, complexity, depends_on_lines, task_type
+from fake_github_issues import REPO, FakeApp, FakeGitHub
+from fake_github_issues import closed as _closed
+from fake_github_issues import issue as _issue
+from fake_github_issues import source as _source
 
-REPO = "acme/app"
 BODY = """## Goal
 
 Do the thing.
@@ -25,87 +27,6 @@ Depends on #3, acme/lib#4 and #2
 
 - [ ] not a criterion
 """
-
-
-def _issue(
-    n: int, *, labels: tuple[str, ...] = (), state: str = "open", reason: str | None = None, **extra: object
-) -> dict:
-    return {
-        "number": n,
-        "title": f"Issue {n}",
-        "body": extra.pop("body", ""),
-        "state": state,
-        "state_reason": reason,
-        "labels": [{"name": name} for name in labels],
-        "repository_url": f"https://api.github.com/repos/{extra.pop('repo', REPO)}",
-        **extra,
-    }
-
-
-def _closed(n: int, reason: str = "completed", repo: str = REPO) -> dict:
-    return _issue(n, state="closed", reason=reason, repo=repo)
-
-
-@dataclass
-class FakeGitHub:
-    """Serves issues by (repo, number), blocked-by links by number, and the `fact:ready` listing in two pages."""
-
-    issues: dict[tuple[str, int], dict] = field(default_factory=dict)
-    blocked_by: dict[int, list[dict]] = field(default_factory=dict)
-    requests: list[httpx.Request] = field(default_factory=list)
-
-    def add(self, issue: dict, repo: str = REPO) -> None:
-        self.issues[repo, issue["number"]] = issue
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request)
-        parts = request.url.path.strip("/").split("/")  # repos, owner, repo, issues, ...
-        repo = f"{parts[1]}/{parts[2]}"
-        rest = parts[4:]
-        if not rest:
-            return self._listing(request, repo)
-        number = int(rest[0])
-        if rest[1:] == ["dependencies", "blocked_by"]:
-            return httpx.Response(200, json=self.blocked_by.get(number, []))
-        issue = self.issues.get((repo, number))
-        return httpx.Response(200, json=issue) if issue else httpx.Response(404, json={"message": "Not Found"})
-
-    def _listing(self, request: httpx.Request, repo: str) -> httpx.Response:
-        assert request.url.params["state"] == "open"
-        assert request.url.params["labels"] == "fact:ready"
-        ready = [
-            i
-            for (r, _), i in sorted(self.issues.items())
-            if r == repo and i["state"] == "open" and "fact:ready" in [x["name"] for x in i["labels"]]
-        ]
-        if request.url.params.get("page") == "2":
-            return httpx.Response(200, json=ready[1:])
-        next_url = f"https://gh.test/repos/{repo}/issues?state=open&labels=fact:ready&per_page=100&page=2"
-        return httpx.Response(200, json=ready[:1], headers={"Link": f'<{next_url}>; rel="next"'})
-
-
-@dataclass(frozen=True)
-class _Token:
-    token: str
-
-
-@dataclass
-class FakeApp:
-    """Stands in for `GitHubApp`: one token per repository, clients on the fake transport."""
-
-    github: FakeGitHub
-    token_repos: list[str] = field(default_factory=list)
-
-    async def installation_token(self, full_name: str) -> _Token:
-        self.token_repos.append(full_name)
-        return _Token(f"tok-{full_name}")
-
-    def api_client(self, token: str | None) -> httpx.AsyncClient:
-        return github_client(token, api_url="https://gh.test", transport=httpx.MockTransport(self.github.handle))
-
-
-def _source(github: FakeGitHub) -> GitHubIssuesSource:
-    return GitHubIssuesSource(REPO, FakeApp(github))  # type: ignore[arg-type]
 
 
 def test_parsing_helpers() -> None:

@@ -130,3 +130,10 @@ async def test_file_source_lists_waiting_tasks(tmp_path: Path) -> None:
         ("task:M1-02", ()),
         ("task:M1-03", ("task:M1-02",)),
     ]
+
+
+def test_a_task_under_a_parent_not_ready_waits_for_it() -> None:
+    gated = ReadyTask(project="a", task_key="gh:acme/app#21", task_id="21", hold=Hold.PARENT, gated_by="gh:acme/app#20")
+    [planned] = plan(_ready([gated]))
+    assert planned.hold == Hold.PARENT
+    assert planned.detail == "waits for its ancestor gh:acme/app#20 to be marked ready"

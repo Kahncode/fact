@@ -5,7 +5,9 @@ A task with a run in progress is not offered. A task whose last run ended any wa
 stopped, PR open or closed) is not offered again: a person restarts it with `fact run`. A task whose runs failed is
 offered again until `concurrency.max_failed_runs` failed in a row (counted from the last run a person started), then
 held with `Hold.FAILURE_CAP` (`run_history_hold`). A start that never reached Temporal (`finished` and never started)
-does not count. Tasks whose dependencies are not done are listed held with `Hold.DEPENDENCY`, for the preview.
+does not count. Tasks under an ancestor not marked ready are listed held with `Hold.PARENT`, and tasks whose
+dependencies are not done with `Hold.DEPENDENCY`, for the preview. Only the tick's read (`close_epics`) closes the
+ready epics with nothing left to wait on; the preview never writes.
 
 `preview` is `fact scheduler status`: `plan` over the same `find_ready`, with the usage gate's last answer.
 """
@@ -31,6 +33,7 @@ from fact.core.scheduler import (
     run_history_hold,
 )
 from fact.core.settings import ProjectRef, Settings
+from fact.core.tasks import ReadyItem
 from fact.core.usage_gate import UsageCheck
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -47,11 +50,17 @@ class SchedulerPreview(BaseModel):
     max_runs: int = 0
 
 
-async def _ready_in(settings: Settings, ref: ProjectRef) -> list[ReadyTask]:
+def _hold(item: ReadyItem) -> Hold | None:
+    if item.gated_by is not None:
+        return Hold.PARENT
+    return Hold.DEPENDENCY if item.waiting_on else None
+
+
+async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = False) -> list[ReadyTask]:
     """Read the project's ready tasks from its task source (`files`: on `origin/<default>`); none without one."""
     try:
         async with project_tasks(settings, ref) as tasks:
-            found = await tasks.source.list_ready(include_waiting=True) if tasks else []
+            found = await tasks.source.list_ready(include_waiting=True, close_epics=close_epics) if tasks else []
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
         return []
@@ -62,7 +71,8 @@ async def _ready_in(settings: Settings, ref: ProjectRef) -> list[ReadyTask]:
             task_id=r.task.id,
             depth=r.depth,
             waiting_on=list(r.waiting_on),
-            hold=Hold.DEPENDENCY if r.waiting_on else None,
+            gated_by=r.gated_by,
+            hold=_hold(r),
         )
         for r in found
     ]
@@ -110,10 +120,14 @@ async def active_by_project(session: AsyncSession) -> dict[str, int]:
     return {name: int(count) for name, count in (await session.execute(query)).all()}
 
 
-async def find_ready(settings: Settings, session: AsyncSession) -> ReadyTasks:
-    """Every project's offered tasks, and the active runs against `concurrency.max_runs` and each project's cap."""
+async def find_ready(settings: Settings, session: AsyncSession, *, close_epics: bool = False) -> ReadyTasks:
+    """
+    Every project's offered tasks, and the active runs against `concurrency.max_runs` and each project's cap.
+
+    `close_epics`: the scheduler's tick, which also closes the ready epics with nothing left to wait on.
+    """
     # one slow remote delays no other
-    found = await asyncio.gather(*(_ready_in(settings, ref) for ref in settings.projects))
+    found = await asyncio.gather(*(_ready_in(settings, ref, close_epics=close_epics) for ref in settings.projects))
     histories = await run_histories(session)
     max_failed = settings.concurrency.max_failed_runs
     offered = (apply_history(t, histories.get((t.project, t.task_key), []), max_failed) for ts in found for t in ts)

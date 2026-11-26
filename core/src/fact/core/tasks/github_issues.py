@@ -1,114 +1,63 @@
 """
 GitHub Issues task source: open issues labelled `fact:ready` in one repository are tasks (`gh:owner/repo#12`).
 
-Write-backs (labels, comments, the context section between markers in the body, closing) are in `github_writes`.
+Write-backs (labels, comments, the context section between markers in the body, closing) are in `github_writes`; the
+issue's fields (type, complexity, acceptance criteria, `Depends on` lines) are read in `github_fields`.
 
-- Type and complexity come from the `type:*` and `complexity:*` labels; acceptance criteria from the checklist under
-  an "Acceptance criteria" heading.
-- Dependencies come from GitHub's blocked-by links and from `Depends on #n` lines in the body; a dependency is done
-  when its issue is closed as completed.
+- Dependencies come from GitHub's blocked-by links, from `Depends on #n` lines in the body and from the issue's open
+  sub-issues. A blocked-by or `Depends on` dependency is done when its issue is closed as completed; a sub-issue
+  closed for any reason is out of its parent's way, so only open ones are listed.
+- A parent's label gates its sub-issues, transitively: an issue is ready only when it and every ancestor carry
+  `fact:ready` (`not_ready_ancestor`).
+- An epic (`type:epic`) never runs: once it is ready with nothing to wait on, `list_ready(close_epics=True)` comments
+  and closes it as completed.
 """
 
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import httpx
+from fact.core.github import GitHubError
 from fact.core.github.app import GitHubApp, split_full_name
 from fact.core.github.client import GitHubNotFoundError
 from fact.core.logging import get_logger
 from fact.core.tasks.base import GITHUB_PREFIX, ReadyItem, dependency_key, parse_key
+from fact.core.tasks.github_fields import (
+    READY_LABEL,
+    acceptance_criteria,
+    complexity,
+    depends_on_lines,
+    has_label,
+    is_done,
+    is_epic,
+    issue_key,
+    label_names,
+    task_type,
+    unique_keys,
+)
 from fact.core.tasks.github_writes import GitHubIssueWrites
-from fact.core.types import Complexity, Task, TaskType
+from fact.core.types import Task
 
 log = get_logger(__name__)
 
-READY_LABEL = "fact:ready"
+__all__ = ["READY_LABEL", "GitHubIssuesSource", "acceptance_criteria", "complexity", "depends_on_lines", "task_type"]
+
 PER_PAGE = 100
-TYPE_ALIASES: dict[str, TaskType] = {"incident": "bug"}  # an incident runs the bug workflow
-_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
-_CRITERION_RE = re.compile(r"^\s*[-*+]\s*\[[ xX]\]\s*(.+?)\s*$")
-_DEPENDS_RE = re.compile(r"^\s*(?:[-*+]\s*)?\**depends on\**:?\**\s*(.+)$", re.IGNORECASE)
-_REF_RE = re.compile(r"(?<![\w/.-])(?:([A-Za-z0-9-]+/[A-Za-z0-9._-]+))?#([1-9]\d*)\b")
-
-
-def acceptance_criteria(body: str) -> list[str]:
-    """Checklist items under an "Acceptance criteria" heading of any level, up to the next heading."""
-    found: list[str] = []
-    in_section = False
-    for line in body.splitlines():
-        if m := _HEADING_RE.match(line):
-            in_section = m.group(1).strip().rstrip(":").lower() == "acceptance criteria"
-        elif in_section and (m := _CRITERION_RE.match(line)):
-            found.append(m.group(1))
-    return found
-
-
-def depends_on_lines(body: str, repo: str) -> list[str]:
-    """Keys from `Depends on #3, owner/other#4` lines; a bare `#n` is an issue of `repo`."""
-    keys: list[str] = []
-    for line in body.splitlines():
-        if m := _DEPENDS_RE.match(line):
-            keys.extend(f"{GITHUB_PREFIX}{r or repo}#{n}" for r, n in _REF_RE.findall(m.group(1)))
-    return keys
-
-
-def _label_names(issue: dict[str, Any]) -> list[str]:
-    return [str(label["name"] if isinstance(label, dict) else label) for label in issue.get("labels") or []]
-
-
-def _label_value(labels: list[str], group: str) -> str | None:
-    prefix = f"{group}:"
-    return next((n[len(prefix) :].strip().lower() for n in labels if n.lower().startswith(prefix)), None)
-
-
-def task_type(labels: list[str]) -> TaskType:
-    value = _label_value(labels, "type") or "feature"
-    value = TYPE_ALIASES.get(value, value)
-    return value if value in get_args(TaskType) else "feature"  # type: ignore[return-value]
-
-
-def complexity(labels: list[str]) -> Complexity:
-    value = _label_value(labels, "complexity")
-    return value if value in get_args(Complexity) else "standard"  # type: ignore[return-value]
-
-
-def is_done(issue: dict[str, Any]) -> bool:
-    """
-    Tell whether the issue is closed as completed; one closed as not planned or duplicate is not done.
-
-    A closed issue without a reason (closed before GitHub recorded one) is done; a PR is done once merged.
-    """
-    if (pr := issue.get("pull_request")) is not None:
-        return bool(pr.get("merged_at"))
-    return issue.get("state") == "closed" and issue.get("state_reason") in {"completed", None}
-
-
-def _issue_key(issue: dict[str, Any], default_repo: str) -> str:
-    repo = (issue.get("repository") or {}).get("full_name")
-    if not repo and (url := issue.get("repository_url")):
-        repo = "/".join(str(url).rstrip("/").split("/")[-2:])
-    return f"{GITHUB_PREFIX}{repo or default_repo}#{issue['number']}"
-
-
-def _unique(keys: list[str]) -> list[str]:
-    """Drop repeated keys (GitHub names are case-insensitive), keeping the first spelling and the order."""
-    out: list[str] = []
-    seen: set[str] = set()
-    for key in keys:
-        if key.lower() not in seen:
-            seen.add(key.lower())
-            out.append(key)
-    return out
+MAX_ANCESTORS = 16  # GitHub nests sub-issues 8 levels deep; the bound only guards against a cycle
+EPIC_CLOSED = (
+    "fact closed this epic as completed: it is `fact:ready` and none of its sub-issues is open. "
+    "An epic has no work of its own, so it never starts a run."
+)
 
 
 class GitHubIssuesSource(GitHubIssueWrites):
     """
     Issues of `repo` ("owner/repo") read and written with the App's installation token. Implements `TaskSource`.
 
-    Issue states fetched by one instance are reused by it: keep an instance for one read (one request or one tick).
+    Issue states and parent links fetched by one instance are reused by it: keep an instance for one read (one request
+    or one scheduler tick), which then asks GitHub for each issue's parent at most once.
     """
 
     def __init__(self, repo: str, app: GitHubApp) -> None:
@@ -116,6 +65,7 @@ class GitHubIssuesSource(GitHubIssueWrites):
         self.repo = repo
         self.app = app
         self._issues: dict[str, dict[str, Any]] = {}  # lower-cased key -> issue, as fetched
+        self._parents: dict[str, str | None] = {}  # lower-cased key -> its parent's key; None: a top-level issue
 
     @asynccontextmanager
     async def _client(self, repo: str) -> AsyncIterator[httpx.AsyncClient]:
@@ -133,8 +83,10 @@ class GitHubIssuesSource(GitHubIssueWrites):
             next_url = response.links.get("next", {}).get("url")
         return items
 
-    def _remember(self, issue: dict[str, Any], repo: str) -> None:
-        self._issues[_issue_key(issue, repo).lower()] = issue
+    def _remember(self, issue: dict[str, Any], repo: str) -> str:
+        key = issue_key(issue, repo)
+        self._issues[key.lower()] = issue
+        return key
 
     async def _issue(self, key: str) -> dict[str, Any] | None:
         """Fetch the issue (or PR) behind `key`, fetched once per instance; None if GitHub has none."""
@@ -152,19 +104,70 @@ class GitHubIssuesSource(GitHubIssueWrites):
         self._issues[key.lower()] = issue
         return issue
 
+    async def _parent(self, key: str) -> str | None:
+        """Key of issue `key`'s parent (whose issue is remembered), asked once per instance; None without one."""
+        if key.lower() in self._parents:
+            return self._parents[key.lower()]
+        parsed = parse_key(key)
+        assert parsed.repo is not None  # noqa: S101 - a gh key always has one
+        owner, name = split_full_name(parsed.repo)
+        parent: str | None = None
+        try:
+            async with self._client(parsed.repo) as client:
+                parent = self._remember(
+                    (await client.get(f"/repos/{owner}/{name}/issues/{parsed.id}/parent")).json(), parsed.repo
+                )
+        except GitHubNotFoundError:  # a top-level issue, or one on a repository the App cannot read
+            pass
+        self._parents[key.lower()] = parent
+        return parent
+
+    async def not_ready_ancestor(self, key: str) -> str | None:
+        """Return the nearest ancestor of issue `key` without `fact:ready`; None when all have it, or for another key."""
+        if parse_key(key).kind != "gh":
+            return None
+        seen = {key.lower()}
+        current = key
+        for _ in range(MAX_ANCESTORS):
+            parent = await self._parent(current)
+            if parent is None or parent.lower() in seen:
+                return None
+            seen.add(parent.lower())
+            if not has_label(self._issues.get(parent.lower(), {}), READY_LABEL):
+                return parent
+            current = parent
+        return None
+
     async def _blocked_by(self, client: httpx.AsyncClient, number: int) -> list[str]:
         owner, name = split_full_name(self.repo)
         url = f"/repos/{owner}/{name}/issues/{number}/dependencies/blocked_by?per_page={PER_PAGE}"
-        blockers = await self._pages(client, url)
-        for issue in blockers:
-            self._remember(issue, self.repo)
-        return [_issue_key(issue, self.repo) for issue in blockers]
+        return [self._remember(issue, self.repo) for issue in await self._pages(client, url)]
+
+    async def _open_sub_issues(self, client: httpx.AsyncClient, issue: dict[str, Any]) -> list[str]:
+        """Keys of the issue's open sub-issues; each one's parent is known from here on, without asking GitHub."""
+        summary = issue.get("sub_issues_summary")
+        if isinstance(summary, dict) and not summary.get("total"):
+            return []  # GitHub says it has none: skip the request
+        owner, name = split_full_name(self.repo)
+        own = issue_key(issue, self.repo)
+        url = f"/repos/{owner}/{name}/issues/{issue['number']}/sub_issues?per_page={PER_PAGE}"
+        keys = []
+        for sub in await self._pages(client, url):
+            key = self._remember(sub, self.repo)
+            self._parents[key.lower()] = own
+            if sub.get("state") == "open":
+                keys.append(key)
+        return keys
 
     async def _task(self, client: httpx.AsyncClient, issue: dict[str, Any]) -> Task:
         body = str(issue.get("body") or "").replace("\r\n", "\n")
-        labels = _label_names(issue)
+        labels = label_names(issue)
         number = int(issue["number"])
-        deps = [*await self._blocked_by(client, number), *depends_on_lines(body, self.repo)]
+        deps = [
+            *await self._blocked_by(client, number),
+            *depends_on_lines(body, self.repo),
+            *await self._open_sub_issues(client, issue),
+        ]
         own = f"{GITHUB_PREFIX}{self.repo}#{number}"
         return Task(
             key=own,
@@ -174,7 +177,7 @@ class GitHubIssuesSource(GitHubIssueWrites):
             acceptance_criteria=acceptance_criteria(body),
             type=task_type(labels),
             complexity=complexity(labels),
-            depends_on=[d for d in _unique(deps) if d.lower() != own.lower()],
+            depends_on=[d for d in unique_keys(deps) if d.lower() != own.lower()],
         )
 
     def _owns(self, key: str) -> bool:
@@ -211,17 +214,40 @@ class GitHubIssuesSource(GitHubIssueWrites):
                 waiting.append(key)
         return tuple(waiting)
 
-    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
-        """Open `fact:ready` issues (not PRs) whose dependencies are closed (depth 0); `include_waiting`: all of them."""
+    async def _close_epic(self, key: str) -> None:
+        try:
+            await self.comment(key, EPIC_CLOSED)
+            await self.close(key)
+        except (GitHubError, httpx.HTTPError) as exc:  # the next tick tries again
+            log.warning("epic_close_failed", task_key=key, error=str(exc))
+            return
+        log.info("epic_closed", task_key=key)
+
+    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
+        """
+        Open `fact:ready` issues (not PRs) under ready ancestors whose dependencies are done (depth 0).
+
+        `include_waiting`: also the others, with `waiting_on` and `gated_by` set. Epics are never listed;
+        `close_epics` closes those with nothing left to wait on.
+        """
         owner, name = split_full_name(self.repo)
         url = f"/repos/{owner}/{name}/issues?state=open&labels={READY_LABEL}&per_page={PER_PAGE}"
         async with self._client(self.repo) as client:
             issues = [i for i in await self._pages(client, url) if "pull_request" not in i]
             for issue in issues:
                 self._remember(issue, self.repo)
-            tasks = [await self._task(client, issue) for issue in issues]
-        items = [ReadyItem(task, waiting_on=await self._waiting_on(task)) for task in tasks]
-        return [i for i in items if include_waiting or not i.waiting_on]
+            tasks = [(issue, await self._task(client, issue)) for issue in issues]
+        items: list[ReadyItem] = []
+        for issue, task in tasks:
+            item = ReadyItem(
+                task, waiting_on=await self._waiting_on(task), gated_by=await self.not_ready_ancestor(task.key)
+            )
+            if is_epic(issue):
+                if close_epics and not item.waiting_on and item.gated_by is None:
+                    await self._close_epic(task.key)
+            elif include_waiting or (not item.waiting_on and item.gated_by is None):
+                items.append(item)
+        return items
 
     def mark_done(self, worktree: Path, key: str) -> str | None:
         """None: an issue is closed when its change set merges, not by a commit."""

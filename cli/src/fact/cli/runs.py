@@ -53,7 +53,9 @@ def api_error(e: httpx.HTTPStatusError) -> typer.Exit:
 def run(
     task_key: Annotated[str, typer.Argument(help="Task key, such as task:M1-02 or gh:owner/repo#12.")],
     *,
-    force_deps: Annotated[bool, typer.Option("--force-deps", help="Start even if dependencies are not done.")] = False,
+    force_deps: Annotated[
+        bool, typer.Option("--force-deps", help="Start even if dependencies are not done or an ancestor is not ready.")
+    ] = False,
     project: Annotated[
         str | None, typer.Option(help="Project holding the task; found from the key if omitted.")
     ] = None,
@@ -67,6 +69,10 @@ def run(
         if e.response.status_code == HTTP_CONFLICT and isinstance(detail, dict) and "missing_deps" in detail:
             missing = ", ".join(detail["missing_deps"])
             msg = f"{task_key} has unfinished dependencies: {missing}. Use --force-deps to start anyway."
+            raise _fail(msg) from e
+        if e.response.status_code == HTTP_CONFLICT and isinstance(detail, dict) and "not_ready_ancestor" in detail:
+            ancestor = detail["not_ready_ancestor"]
+            msg = f"{task_key} is under {ancestor}, which is not marked ready. Use --force-deps to start anyway."
             raise _fail(msg) from e
         raise api_error(e) from e
     typer.echo(f"Started {started['workflow_id']} ({started['workflow_type']}, project {started['project']})")
