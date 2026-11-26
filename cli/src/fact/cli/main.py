@@ -12,6 +12,8 @@ app.command("use")(use.use)
 app.command("run")(runs.run)
 app.command("runs")(runs.list_runs)
 app.command("status")(runs.status)
+app.command("gate")(runs.gate)
+app.command("steer")(runs.steer)
 app.add_typer(projects.app, name="projects")
 app.add_typer(github.app, name="github")
 

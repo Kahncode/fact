@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fact.api.middleware import RequestIdMiddleware, unhandled_exception_handler
 from fact.api.projects import sync_projects
-from fact.api.routers import artifacts, health, projects, run_start, runs
+from fact.api.routers import artifacts, health, human, projects, run_start, runs
 from fact.api.temporal import TemporalConnection
 from fact.core import migrate
 from fact.core.artifacts import LocalArtifactStore
@@ -44,5 +44,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(projects.router)
     app.include_router(run_start.router)
     app.include_router(runs.router)
+    app.include_router(human.router)
     app.include_router(artifacts.router)
     return app

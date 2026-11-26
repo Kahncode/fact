@@ -1,4 +1,4 @@
-"""`fact run`, `fact runs` and `fact status`: start runs and follow them through the API."""
+"""`fact run`, `fact runs`, `fact status`, `fact gate` and `fact steer`: start runs, follow and answer them."""
 
 from datetime import datetime
 from typing import Annotated, Any
@@ -8,6 +8,8 @@ import httpx
 import typer
 from fact.cli import projects
 from fact.cli.projects import format_table
+from fact.core.enums import RunStatus
+from fact.core.gates import GateDecision
 from fact.core.settings import get_settings
 
 API = "/api/v1"
@@ -132,6 +134,8 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     typer.echo(f"Status:   {r['status']}  outcome: {r['outcome'] or '-'}")
     typer.echo(f"Duration: {_duration(r['started_at'], r['ended_at'])}  machine: {r['machine_seconds']:.0f}s")
     typer.echo(f"Cost:     {_cost(r['cost_usd'])}  tokens in/out: {r['tokens_in']}/{r['tokens_out']}")
+    if r["status"] != RunStatus.FINISHED:
+        typer.echo(f"Gate:     {_gate_line(r['id'])}")
     if not r["steps"]:
         typer.echo("\nNo steps yet.")
         return
@@ -151,3 +155,58 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     ]
     typer.echo("")
     typer.echo(format_table(("STAGE", "#", "KIND", "STATUS", "OUTCOME", "TIME", "COST", "LINKS"), rows))
+
+
+def _live(run_id: str) -> dict[str, Any]:
+    return _call("GET", f"{API}/runs/{quote(run_id, safe='')}/status")
+
+
+def _gate_line(run_id: str) -> str:
+    """Describe the open gate from the workflow's status query; a failed query is shown, not fatal."""
+    try:
+        gate = _live(run_id)["gate"]
+    except httpx.HTTPStatusError as e:
+        return f"unknown ({_detail(e)})"
+    if gate is None:
+        return "none open"
+    return (
+        f"{gate['gate_id']} ({gate['kind']}, {gate['stage_id']} #{gate['attempt']}) open since {gate['opened_at'][:19]}"
+    )
+
+
+def gate(
+    run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or workflow id (run-...).")],
+    decision: Annotated[GateDecision, typer.Argument(help="approve or reject.")],
+    *,
+    note: Annotated[str, typer.Option(help="Note for the run, such as why you reject.")] = "",
+    gate_id: Annotated[
+        str | None, typer.Option("--gate", help="Gate id to answer; the run's open gate if omitted.")
+    ] = None,
+) -> None:
+    """Answer the gate a run is waiting at."""
+    try:
+        run_id = _find_run(run_ref)["id"]
+        if gate_id is None:
+            open_gate = _live(run_id)["gate"]
+            if open_gate is None:
+                msg = f"{run_ref} has no open gate"
+                raise _fail(msg)
+            gate_id = str(open_gate["gate_id"])
+        path = f"{API}/runs/{quote(run_id, safe='')}/gates/{quote(gate_id, safe='')}"
+        _call("POST", path, json={"decision": decision.value, "note": note})
+    except httpx.HTTPStatusError as e:
+        raise _api_error(e) from e
+    typer.echo(f"Answered gate {gate_id} of {run_ref}: {decision.value}")
+
+
+def steer(
+    run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or workflow id (run-...).")],
+    text: Annotated[str, typer.Argument(help="Instructions for the run's next agent session.")],
+) -> None:
+    """Add instructions to a run's next agent session; a running session is not interrupted."""
+    try:
+        run_id = _find_run(run_ref)["id"]
+        _call("POST", f"{API}/runs/{quote(run_id, safe='')}/instructions", json={"text": text})
+    except httpx.HTTPStatusError as e:
+        raise _api_error(e) from e
+    typer.echo(f"Queued instructions for {run_ref}'s next agent session.")

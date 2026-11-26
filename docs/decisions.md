@@ -244,3 +244,13 @@ Implementation decisions that a future developer would ask "why" about. Design-l
 
 **What:** In `@worker/tests/standard_harness.py`, `FakeActivities.gate_decisions` lists the decisions the fake `record_gate_opened` sends through the `answer_gate` update while it runs (in order, then reject). `None` lets the test drive gates itself with `@worker/tests/gate_harness.py`.
 **Why:** In Temporal's time-skipping test server, a workflow waiting on a condition with no timer or activity scheduled, while the test awaits its result, has time skipped straight to the workflow's timeout, so a test that answers after the gate opens loses the race. Answering inside the activity keeps work in flight until the update lands. Tests that answer themselves poll the `status` query for the open gate and answer it before awaiting the result.
+
+### [2026-11-26 18:00] `fact gate --gate ID` sends an explicit gate id to the workflow instead of checking it in the CLI
+
+**What:** `fact gate <run> approve|reject` takes an optional `--gate ID` (not in task M2-02). Without it, the CLI reads the open gate from the `status` query and answers that one; with it, the CLI skips the query and posts the answer for that id directly (`@cli/src/fact/cli/runs.py`).
+**Why:** The `answer_gate` validator is the only place that knows for certain whether a gate is open. Sending the id lets an explicit answer reach it and come back with its 409 message (`gate 'x' is already closed: answered approve`) when two people race or the id is stale, rather than the CLI guessing from a status read that may already be out of date.
+
+### [2026-11-26 18:00] Gate and status calls time out after 8 s and map Temporal errors to 409, 503 and 502
+
+**What:** `@api/src/fact/api/routers/human.py` passes `rpc_timeout=WORKER_TIMEOUT` (8 s) to the `answer_gate` update and the `status` query. A validator refusal is 409 with its message; `NOT_FOUND` (workflow finished or unknown) is 409; `DEADLINE_EXCEEDED` is 503 ("is the project's worker running?"); any other Temporal error is 502. `Run.human_touches` is incremented with one SQL `UPDATE ... SET human_touches = human_touches + 1` after a successful answer or signal only.
+**Why:** An update or query needs the workflow's worker; with none running it would block until Temporal's own deadline, past the CLI's 10 s HTTP timeout, so the person would see a bare client timeout instead of the reason. 8 s keeps the API's answer inside the CLI's budget. A finished workflow is a state conflict, not a Temporal fault, so it shares 409 with a closed gate. The atomic `UPDATE` makes two concurrent answers both count, where a read-modify-write on the ORM object would lose one; refusals are not touches because nothing reached the run.

@@ -40,7 +40,17 @@ uv run fact runs
 uv run fact status run-task-M1-02-1
 ```
 
-`fact run` reads the task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links.
+`fact run` reads the task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any.
+
+When a run waits for you, answer its gate, or send instructions to its next agent session (a running session is not interrupted):
+
+```
+uv run fact gate run-task-M1-02-1 approve
+uv run fact gate run-task-M1-02-1 reject --note "wrong approach, see the task"
+uv run fact steer run-task-M1-02-1 "Keep the old function name"
+```
+
+`fact gate` answers the open gate; pass `--gate <id>` to answer a specific one.
 
 Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run opens its PR and CI is green; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
 
@@ -58,13 +68,13 @@ To set up a task repository, `uv run fact github labels sync <owner/repo>` creat
 
 ## The API
 
-Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`.
+Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, and a run's live state read with `GET /api/v1/runs/{id}/status`.
 
 Every response carries an `X-Request-ID` header (send your own to propagate it), and each request produces one `request_completed` log line. Set `FACT_LOG_LEVEL` to override the log level (default DEBUG locally, INFO in `test` and `prod`); see `docs/ARCHITECTURE.md` for logging details.
 
 ## Workflows
 
-A project's workflows are Python classes in its `.fact/workflows/`, built on `FactWorkflow` from `fact.sdk`. fact's own `Standard` workflow (`.fact/workflows/standard.py`) prepares a workspace, runs an implement session, loops lint and test with fix sessions until green, has an agent review the change against the task (and address its findings), then runs a learn session that updates the repository's docs and writes the PR title and summary, marks the task done and opens the PR. A failed learn session does not fail the run: the PR opens with the implement session's text. It then waits for the PR's CI; a failing job's log goes to a fix session whose commit is pushed to the same PR, up to two times. When the checks or CI stay red after their fix sessions, the run does not end: it opens a gate and waits for a person, for as long as it takes and at no cost. Approving runs that loop again (extra instructions sent to the run reach its next fix sessions); rejecting ends the run needing you, with no PR for red checks and the PR open for red CI. Answering gates from the CLI or API is not built yet (M2-02). The run reports success only when CI is green. A cost comment on the PR shows time and cost per step, including time spent waiting for you.
+A project's workflows are Python classes in its `.fact/workflows/`, built on `FactWorkflow` from `fact.sdk`. fact's own `Standard` workflow (`.fact/workflows/standard.py`) prepares a workspace, runs an implement session, loops lint and test with fix sessions until green, has an agent review the change against the task (and address its findings), then runs a learn session that updates the repository's docs and writes the PR title and summary, marks the task done and opens the PR. A failed learn session does not fail the run: the PR opens with the implement session's text. It then waits for the PR's CI; a failing job's log goes to a fix session whose commit is pushed to the same PR, up to two times. When the checks or CI stay red after their fix sessions, the run does not end: it opens a gate and waits for a person, for as long as it takes and at no cost. Approving runs that loop again (extra instructions sent to the run reach its next fix sessions); rejecting ends the run needing you, with no PR for red checks and the PR open for red CI. The run reports success only when CI is green. A cost comment on the PR shows time and cost per step, including time spent waiting for you.
 
 The worker loads each registered project's workflows from the latest commit on its home repository's default branch and pins every run to that version, so a run finishes on the code it started with. Merged workflow changes take effect when the worker restarts; runs still pinned to the old version then wait until you drop and restart them. See `.fact/workflows/README.md` and `worker/README.md`.
 

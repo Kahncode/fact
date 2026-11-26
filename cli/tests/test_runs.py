@@ -157,3 +157,28 @@ def test_status_unknown_run(settings: Settings, monkeypatch: pytest.MonkeyPatch)
     result = CliRunner().invoke(app, ["status", "nope"])
     assert result.exit_code == 1
     assert "API answered 404: Unknown run: nope" in result.output
+
+
+def test_status_shows_a_failed_live_query(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status"):
+            return httpx.Response(502, json={"detail": "Status query failed"})
+        return httpx.Response(200, json={**RUN, "status": "running", "outcome": None, "steps": []})
+
+    _use(monkeypatch, settings, handler)
+    result = CliRunner().invoke(app, ["status", "abc123"])
+    assert result.exit_code == 0, result.output
+    assert "Gate:     unknown (Status query failed)" in result.output
+
+
+def test_steer_refused_for_a_finished_run(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/instructions"):
+            assert json.loads(request.content) == {"text": "more tests"}
+            return httpx.Response(409, json={"detail": "Run run-task-M1-02-1 is not running in Temporal"})
+        return httpx.Response(200, json={**RUN, "steps": []})
+
+    _use(monkeypatch, settings, handler)
+    result = CliRunner().invoke(app, ["steer", "abc123", "more tests"])
+    assert result.exit_code == 1
+    assert "API answered 409: Run run-task-M1-02-1 is not running in Temporal" in result.output

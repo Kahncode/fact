@@ -26,6 +26,20 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
     ("/api/v1/runs/{run_id}/steps", "POST"): ["test_runs.test_steps_lifecycle_and_order"],
     ("/api/v1/steps/{step_id}", "PATCH"): ["test_runs.test_steps_lifecycle_and_order"],
     ("/api/v1/runs/{run_id}/events", "POST"): ["test_runs.test_events_batch"],
+    ("/api/v1/runs/{run_id}/gates/{gate_id}", "POST"): [
+        "test_human.test_gate_steer_and_status",
+        "test_human.test_finished_workflow_is_a_conflict",
+        "test_human.test_unknown_run_and_bad_bodies",
+    ],
+    ("/api/v1/runs/{run_id}/instructions", "POST"): [
+        "test_human.test_gate_steer_and_status",
+        "test_human.test_finished_workflow_is_a_conflict",
+        "test_human.test_unknown_run_and_bad_bodies",
+    ],
+    ("/api/v1/runs/{run_id}/status", "GET"): [
+        "test_human.test_gate_steer_and_status",
+        "test_human.test_unknown_run_and_bad_bodies",
+    ],
     ("/api/v1/artifacts/{key:path}", "PUT"): ["test_artifacts.test_upload_download"],
     ("/api/v1/artifacts/{key:path}", "GET"): ["test_artifacts.test_upload_download"],
 }
