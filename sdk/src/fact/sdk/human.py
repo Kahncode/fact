@@ -8,6 +8,7 @@ outage must not lose a person's answer. Opening a gate also creates a `gate_wait
 `HumanSteps` uses the workflow's `input`, `next_attempt` and `_control`; `FactWorkflow` calls its `__init__`.
 """
 
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from temporalio import workflow
@@ -34,7 +35,7 @@ with workflow.unsafe.imports_passed_through():
         StageOutcome,
         WorkflowStatus,
     )
-    from fact.core.types import RunResult
+    from fact.core.types import PRRef, RunResult
 
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
@@ -105,16 +106,27 @@ class HumanSteps:
             workflow.logger.warning("notify failed for %s: %s", spec.dedupe_key, exc.cause or exc)
 
     async def notify_run_end(self: FactWorkflow, result: RunResult) -> None:
-        """Notify how the run ended: `prs_ready` with PRs open, `run_failed` if it failed or needs a person."""
+        """
+        Notify how the run ended: `prs_ready` with PRs open, `run_failed` if it failed or needs a person.
+
+        A run that waited for its PRs to merge or close was told `prs_ready` before that wait; it ends `run_finished`.
+        """
         key = self.input.task.key
         link = result.prs[0].url if result.prs else None
         if result.outcome == RunOutcome.PR_OPENED:
-            kind, title = NotificationKind.PRS_READY, f"{key}: {len(result.prs) or 'no'} PR(s) ready for review"
-        elif result.outcome in BAD_ENDS:
+            await self.notify_prs_ready(result.prs, result.summary)
+            return
+        if result.outcome in BAD_ENDS:
             kind, title = NotificationKind.RUN_FAILED, f"{key} ended {result.outcome}"
         else:
             kind, title = NotificationKind.RUN_FINISHED, f"{key} ended {result.outcome}"
         await self.notify(kind, title, result.summary, link)
+
+    async def notify_prs_ready(self: FactWorkflow, prs: Sequence[PRRef], body: str = "") -> None:
+        """Tell a person the PRs are ready for review (`prs_ready`), once per run."""
+        title = f"{self.input.task.key}: {len(prs) or 'no'} PR(s) ready for review"
+        link = prs[0].url if prs else None
+        await self.notify(NotificationKind.PRS_READY, title, body or ", ".join(pr.url for pr in prs), link)
 
     async def _notify_gate(self: FactWorkflow, gate: OpenGate) -> None:
         summary = str(gate.details.get("summary", ""))

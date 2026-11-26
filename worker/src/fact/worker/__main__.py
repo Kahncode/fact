@@ -21,6 +21,7 @@ from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.notify import NotifyActivities
+from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.client import connect
@@ -97,6 +98,7 @@ def _activity_workers(
     notify = NotifyActivities(settings.api_url, http)
     cost = CostCommentActivities(github, settings.api_url, http)
     ci = CIActivities(github, reporter)
+    pr_state = PRStateActivities(github)
     control = Worker(
         client,
         task_queue=CONTROL_QUEUE,
@@ -108,6 +110,7 @@ def _activity_workers(
             change_set.open_change_set,
             cost.post_cost_comment,
             ci.wait_for_ci,
+            pr_state.wait_for_pr_closed,
             control_steps.mark_task_done,
             control_steps.record_run_started,
             control_steps.record_run_finished,

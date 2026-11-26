@@ -5,7 +5,8 @@ from fact.core.activity_contract import NOTIFY, PREPARE_WORKSPACE, NotifyInput
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import StepResult
-from standard_harness import MAX_FIX_ATTEMPTS, PR, RUN_URL, FakeActivities, finished, run_standard
+from standard_harness import MAX_FIX_ATTEMPTS, FakeActivities, finished, run_standard
+from standard_inputs import PR, RUN_URL
 from temporalio.client import WorkflowFailureError
 
 ROUNDS = MAX_FIX_ATTEMPTS + 1  # check rounds in one `until_green`
@@ -15,13 +16,14 @@ def _sent(fakes: FakeActivities) -> list[tuple[NotificationKind, str]]:
     return [(n.kind, n.dedupe_key) for n in fakes.of(NOTIFY)]
 
 
-async def test_green_run_notifies_its_prs_are_ready() -> None:
+async def test_green_run_notifies_its_prs_are_ready_then_merged() -> None:
     fakes = FakeActivities()
     await run_standard(fakes, "run-notify-green")
-    (ready,) = fakes.of(NOTIFY)
+    ready, ended = fakes.of(NOTIFY)
     assert (ready.kind, ready.dedupe_key, ready.link) == (NotificationKind.PRS_READY, "run-1:prs_ready", PR.url)
     assert ready.title == "task:M1-99: 1 PR(s) ready for review"
     assert ready.body == PR.url
+    assert (ended.kind, ended.title, ended.link) == (NotificationKind.RUN_FINISHED, "task:M1-99 ended merged", PR.url)
 
 
 async def test_each_gate_notifies_once_then_the_end() -> None:
@@ -64,5 +66,6 @@ async def test_failed_run_notifies_before_failing() -> None:
 async def test_notify_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=NOTIFY, test_failures=ROUNDS, gate_decisions=[GateDecision.APPROVE])
     result, _ = await run_standard(fakes, "run-notify-down")
-    assert result.outcome == RunOutcome.PR_OPENED
-    assert [n.kind for n in fakes.of(NOTIFY)] == [NotificationKind.GATE_WAITING, NotificationKind.PRS_READY]
+    assert result.outcome == RunOutcome.MERGED
+    kinds = [n.kind for n in fakes.of(NOTIFY)]
+    assert kinds == [NotificationKind.GATE_WAITING, NotificationKind.PRS_READY, NotificationKind.RUN_FINISHED]

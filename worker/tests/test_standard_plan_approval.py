@@ -12,7 +12,8 @@ from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import RunInput, RunResult
 from gate_harness import answer, open_gate
-from standard_harness import FakeActivities, finished, run_input, run_standard, started_standard
+from standard_harness import FakeActivities, finished, run_standard, started_standard
+from standard_inputs import run_input
 
 CRITERIA = ["The widget renders", "The widget is documented"]
 
@@ -27,16 +28,16 @@ async def test_no_gate_when_plan_approval_is_off() -> None:
     fakes = FakeActivities()
     result, _ = await run_standard(fakes, "run-plan-off")
 
-    assert result.outcome == RunOutcome.PR_OPENED
-    assert all(g.kind != "approve_plan" for g in fakes.of(RECORD_GATE_OPENED))
+    assert result.outcome == RunOutcome.MERGED
+    assert all(g.kind != "approve_plan" for g in fakes.gates(RECORD_GATE_OPENED))
 
 
 async def test_approve_continues_the_run() -> None:
     fakes = FakeActivities(gate_decisions=[GateDecision.APPROVE])
     result, _ = await run_standard(fakes, "run-plan-approve", _gated_input())
 
-    assert result.outcome == RunOutcome.PR_OPENED
-    (opened,) = fakes.of(RECORD_GATE_OPENED)
+    assert result.outcome == RunOutcome.MERGED
+    (opened,) = fakes.gates(RECORD_GATE_OPENED)
     assert (opened.gate_id, opened.kind, opened.stage_id, opened.attempt) == (
         "approve_plan",
         "approve_plan",
@@ -63,7 +64,7 @@ async def test_reject_drops_the_run_with_the_note() -> None:
     assert result.outcome == RunOutcome.DROPPED
     assert result.summary == "plan rejected: out of scope this quarter"
     assert result.prs == []
-    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
     assert (answered.decision, answered.note, answered.outcome) == (
         "reject",
         "out of scope this quarter",

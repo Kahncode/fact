@@ -10,7 +10,10 @@ through the check loop again. Then a `learn` session updates the repositories' c
 READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch, open the PR (with
 the review's criteria table) and comment the run's cost on it. Then wait for CI on the PR's head commit: a failure goes
 to a `fix_ci` session with the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most
-`MAX_CI_FIX_ATTEMPTS` times. The cost comment is updated at the end of the run.
+`MAX_CI_FIX_ATTEMPTS` times. Once CI is green, the cost comment is updated, a person is told the PRs are ready, and
+the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
+closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. The cost comment is updated
+once more at the end.
 
 A failing setup ends the run `failed`. If the checks never go green, or CI stays red or never finishes, a `needs_human`
 gate opens: approve runs that loop once more (instructions sent with `steer` reach its fix sessions), reject ends the
@@ -21,13 +24,14 @@ losing the change over, so the PR still opens with the implement session's title
 conventional title).
 
 A person is notified when a gate opens, when the PRs are ready (CI green), and when the run ends `failed` or
-`needs_human` (`run_failed`) or `dropped` (`run_finished`).
+`needs_human` (`run_failed`) or `merged`, `closed` or `dropped` (`run_finished`).
 """
 
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
+    from fact.sdk.pull_requests import REVIEW_STAGE
     from fact.sdk.review import Review, parse_review, review_context
     from fact.sdk.types import (
         Check,
@@ -72,6 +76,7 @@ def _ended(stage: str, step: StepResult) -> RunResult:
         Stage("open_pr", "Open PR", StepKind.GITHUB),
         Stage("wait_for_ci", "Wait for CI", StepKind.GITHUB, loops_to="fix_ci"),
         Stage("fix_ci", "Fix CI", StepKind.AGENT, loops_to="open_pr"),
+        Stage(REVIEW_STAGE, "Wait for review", StepKind.GATE),
         Stage(NEEDS_HUMAN, "Needs a person", StepKind.GATE),
     ]
 )
@@ -146,19 +151,25 @@ class Standard(FactWorkflow):
                 return rejected
 
     async def _ci_green(self, prs: list[PRRef]) -> RunResult:
-        """Wait for CI with fix sessions, asking a person each time it stays red; update the cost comment, and end."""
+        """Wait for CI with fix sessions, asking a person each time it stays red; then wait for a merge, and end."""
         while True:
             ci = await self.until_ci_green(prs, fix_prompt="fix_ci", max_attempts=MAX_CI_FIX_ATTEMPTS)
             prs = self.prs
-            urls = ", ".join(pr.url for pr in prs)
             if ci == StepOutcome.PASSED:
-                result: RunResult | None = RunResult(outcome=RunOutcome.PR_OPENED, prs=prs, summary=urls)
                 break
-            summary = f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}"
-            if (result := await self._ask("wait_for_ci", summary)) is not None:
-                break
-        await self.post_cost_comment(prs)  # again, with the CI wait, the fixes and any human wait
-        return result
+            summary = f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {', '.join(pr.url for pr in prs)}"
+            if (stuck := await self._ask("wait_for_ci", summary)) is not None:
+                await self.post_cost_comment(prs)  # again, with the CI wait, the fixes and any human wait
+                return stuck
+        return await self._until_closed(prs)
+
+    async def _until_closed(self, prs: list[PRRef]) -> RunResult:
+        """CI is green: tell a person, wait until every PR is merged or closed, and end the run that way."""
+        await self.post_cost_comment(prs)  # again, with the CI wait and the fixes, for the reviewer
+        await self.notify_prs_ready(prs)
+        outcome = await self.wait_for_pr_closed(prs)
+        await self.post_cost_comment(prs)  # last, with the review wait
+        return RunResult(outcome=outcome, prs=prs, summary=", ".join(pr.url for pr in prs))
 
     async def _ask(self, loop: str, summary: str) -> RunResult | None:
         """Open a `needs_human` gate on an exhausted loop: None if approved (run it again), else the run's end."""

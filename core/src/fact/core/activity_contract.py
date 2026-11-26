@@ -25,6 +25,7 @@ OPEN_CHANGE_SET = "open_change_set"
 MARK_TASK_DONE = "mark_task_done"
 POST_COST_COMMENT = "post_cost_comment"
 WAIT_FOR_CI = "wait_for_ci"
+WAIT_FOR_PR_CLOSED = "wait_for_pr_closed"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 RECORD_GATE_OPENED = "record_gate_opened"
@@ -32,6 +33,7 @@ RECORD_GATE_ANSWERED = "record_gate_answered"
 NOTIFY = "notify"
 
 Check = Literal["lint", "test", "build", "setup"]
+PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
@@ -120,6 +122,11 @@ class WaitForCIInput(_Input):
     pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
     timeout_s: float = 3600.0  # give up waiting for checks still running after this long
     no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
+
+
+class WaitForPRClosedInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # each is polled until it is merged or closed
 
 
 class RunStartedInput(_Input):

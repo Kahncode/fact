@@ -5,17 +5,13 @@ from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
 from standard_harness import (
-    HIGH,
-    LEARNED,
-    LOW,
-    MET,
-    UNMET,
     FakeActivities,
     agent_sessions,
     checks,
     finished,
     run_standard,
 )
+from standard_inputs import HIGH, LEARNED, LOW, MET, UNMET
 
 
 def _reviewed(outputs: dict, outcome: StepOutcome = StepOutcome.PASSED) -> StepResult:
@@ -29,7 +25,7 @@ async def test_review_findings_are_addressed_then_checked(criteria: list, findin
     fakes = FakeActivities(review=_reviewed({"criteria": criteria, "findings": findings}))
     result, _ = await run_standard(fakes, "run-review-findings")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     assert agent_sessions(fakes) == [
         ("implement", 1, "implement"),
         ("review", 1, "review"),
@@ -49,7 +45,7 @@ async def test_checks_failing_after_address_review_go_to_fix_sessions() -> None:
     fakes = FakeActivities(review=_reviewed({"criteria": [MET], "findings": [HIGH]}), test_failures_after_address=1)
     result, _ = await run_standard(fakes, "run-address-then-fix")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     assert [p for _, _, p in agent_sessions(fakes)] == ["implement", "review", "address_review", "fix_checks", "learn"]
 
 

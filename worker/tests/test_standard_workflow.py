@@ -11,24 +11,21 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
+    RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
+    WAIT_FOR_PR_CLOSED,
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
 from fact.sdk.sessions import MAX_RESUMES
 from fact.worker.loader import sandbox_runner
 from standard_harness import (
-    BRANCH,
-    LEARNED,
     MAX_FIX_ATTEMPTS,
-    MET,
-    PR,
-    RUN_URL,
     STANDARD,
     FakeActivities,
     agent_sessions,
@@ -36,6 +33,7 @@ from standard_harness import (
     finished,
     run_standard,
 )
+from standard_inputs import BRANCH, LEARNED, MET, PR, RUN_URL
 from temporalio.client import WorkflowFailureError, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
@@ -46,7 +44,7 @@ async def test_green_path() -> None:
     fakes = FakeActivities()
     result, history = await run_standard(fakes, "run-green")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     assert result.prs == [PR]
     assert [n for n, _ in fakes.calls] == [
         RECORD_RUN_STARTED,
@@ -62,9 +60,14 @@ async def test_green_path() -> None:
         POST_COST_COMMENT,
         WAIT_FOR_CI,
         POST_COST_COMMENT,
+        NOTIFY,  # PRs ready
+        RECORD_GATE_OPENED,  # the review wait
+        WAIT_FOR_PR_CLOSED,
+        RECORD_GATE_ANSWERED,
+        POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         TEARDOWN_WORKSPACE,
-        NOTIFY,
+        NOTIFY,  # merged
     ]
     assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
@@ -81,8 +84,8 @@ async def test_green_path() -> None:
     assert pr_spec.attempt == 1
     (ci_spec,) = fakes.of(WAIT_FOR_CI)
     assert (ci_spec.stage_id, ci_spec.attempt, ci_spec.pr) == ("wait_for_ci", 1, PR)
-    assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])] * 2
-    assert finished(fakes) == RunOutcome.PR_OPENED
+    assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])] * 3
+    assert finished(fakes) == RunOutcome.MERGED
 
     # Replay through JSON: the code is deterministic and the history serializes with our converter.
     replayed = WorkflowHistory.from_json("run-green", history.to_json())
@@ -94,7 +97,7 @@ async def test_two_failures_then_green() -> None:
     fakes = FakeActivities(test_failures=2)
     result, _ = await run_standard(fakes, "run-two-failures")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     assert agent_sessions(fakes) == [
         ("implement", 1, "implement"),
         ("implement", 2, "fix_checks"),
@@ -122,7 +125,7 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
-    (gate,) = fakes.of(RECORD_GATE_OPENED)  # a person was asked first, and rejected
+    (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected
     assert (gate.gate_id, gate.kind) == ("checks-1", "needs_human")
 
 
@@ -130,7 +133,7 @@ async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
     fakes = FakeActivities(checked_out=f"{BRANCH}-2")
     result, _ = await run_standard(fakes, "run-branch-taken")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert pr_spec.branch == f"{BRANCH}-2"
 
@@ -149,7 +152,7 @@ async def test_failed_setup_ends_the_run_before_implement() -> None:
 async def test_teardown_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=TEARDOWN_WORKSPACE)
     result, _ = await run_standard(fakes, "run-teardown-broken")
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
 
 
 async def test_failed_implement_ends_the_run_without_checks() -> None:
@@ -187,7 +190,7 @@ async def test_retryable_block_resumes_the_session_once() -> None:
     fakes = FakeActivities(implement_script=[RETRYABLE])
     result, _ = await run_standard(fakes, "run-retryable")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     first, second, _review, _learn = fakes.of(AGENT_STEP)
     assert (first.attempt, first.resume_session_id) == (1, None)
     assert (second.stage_id, second.attempt, second.prompt_name) == ("implement", 2, "implement")
@@ -208,7 +211,7 @@ async def test_interrupted_worker_resumes_the_session() -> None:
     fakes = FakeActivities(implement_script=[INTERRUPTED])
     result, _ = await run_standard(fakes, "run-interrupted")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     _, resumed, _review, _learn = fakes.of(AGENT_STEP)
     assert (resumed.attempt, resumed.resume_session_id) == (2, "s-1")
     assert "worker" in resumed.context
@@ -226,14 +229,14 @@ async def test_interrupted_twice_fails_the_run() -> None:
 async def test_cost_comment_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=POST_COST_COMMENT)
     result, _ = await run_standard(fakes, "run-cost-broken")
-    assert result.outcome == RunOutcome.PR_OPENED
-    assert finished(fakes) == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
+    assert finished(fakes) == RunOutcome.MERGED
 
 
 async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:
     fakes = FakeActivities(broken=RECORD_RUN_STARTED)
     result, _ = await run_standard(fakes, "run-api-down")
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
 
 
 async def test_failing_activity_fails_the_run_and_records_it() -> None:
@@ -256,6 +259,7 @@ def test_standard_stage_manifest() -> None:
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
         {"id": "wait_for_ci", "label": "Wait for CI", "kind": "github", "loops_to": "fix_ci"},
         {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
+        {"id": "wait_for_review", "label": "Wait for review", "kind": "gate", "loops_to": None},
         {"id": "needs_human", "label": "Needs a person", "kind": "gate", "loops_to": None},
     ]
     assert json.loads(json.dumps(STANDARD.manifest()))[4]["loops_to"] == "implement"

@@ -4,7 +4,8 @@ import pytest
 from fact.core.activity_contract import AGENT_STEP, MARK_TASK_DONE, OPEN_CHANGE_SET
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
-from standard_harness import HIGH, LEARNED, MET, FakeActivities, agent_sessions, finished, run_standard
+from standard_harness import FakeActivities, agent_sessions, finished, run_standard
+from standard_inputs import HIGH, LEARNED, MET
 from temporalio.exceptions import ApplicationError
 
 IMPLEMENT_TITLE = "feat(M1-99): add the widget"  # what the fake implement session answers
@@ -14,7 +15,7 @@ async def test_learn_runs_after_review_and_before_the_task_is_marked_done() -> N
     fakes = FakeActivities()
     result, _ = await run_standard(fakes, "run-learn")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     names = [n for n, _ in fakes.calls]
     learn_index = next(i for i, (n, spec) in enumerate(fakes.calls) if n == AGENT_STEP and spec.stage_id == "learn")
     assert learn_index < names.index(MARK_TASK_DONE) < names.index(OPEN_CHANGE_SET)
@@ -45,8 +46,8 @@ async def test_without_learn_text_the_pr_falls_back_to_the_implement_session(lea
     fakes = FakeActivities(learn=learn)
     result, _ = await run_standard(fakes, "run-learn-fallback")
 
-    assert result.outcome == RunOutcome.PR_OPENED  # a learn session that does not pass costs only the docs
-    assert finished(fakes) == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED  # a learn session that does not pass costs only the docs
+    assert finished(fakes) == RunOutcome.MERGED
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert (pr_spec.title, pr_spec.summary) == (IMPLEMENT_TITLE, "implement done")
 

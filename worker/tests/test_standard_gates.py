@@ -32,8 +32,8 @@ async def test_approve_runs_the_checks_loop_once_more() -> None:
     fakes = FakeActivities(test_failures=ROUNDS, gate_decisions=[GateDecision.APPROVE])
     result, history = await run_standard(fakes, "run-gate-approve")
 
-    assert result.outcome == RunOutcome.PR_OPENED
-    (opened,) = fakes.of(RECORD_GATE_OPENED)
+    assert result.outcome == RunOutcome.MERGED
+    (opened,) = fakes.gates(RECORD_GATE_OPENED)
     assert (opened.gate_id, opened.kind, opened.stage_id, opened.attempt) == (
         "checks-1",
         "needs_human",
@@ -42,7 +42,7 @@ async def test_approve_runs_the_checks_loop_once_more() -> None:
     )
     assert opened.details["loop"] == "checks"
     assert "test" in opened.details["summary"]
-    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
     assert (answered.step_id, answered.decision, answered.outcome) == ("step-checks-1", "approve", StepOutcome.PASSED)
     assert answered.wait_seconds >= 0
     assert len(checks(fakes)) == 2 * (ROUNDS + 1)  # one more round, green
@@ -73,7 +73,7 @@ async def test_reject_ends_the_run_needing_a_human() -> None:
     assert result.outcome == RunOutcome.NEEDS_HUMAN
     assert result.summary.endswith("rejected: not worth it")
     assert result.prs == []
-    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
     assert (answered.decision, answered.note, answered.outcome) == ("reject", "not worth it", StepOutcome.NEEDS_HUMAN)
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(OPEN_CHANGE_SET) == []
@@ -100,7 +100,7 @@ async def test_answering_an_unknown_or_closed_gate_is_an_error() -> None:
         result: RunResult = await handle.result()
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert [a.gate_id for a in fakes.of(RECORD_GATE_ANSWERED)] == ["checks-1", "checks-2"]
+    assert [a.gate_id for a in fakes.gates(RECORD_GATE_ANSWERED)] == ["checks-1", "checks-2"]
 
 
 async def test_steering_reaches_the_next_agent_session_only() -> None:
@@ -112,7 +112,7 @@ async def test_steering_reaches_the_next_agent_session_only() -> None:
         await answer(handle, gate.gate_id, GateDecision.APPROVE)
         result: RunResult = await handle.result()
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     sessions = fakes.of(AGENT_STEP)
     assert all(STEERING_HEADING not in s.context for s in sessions[:sessions_before])
     fix, *later = sessions[sessions_before:]
@@ -134,7 +134,7 @@ async def test_a_gate_open_for_days_costs_nothing() -> None:
         await handle.result()
         history = await handle.fetch_history()
 
-    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
     assert answered.wait_seconds >= timedelta(days=DAYS).total_seconds()
     assert answered.answered_at - answered.opened_at == timedelta(seconds=answered.wait_seconds)
     assert not [e for e in history.events if e.event_type == EventType.EVENT_TYPE_TIMER_STARTED]  # a wait, no timer

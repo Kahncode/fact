@@ -12,10 +12,12 @@ from fact.core.activity_contract import (
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
-from standard_harness import PR, FakeActivities, agent_sessions, finished, run_standard
+from standard_harness import FakeActivities, agent_sessions, finished, run_standard
+from standard_inputs import PR
 
 MAX_CI_FIX_ATTEMPTS = 2
 COST_COMMENTS = 2  # after the PR opens, and at the end of the run
+MERGED_COST_COMMENTS = 3  # after the PR opens, once CI is green, and once it is merged
 
 
 def _fix_ci_sessions(fakes: FakeActivities) -> list[tuple[str, int, str]]:
@@ -26,7 +28,7 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     fakes = FakeActivities(ci_failures=1)
     result, _ = await run_standard(fakes, "run-ci-fixed")
 
-    assert result.outcome == RunOutcome.PR_OPENED
+    assert result.outcome == RunOutcome.MERGED
     assert _fix_ci_sessions(fakes) == [("fix_ci", 1, "fix_ci")]
     fix = next(s for s in fakes.of(AGENT_STEP) if s.stage_id == "fix_ci")
     assert "### test (windows): failure on acme/widget#7 at abc123" in fix.context
@@ -56,7 +58,7 @@ async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
     assert len(fakes.of(POST_COST_COMMENT)) == COST_COMMENTS
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []
-    (gate,) = fakes.of(RECORD_GATE_OPENED)  # a person was asked first, and rejected
+    (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected
     assert (gate.gate_id, gate.details["loop"]) == ("wait_for_ci-1", "wait_for_ci")
     assert "CI not green" in gate.details["summary"]
 
@@ -65,14 +67,14 @@ async def test_approve_waits_for_ci_and_fixes_once_more() -> None:
     fakes = FakeActivities(ci_failures=MAX_CI_FIX_ATTEMPTS + 1, gate_decisions=[GateDecision.APPROVE])
     result, _ = await run_standard(fakes, "run-ci-gate-approve")
 
-    assert result.outcome == RunOutcome.PR_OPENED
-    (answered,) = fakes.of(RECORD_GATE_ANSWERED)
+    assert result.outcome == RunOutcome.MERGED
+    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
     assert (answered.gate_id, answered.decision) == ("wait_for_ci-1", "approve")
     waits = fakes.of(WAIT_FOR_CI)
     assert len(waits) == MAX_CI_FIX_ATTEMPTS + 2  # the loop again, from the last pushed head
     assert waits[-1].pr.head_sha == f"fix{MAX_CI_FIX_ATTEMPTS}"
     assert result.prs == [PR.model_copy(update={"head_sha": f"fix{MAX_CI_FIX_ATTEMPTS}"})]
-    assert len(fakes.of(POST_COST_COMMENT)) == COST_COMMENTS
+    assert len(fakes.of(POST_COST_COMMENT)) == MERGED_COST_COMMENTS
 
 
 async def test_ci_that_never_finishes_needs_a_human_without_a_fix() -> None:

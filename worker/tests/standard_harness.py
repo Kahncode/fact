@@ -23,6 +23,7 @@ from fact.core.activity_contract import (
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
+    WAIT_FOR_PR_CLOSED,
     AgentStepInput,
     GateAnsweredInput,
     GateOpenedInput,
@@ -30,17 +31,21 @@ from fact.core.activity_contract import (
     NotifyInput,
     OpenChangeSetInput,
     PostCostCommentInput,
+    PRState,
     RunFinishedInput,
     RunStartedInput,
     ShellStepInput,
     WaitForCIInput,
+    WaitForPRClosedInput,
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.settings import REPO_ROOT
-from fact.core.types import PRRef, RepoCheckout, RunInput, RunResult, StepResult, Task, WorkspaceHandle, WorkspaceSpec
+from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
+from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, PR, run_input
 from temporalio import activity
 from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -51,9 +56,6 @@ from temporalio.worker import Worker
 WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
 WORKFLOW_QUEUE = "wf-test"
 IDENTITY = "test-worker"  # a fixed worker identity instead of the host name
-REPO = "acme/widget"
-BRANCH = "fact/task-m1-99"
-PR = PRRef(repo=REPO, number=7, url=f"https://github.com/{REPO}/pull/7", head_sha="abc123")
 
 
 def load_standard() -> ModuleType:
@@ -61,21 +63,6 @@ def load_standard() -> ModuleType:
     if str(WORKFLOWS_DIR) not in sys.path:
         sys.path.insert(0, str(WORKFLOWS_DIR))
     return importlib.import_module("standard")
-
-
-RUN_URL = "http://ui.test/namespaces/default/workflows/run-1"
-MET = {"text": "The widget renders", "met": True, "evidence": "test_widget passes"}
-UNMET = {"text": "The widget is documented", "met": False, "evidence": "README not updated"}
-LOW = {"severity": "low", "file": "widget.py", "line": 3, "message": "name could be clearer"}
-HIGH = {"severity": "high", "file": "widget.py", "line": 9, "message": "crashes on empty input"}
-CLEAN_REVIEW = {"status": "done", "summary": "looks good", "criteria": [MET], "findings": [LOW]}
-LEARNED = {"status": "done", "title": "feat(M1-99): widget, documented", "summary": "Adds the widget and its docs."}
-
-
-def run_input(run_id: str = "run-1") -> RunInput:
-    task = Task(key="task:M1-99", id="M1-99", title="Add a widget", path="tasks/M1/99-widget.md")
-    repo = RepoCheckout(full_name=REPO, default_branch="main", branch=BRANCH)
-    return RunInput(run_id=run_id, project="acme", task=task, repos=[repo], run_url=RUN_URL)
 
 
 @dataclass
@@ -100,6 +87,7 @@ class FakeActivities:
     ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
     fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
+    pr_state: PRState = "merged"  # how `wait_for_pr_closed` says each PR ended
     # How `record_gate_opened` answers each gate, in order, then reject; None: the test answers them itself.
     # Answering inside the activity keeps the time-skipping server busy, so it never skips to the workflow's timeout.
     gate_decisions: list[GateDecision] | None = field(default_factory=list)
@@ -123,6 +111,8 @@ class FakeActivities:
     @activity.defn(name=RECORD_GATE_OPENED)
     async def record_gate_opened(self, spec: GateOpenedInput) -> str:
         self._call(RECORD_GATE_OPENED, spec)
+        if spec.kind == REVIEW_STAGE:  # GitHub answers it, through `wait_for_pr_closed`
+            return f"step-{spec.gate_id}"
         if self.gate_decisions is not None and self.client is not None:
             decision = self.gate_decisions.pop(0) if self.gate_decisions else GateDecision.REJECT
             handle = self.client.get_workflow_handle(activity.info().workflow_id)
@@ -215,8 +205,17 @@ class FakeActivities:
             return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 failed", outputs={"failures": [failure]})
         return StepResult(outcome=StepOutcome.PASSED, summary="CI passed")
 
+    @activity.defn(name=WAIT_FOR_PR_CLOSED)
+    async def wait_for_pr_closed(self, spec: WaitForPRClosedInput) -> list[PRState]:
+        self._call(WAIT_FOR_PR_CLOSED, spec)
+        return [self.pr_state for _ in spec.prs]
+
     def of(self, name: str) -> list:
         return [arg for n, arg in self.calls if n == name]
+
+    def gates(self, name: str) -> list:
+        """Return the calls of a gate activity for gates a person answers, without the review wait."""
+        return [g for g in self.of(name) if g.kind != REVIEW_STAGE]
 
 
 @asynccontextmanager
@@ -230,6 +229,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.open_change_set,
         fakes.post_cost_comment,
         fakes.wait_for_ci,
+        fakes.wait_for_pr_closed,
         fakes.record_gate_opened,
         fakes.record_gate_answered,
         fakes.notify,
