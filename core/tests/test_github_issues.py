@@ -229,17 +229,8 @@ async def test_api_errors_raise() -> None:
         await source.list_ready()
 
 
-async def test_write_back_only_logs(tmp_path: Path) -> None:
-    github = FakeGitHub()
-    source = _source(github)
-    key = "gh:acme/app#1"
-    await source.comment(key, "hi")
-    await source.set_labels(key, ["fact:running"], [])
-    await source.write_context(key, "ctx")
-    await source.link_prs(key, [])
-    await source.close(key)
-    assert source.mark_done(tmp_path, key) is None
-    assert github.requests == []
+def test_mark_done_leaves_the_branch_alone(tmp_path: Path) -> None:
+    assert _source(FakeGitHub()).mark_done(tmp_path, "gh:acme/app#1") is None  # the issue closes on merge instead
 
 
 def test_rejects_a_bad_repo() -> None:

@@ -2,8 +2,8 @@
 The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait for CI and fix it, wait for a merge.
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
-`next_attempt`, `note_outcome`, `agent`, `_control`, `_record`, the gate recording helpers of `HumanSteps`, and the
-`pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
+`next_attempt`, `note_outcome`, `agent`, `report_task`, `_control`, `_record`, the gate recording helpers of
+`HumanSteps`, and the `pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
 """
 
 from collections.abc import Sequence
@@ -66,10 +66,12 @@ class PullRequestSteps:
     async def open_change_set(
         self: FactWorkflow, title: str, summary: str, criteria: Sequence[CriterionResult] = ()
     ) -> list[PRRef]:
-        """Push and open the PR; `criteria`, from a review, replace the task's plain list in its description."""
+        """Push and open the PR, and post its link on the task; `criteria`, from a review, replace the task's list."""
         spec = change_set_input(self.input, self.handle, title, summary, self.check_results, criteria=list(criteria))
         self._change_set = spec
-        return await self.push_change_set()
+        prs = await self.push_change_set()
+        await self.report_task("prs_opened", prs=prs)
+        return prs
 
     async def push_change_set(self: FactWorkflow) -> list[PRRef]:
         """Push the branch again and update its PR, as the next attempt of stage `open_pr`; sets `prs`."""

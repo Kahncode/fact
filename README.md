@@ -101,7 +101,7 @@ uv run fact github check <owner/repo>
 
 It prints the App, the installation and the token expiry (never the token), or a readable error. With the App configured, the worker commits as `fact[bot]`, pushes each run's branch and opens its PR as the App; without it, commits use `commit_author_name`/`commit_author_email` and opening a PR fails (see `worker/README.md`).
 
-To set up a task repository, `uv run fact github labels sync <owner/repo>` creates the labels fact uses (`fact:*`, `type:*`, `complexity:*`) and fixes the colour and description of existing ones. It prints what changed and never deletes a label. fact picks up open issues labelled `fact:ready`; their `type:*` and `complexity:*` labels, an "Acceptance criteria" checklist and blocked-by links or `Depends on #n` lines become the task (see `docs/spec/12-integrations.md`). fact does not yet comment on, label or close issues (M2-11).
+To set up a task repository, `uv run fact github labels sync <owner/repo>` creates the labels fact uses (`fact:*`, `type:*`, `complexity:*`) and fixes the colour and description of existing ones. It prints what changed and never deletes a label. fact picks up open issues labelled `fact:ready`; their `type:*` and `complexity:*` labels, an "Acceptance criteria" checklist and blocked-by links or `Depends on #n` lines become the task (see `docs/spec/12-integrations.md`). While a run works on an issue, fact labels it `fact:running` (and `fact:needs-human` while a gate waits for you), comments with the run and PR links, and closes the issue once the PR merges. A run that fails or stops needing you does not update the issue yet.
 
 ## The API
 

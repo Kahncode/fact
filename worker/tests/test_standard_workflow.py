@@ -15,6 +15,7 @@ from fact.core.activity_contract import (
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
+    REPORT_STATUS,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
@@ -48,6 +49,7 @@ async def test_green_path() -> None:
     assert result.prs == [PR]
     assert [n for n, _ in fakes.calls] == [
         RECORD_RUN_STARTED,
+        REPORT_STATUS,  # run_started
         PREPARE_WORKSPACE,
         SHELL_STEP,
         AGENT_STEP,
@@ -57,6 +59,7 @@ async def test_green_path() -> None:
         AGENT_STEP,
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
+        REPORT_STATUS,  # prs_opened
         POST_COST_COMMENT,
         WAIT_FOR_CI,
         POST_COST_COMMENT,
@@ -66,9 +69,16 @@ async def test_green_path() -> None:
         RECORD_GATE_ANSWERED,
         POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
+        REPORT_STATUS,  # merged: the issue closes
         TEARDOWN_WORKSPACE,
         NOTIFY,  # merged
     ]
+    assert [(r.task_key, r.event) for r in fakes.of(REPORT_STATUS)] == [
+        ("task:M1-99", "run_started"),
+        ("task:M1-99", "prs_opened"),
+        ("task:M1-99", "merged"),
+    ]
+    assert fakes.of(REPORT_STATUS)[1].prs == [PR]
     assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
         ("setup", 1, "setup"),

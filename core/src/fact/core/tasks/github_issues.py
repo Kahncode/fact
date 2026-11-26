@@ -1,7 +1,7 @@
 """
 GitHub Issues task source: open issues labelled `fact:ready` in one repository are tasks (`gh:owner/repo#12`).
 
-Reading only (M2-09): the write-back methods log, like the file source's, until M2-11 writes to issues.
+Write-backs (labels, comments, the context section between markers in the body, closing) are in `github_writes`.
 
 - Type and complexity come from the `type:*` and `complexity:*` labels; acceptance criteria from the checklist under
   an "Acceptance criteria" heading.
@@ -20,7 +20,8 @@ from fact.core.github.app import GitHubApp, split_full_name
 from fact.core.github.client import GitHubNotFoundError
 from fact.core.logging import get_logger
 from fact.core.tasks.base import GITHUB_PREFIX, ReadyItem, dependency_key, parse_key
-from fact.core.types import Complexity, PRRef, Task, TaskType
+from fact.core.tasks.github_writes import GitHubIssueWrites
+from fact.core.types import Complexity, Task, TaskType
 
 log = get_logger(__name__)
 
@@ -103,9 +104,9 @@ def _unique(keys: list[str]) -> list[str]:
     return out
 
 
-class GitHubIssuesSource:
+class GitHubIssuesSource(GitHubIssueWrites):
     """
-    Issues of `repo` ("owner/repo") read with the App's installation token. Implements `TaskSource`.
+    Issues of `repo` ("owner/repo") read and written with the App's installation token. Implements `TaskSource`.
 
     Issue states fetched by one instance are reused by it: keep an instance for one read (one request or one tick).
     """
@@ -215,19 +216,3 @@ class GitHubIssuesSource:
         """None: an issue is closed when its change set merges, not by a commit."""
         del worktree, key
         return None
-
-    async def comment(self, key: str, text: str) -> None:
-        log.info("task_write_back_skipped", source="github", action="comment", task_key=key, chars=len(text))
-
-    async def set_labels(self, key: str, add: list[str], remove: list[str]) -> None:
-        log.info("task_write_back_skipped", source="github", action="set_labels", task_key=key, add=add, remove=remove)
-
-    async def write_context(self, key: str, section: str) -> None:
-        log.info("task_write_back_skipped", source="github", action="write_context", task_key=key, chars=len(section))
-
-    async def link_prs(self, key: str, prs: list[PRRef]) -> None:
-        urls = [pr.url for pr in prs]
-        log.info("task_write_back_skipped", source="github", action="link_prs", task_key=key, prs=urls)
-
-    async def close(self, key: str) -> None:
-        log.info("task_write_back_skipped", source="github", action="close", task_key=key)

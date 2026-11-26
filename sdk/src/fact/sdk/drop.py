@@ -2,11 +2,12 @@
 Dropping a run, as a mixin of `FactWorkflow`: a person cancels the workflow (`fact drop`) to restart its task.
 
 The run ends `dropped`: it writes a handoff note to the artifact store (the last stage reached, each agent step's
-summary, the PR links), tears its workspace down so the task branch is free, and records the outcome last, so a run
-shown `dropped` already has its note. The remote branch and the PRs stay: the next run of the task starts from that
-branch, reuses the open PRs and gets the note as `$handoff` in its prompts.
+summary, the PR links), tears its workspace down so the task branch is free, tells the task's source, and records the
+outcome last, so a run shown `dropped` already has its note. The remote branch and the PRs stay: the next run of the
+task starts from that branch, reuses the open PRs and gets the note as `$handoff` in its prompts.
 
-`DropSteps` uses the workflow's `input`, `prs`, `_stage`, `_stage_attempt`, `_control`, `_record` and `_teardown`.
+`DropSteps` uses the workflow's `input`, `prs`, `_stage`, `_stage_attempt`, `_control`, `_record`, `_teardown` and
+`report_task`.
 """
 
 import asyncio
@@ -74,6 +75,7 @@ class DropSteps:
         except ActivityError as exc:
             workflow.logger.warning("handoff note failed for run %s: %s", run_id, exc.cause or exc)
         await self._teardown()
+        await self.report_task("dropped", detail=reason)
         await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_id, outcome=RunOutcome.DROPPED))
         summary = f"dropped: {reason}" if reason else "dropped"
         return RunResult(outcome=RunOutcome.DROPPED, prs=self.prs, summary=limit_text(summary, SUMMARY_MAX_BYTES))

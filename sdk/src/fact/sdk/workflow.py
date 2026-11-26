@@ -19,7 +19,6 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
         AGENT_STEP,
         CONTROL_QUEUE,
-        MARK_TASK_DONE,
         PREPARE_WORKSPACE,
         RECORD_RUN_FINISHED,
         RECORD_RUN_STARTED,
@@ -29,7 +28,6 @@ with workflow.unsafe.imports_passed_through():
         AgentStepInput,
         Check,
         CheckResult,
-        MarkTaskDoneInput,
         OpenChangeSetInput,
         PostCostCommentInput,
         RunFinishedInput,
@@ -45,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
     from fact.sdk.stages import Stage, stages
+    from fact.sdk.task_status import TaskStatusSteps
 
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
@@ -53,8 +52,8 @@ WAIT_CANCELLED = workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps):
-    """Base class for project workflows: bookkeeping and step helpers; PRs and CI, gates, dropping in the mixins."""
+class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
+    """Base class for project workflows: bookkeeping and step helpers; PRs, gates, dropping, the task in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -104,6 +103,7 @@ class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps):
         started = RunStartedInput(run_id=run_input.run_id, worker_version=version.build_id if version else None)
         try:
             await self._record(RECORD_RUN_STARTED, started)
+            await self.report_task("run_started")
             result = await body()
         except (FailureError, asyncio.CancelledError) as exc:  # a cancelled activity may raise either
             if self.drop_requested():
@@ -117,6 +117,7 @@ class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps):
             return await self.drop()  # dropped as it ended: free the branch for the restart
         self._dropping = True  # the work is over (pushed): a late drop must not stop its bookkeeping
         await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=result.outcome))
+        await self.report_run_end(result)
         if result.outcome in PUSHED_OUTCOMES:
             await self._teardown()
         return result
@@ -230,11 +231,6 @@ class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps):
             if fixed.outcome != StepOutcome.PASSED:
                 break  # an errored or over-budget session: another round would only spend more
         return StepOutcome.FAILED_CHECKS
-
-    async def mark_task_done(self) -> bool:
-        run = self.input
-        spec = MarkTaskDoneInput(run_id=run.run_id, task=run.task, handle=self.handle, home_repo=run.home_repo)
-        return await self._control(MARK_TASK_DONE, spec, bool)
 
     async def _run_checks(self, checks: Sequence[Check], stage_id: str) -> list[tuple[CheckResult, StepResult]]:
         results: list[tuple[CheckResult, StepResult]] = []

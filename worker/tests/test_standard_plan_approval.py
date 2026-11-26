@@ -6,6 +6,7 @@ from fact.core.activity_contract import (
     PREPARE_WORKSPACE,
     RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
+    REPORT_STATUS,
     TEARDOWN_WORKSPACE,
 )
 from fact.core.enums import RunOutcome, StepOutcome
@@ -74,3 +75,14 @@ async def test_reject_drops_the_run_with_the_note() -> None:
     assert fakes.of(PREPARE_WORKSPACE) == []
     assert fakes.of(AGENT_STEP) == []
     assert fakes.of(TEARDOWN_WORKSPACE) == []
+
+
+async def test_the_task_hears_of_the_gate_and_the_rejection() -> None:
+    fakes = FakeActivities(gate_decisions=[GateDecision.REJECT])
+    await run_standard(fakes, "run-plan-report", _gated_input())
+
+    reports = fakes.of(REPORT_STATUS)
+    assert [r.event for r in reports] == ["run_started", "gate_opened", "gate_answered", "dropped"]
+    assert "Approve the plan for task:M1-99" in reports[1].detail
+    assert "fact gate run-1 approve|reject" in reports[1].detail
+    assert reports[3].detail == "plan rejected"

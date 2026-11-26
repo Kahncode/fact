@@ -7,6 +7,7 @@ from fact.core.activity_contract import (
     RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
+    REPORT_STATUS,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_PR_CLOSED,
     GateAnsweredInput,
@@ -67,6 +68,7 @@ async def test_prs_ready_and_cost_come_before_the_wait_and_the_end_after() -> No
         RECORD_GATE_ANSWERED,
         POST_COST_COMMENT,  # last, with the review wait
         RECORD_RUN_FINISHED,
+        REPORT_STATUS,
         TEARDOWN_WORKSPACE,
         NOTIFY,
     ]
@@ -86,3 +88,12 @@ async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
     assert "wait_for_pr_closed is broken" in answered.note
     assert finished(fakes) == RunOutcome.FAILED
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # the workspace stays for a person
+
+
+async def test_a_tracker_outage_does_not_fail_the_run() -> None:
+    fakes = FakeActivities(broken=REPORT_STATUS)
+    result, _ = await run_standard(fakes, "run-tracker-down")
+
+    assert result.outcome == RunOutcome.MERGED
+    assert finished(fakes) == RunOutcome.MERGED
+    assert [r.event for r in fakes.of(REPORT_STATUS)] == ["run_started", "prs_opened", "merged"]  # each tried once

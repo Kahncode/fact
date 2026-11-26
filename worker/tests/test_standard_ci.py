@@ -42,7 +42,8 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     assert [(w.attempt, w.pr.head_sha) for w in waits] == [(1, PR.head_sha), (2, "fix1")]  # CI on the new head
     assert result.prs == [PR.model_copy(update={"head_sha": "fix1"})]
     assert fakes.of(POST_COST_COMMENT)[-1].prs == result.prs
-    assert [n for n, _ in fakes.calls][-4:] == [POST_COST_COMMENT, "record_run_finished", TEARDOWN_WORKSPACE, NOTIFY]
+    tail = [n for n, _ in fakes.calls][-5:]
+    assert tail == [POST_COST_COMMENT, "record_run_finished", "report_status", TEARDOWN_WORKSPACE, NOTIFY]
 
 
 async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:

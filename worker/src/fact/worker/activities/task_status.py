@@ -8,7 +8,7 @@ bookkeeping: a project without a checkout, or whose source cannot be written yet
 import asyncio
 
 from fact.core.activity_contract import REPORT_STATUS, ReportStatusInput
-from fact.core.github import GitHubAppConfigError
+from fact.core.github import GitHubAppConfigError, GitHubError
 from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, load_project_config
 from fact.core.settings import Settings, get_settings, project_path
@@ -18,6 +18,12 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 log = get_logger(__name__)
+
+
+def _permanent(exc: GitHubError) -> bool:
+    """Tell whether a retry would fail the same way: a 4xx other than 429 (a 403 rate limit is not retried either)."""
+    code = exc.status_code or 0
+    return 400 <= code < 500 and code != 429  # noqa: PLR2004 - HTTP status classes
 
 
 class TaskStatusActivities:
@@ -47,5 +53,10 @@ class TaskStatusActivities:
             if source is None:
                 log.info("report_status_skipped", project=spec.project, task_key=spec.task_key, task_event=spec.event)
                 return
-            await report(source, spec)
+            try:
+                await report(source, spec)
+            except GitHubError as exc:
+                if _permanent(exc):  # no access, no such issue, refused: retrying only delays the run
+                    raise ApplicationError(str(exc), non_retryable=True) from exc
+                raise
             log.info("task_status_reported", task_key=spec.task_key, task_event=spec.event)

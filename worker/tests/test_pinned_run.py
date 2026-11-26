@@ -5,7 +5,14 @@ import uuid
 from pathlib import Path
 
 import pytest
-from fact.core.activity_contract import RECORD_RUN_FINISHED, RECORD_RUN_STARTED, RunFinishedInput, RunStartedInput
+from fact.core.activity_contract import (
+    RECORD_RUN_FINISHED,
+    RECORD_RUN_STARTED,
+    REPORT_STATUS,
+    ReportStatusInput,
+    RunFinishedInput,
+    RunStartedInput,
+)
 from fact.core.enums import RunOutcome
 from fact.core.types import RunInput, RunResult, Task
 from fact.worker.deployments import deployment_config, set_current_version
@@ -56,12 +63,16 @@ async def test_run_is_pinned_and_records_its_version(tmp_path: Path) -> None:
     async def record_finished(spec: RunFinishedInput) -> None:
         pass
 
+    @activity.defn(name=REPORT_STATUS)
+    async def report_status(spec: ReportStatusInput) -> None:
+        pass
+
     env_cm = await WorkflowEnvironment.start_local(
         data_converter=pydantic_data_converter, dev_server_existing_path=TEMPORAL
     )
     async with (
         env_cm as env,
-        Worker(env.client, task_queue=CONTROL_QUEUE, activities=[record_started, record_finished]),
+        Worker(env.client, task_queue=CONTROL_QUEUE, activities=[record_started, record_finished, report_status]),
         Worker(
             env.client,
             task_queue=loaded.task_queue,

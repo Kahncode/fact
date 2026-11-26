@@ -15,6 +15,7 @@ from fact.sdk.workflow import FactWorkflow
 from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.notify import NotifyActivities
+from fact.worker.activities.task_status import TaskStatusActivities
 from fastapi import FastAPI
 from temporalio import workflow
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -85,6 +86,7 @@ async def test_a_run_waiting_at_a_gate_shows_up_once_in_the_inbox(api: FastAPI) 
             gates.record_gate_opened,
             gates.record_gate_answered,
             notify.notify,
+            TaskStatusActivities(Settings()).report_status,  # no project checkout: skipped
         ]
         body = {"workflow_id": WF_ID, "project": "acme", "task_key": "task:M9-02", "workflow_type": "gated"}
         run_id = (await client.post("/api/v1/runs", json=body)).json()["id"]

@@ -3,10 +3,11 @@ The person in the loop as a mixin of `FactWorkflow`: gates (an update), status (
 
 A gate waits on workflow state only, with no timer and no activity, so it costs nothing however long it stays open
 and survives worker restarts. Its step (kind `gate`) is recorded through control activities, best effort: an API
-outage must not lose a person's answer. Opening a gate also creates a `gate_waiting` notification, once per gate.
+outage must not lose a person's answer. Opening a gate also creates a `gate_waiting` notification, once per gate, and
+reports `gate_opened` to the task's source (`fact:needs-human`); answering it reports `gate_answered`.
 
-`HumanSteps` uses the workflow's `input`, `next_attempt` and `_control`; `FactWorkflow` calls its `__init__`, which
-calls the next mixin's.
+`HumanSteps` uses the workflow's `input`, `next_attempt`, `_control` and `report_task`; `FactWorkflow` calls its
+`__init__`, which calls the next mixin's.
 """
 
 from collections.abc import Sequence
@@ -78,11 +79,13 @@ class HumanSteps:
         workflow.logger.info("gate %s (%s) is open", gate_id, kind)
         step_id = await self._record_gate(RECORD_GATE_OPENED, self._opened_input(gate), str)
         await self._notify_gate(gate)
+        await self.report_task("gate_opened", detail=self._gate_need(gate))
         await workflow.wait_condition(lambda: gate_id in self._answers)
         answer = self._answers[gate_id]
         outcome = StepOutcome.PASSED if answer.decision == GateDecision.APPROVE else StepOutcome.NEEDS_HUMAN
         self.note_outcome(gate.stage_id, gate.attempt, outcome)
         await self._record_gate(RECORD_GATE_ANSWERED, self._answered_input(gate, answer, step_id, outcome), type(None))
+        await self.report_task("gate_answered")
         return answer
 
     async def notify(
@@ -129,6 +132,11 @@ class HumanSteps:
         title = f"{self.input.task.key}: {len(prs) or 'no'} PR(s) ready for review"
         link = prs[0].url if prs else None
         await self.notify(NotificationKind.PRS_READY, title, body or ", ".join(pr.url for pr in prs), link)
+
+    def _gate_need(self: FactWorkflow, gate: OpenGate) -> str:
+        """Say what the gate needs, for the task's comment: its summary, and how to answer."""
+        need = str(gate.details.get("summary", "")) or f"gate {gate.gate_id} ({gate.kind})"
+        return f"{need} (answer with `fact gate {self.input.run_id} approve|reject`)"
 
     async def _notify_gate(self: FactWorkflow, gate: OpenGate) -> None:
         summary = str(gate.details.get("summary", ""))

@@ -5,11 +5,12 @@ from typing import Any
 
 import pytest
 from fact.core.activity_contract import ReportStatusInput, TaskEvent
-from fact.core.github import GitHubApp
+from fact.core.github import GitHubApp, GitHubError
 from fact.core.github import app as github_app
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks.events import NEEDS_HUMAN, RUNNING, report
 from fact.core.types import PRRef
+from fact.worker.activities import task_status
 from fact.worker.activities.task_status import TaskStatusActivities
 from structlog.testing import capture_logs
 from temporalio.exceptions import ApplicationError
@@ -112,7 +113,7 @@ async def test_activity_dispatches_to_the_github_source(tmp_path: Path, monkeypa
     with capture_logs() as logs:
         await TaskStatusActivities(_project_settings(tmp_path, "github")).report_status(_spec("run_started"))
     skipped = [(e.get("source"), e.get("action")) for e in logs if e["event"] == "task_write_back_skipped"]
-    assert skipped == [("github", "set_labels"), ("github", "comment")]  # log-only until M2-11
+    assert skipped == [("github", "set_labels"), ("github", "comment")]  # a file task's key: nothing to write
 
 
 async def test_activity_skips_github_without_an_app(tmp_path: Path) -> None:
@@ -134,3 +135,19 @@ async def test_activity_refuses_a_broken_project_config(tmp_path: Path) -> None:
     with pytest.raises(ApplicationError) as err:
         await TaskStatusActivities(settings).report_status(_spec("run_started"))
     assert err.value.non_retryable
+
+
+@pytest.mark.parametrize("status", [404, 403, 422, 429, 502])
+async def test_activity_does_not_retry_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+    permanent = status in {403, 404, 422}
+
+    async def refused(*_: object) -> None:
+        msg = "GitHub said no"
+        raise GitHubError(msg, status)
+
+    monkeypatch.setattr(task_status, "report", refused)
+    with pytest.raises((ApplicationError, GitHubError)) as err:
+        await TaskStatusActivities(_project(tmp_path)).report_status(_spec("run_started"))
+    assert isinstance(err.value, ApplicationError) == permanent
+    if permanent:
+        assert err.value.non_retryable  # type: ignore[union-attr]

@@ -21,6 +21,7 @@ from fact.core.activity_contract import (
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
+    REPORT_STATUS,
     SANDBOX_QUEUE,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
@@ -36,13 +37,14 @@ from fact.core.activity_contract import (
     OpenChangeSetInput,
     PostCostCommentInput,
     PRState,
+    ReportStatusInput,
     RunFinishedInput,
     RunStartedInput,
     ShellStepInput,
     WaitForCIInput,
     WaitForPRClosedInput,
 )
-from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.settings import REPO_ROOT
 from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
@@ -50,6 +52,7 @@ from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
 from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, PR, run_input
+from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporalio import activity
 from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -133,6 +136,10 @@ class FakeActivities:
     async def notify(self, spec: NotifyInput) -> int:
         self._call(NOTIFY, spec)
         return len(self.of(NOTIFY))
+
+    @activity.defn(name=REPORT_STATUS)
+    async def report_status(self, spec: ReportStatusInput) -> None:
+        self._call(REPORT_STATUS, spec)
 
     @activity.defn(name=WRITE_HANDOFF)
     async def write_handoff(self, spec: HandoffInput) -> str:
@@ -243,6 +250,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.record_gate_answered,
         fakes.notify,
         fakes.write_handoff,
+        fakes.report_status,
     ]
     async with AsyncExitStack() as stack:
         workflows = Worker(
@@ -282,16 +290,3 @@ async def run_standard(
         result = await handle.result()
         history = await handle.fetch_history()
     return result, history
-
-
-def agent_sessions(fakes: FakeActivities) -> list[tuple[str, int, str]]:
-    return [(s.stage_id, s.attempt, s.prompt_name) for s in fakes.of(AGENT_STEP)]
-
-
-def finished(fakes: FakeActivities) -> RunOutcome:
-    (finished,) = fakes.of(RECORD_RUN_FINISHED)
-    return finished.outcome
-
-
-def checks(fakes: FakeActivities) -> list[ShellStepInput]:
-    return [s for s in fakes.of(SHELL_STEP) if s.stage_id == "checks"]

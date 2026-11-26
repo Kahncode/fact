@@ -6,6 +6,7 @@ from fact.core.activity_contract import (
     AGENT_STEP,
     OPEN_CHANGE_SET,
     RECORD_RUN_FINISHED,
+    REPORT_STATUS,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_PR_CLOSED,
     WRITE_HANDOFF,
@@ -92,6 +93,9 @@ async def test_drop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
     assert fakes.of(OPEN_CHANGE_SET) == []
     (notified,) = [n for n in fakes.of("notify") if n.kind != NotificationKind.GATE_WAITING]
     assert (notified.kind, notified.title) == (NotificationKind.RUN_FINISHED, "task:M1-99 ended dropped")
+    reports = [(r.event, r.detail) for r in fakes.of(REPORT_STATUS)]
+    assert reports[-1] == ("dropped", "restart on the new prompts")  # labels cleared, said why
+    assert [e for e, _ in reports].count("gate_opened") == 1  # the gate was never answered
 
 
 async def test_drop_in_review_keeps_the_pr_for_the_next_run() -> None:
