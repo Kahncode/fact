@@ -1,10 +1,11 @@
 """When an agent session is resumed: `interrupted_session` and `retry_reason`."""
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from fact.core.activity_contract import AGENT_INTERRUPTED
-from fact.sdk.sessions import interrupted_session, retry_reason
+from fact.sdk.sessions import LIMIT_FALLBACK, interrupted_session, limit_resume_at, limit_session, retry_reason
 from fact.sdk.types import StepOutcome, StepResult
 from temporalio.exceptions import (
     ActivityError,
@@ -68,3 +69,27 @@ def test_interrupted_session(cause: BaseException, expected: str | None) -> None
 )
 def test_retry_reason(result: StepResult, expected: str | None) -> None:
     assert retry_reason(result) == expected
+
+
+NOW = datetime(2030, 1, 2, 12, 0, tzinfo=UTC)
+
+
+def _limited(**outputs: Any) -> StepResult:  # noqa: ANN401
+    return StepResult(outcome=StepOutcome.RATE_LIMITED, outputs=outputs, session_id="s-step")
+
+
+def test_limit_resume_at_reads_the_output() -> None:
+    at = datetime(2030, 1, 5, 9, 30, tzinfo=UTC)
+    assert limit_resume_at(_limited(resume_at=at.isoformat()), NOW) == at
+    assert limit_resume_at(_limited(resume_at="2030-01-05T09:30:00"), NOW) == at  # no offset: UTC
+
+
+@pytest.mark.parametrize("outputs", [{}, {"resume_at": "soon"}, {"resume_at": None}])
+def test_limit_resume_at_falls_back_to_now_plus_30_minutes(outputs: dict[str, Any]) -> None:
+    assert limit_resume_at(_limited(**outputs), NOW) == NOW + LIMIT_FALLBACK
+
+
+def test_limit_session_prefers_the_output_then_the_step() -> None:
+    assert limit_session(_limited(session_id="s-out")) == "s-out"
+    assert limit_session(_limited()) == "s-step"
+    assert limit_session(StepResult(outcome=StepOutcome.RATE_LIMITED)) is None

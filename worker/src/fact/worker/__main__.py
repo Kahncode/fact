@@ -122,6 +122,7 @@ def _activity_workers(
             pr_state.wait_for_pr_closed,
             control_steps.mark_task_done,
             control_steps.record_run_started,
+            control_steps.record_run_waiting,
             control_steps.record_run_finished,
             task_status.report_status,
             gates.record_gate_opened,

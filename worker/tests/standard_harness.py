@@ -21,6 +21,7 @@ from fact.core.activity_contract import (
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
+    RECORD_RUN_WAITING,
     REPORT_STATUS,
     SANDBOX_QUEUE,
     SHELL_STEP,
@@ -40,6 +41,7 @@ from fact.core.activity_contract import (
     ReportStatusInput,
     RunFinishedInput,
     RunStartedInput,
+    RunWaitingInput,
     ShellStepInput,
     WaitForCIInput,
     WaitForPRClosedInput,
@@ -116,6 +118,10 @@ class FakeActivities:
     @activity.defn(name=RECORD_RUN_FINISHED)
     async def record_run_finished(self, spec: RunFinishedInput) -> None:
         self._call(RECORD_RUN_FINISHED, spec)
+
+    @activity.defn(name=RECORD_RUN_WAITING)
+    async def record_run_waiting(self, spec: RunWaitingInput) -> None:
+        self._call(RECORD_RUN_WAITING, spec)
 
     @activity.defn(name=RECORD_GATE_OPENED)
     async def record_gate_opened(self, spec: GateOpenedInput) -> str:
@@ -239,6 +245,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
     control = [
         fakes.record_run_started,
         fakes.record_run_finished,
+        fakes.record_run_waiting,
         fakes.prepare_workspace,
         fakes.teardown_workspace,
         fakes.mark_task_done,

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from fact.core.claude_usage import LIMIT_TEXT_RE, ClaudeUsage, parse_rate_limit_info
 from fact.core.types import Usage
 from fact.worker.harnesses.base import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
 from fact.worker.runners.process import build_env, kill_tree, spawn
@@ -23,19 +24,35 @@ _ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"}
 
 
 class _Collector:
-    """Keeps what the result needs from the message stream: the session id and the last `result` message."""
+    """
+    Keeps what the result needs from the message stream.
+
+    That is the session id, the last `result` message and the usage windows of every `rate_limit_event` (one with
+    `status: rejected` means the usage limit refused the run).
+    """
 
     def __init__(self) -> None:
         self.session_id: str | None = None
         self.result: dict[str, Any] | None = None
+        self.windows = ClaudeUsage()
+        self.rejected = False
 
     def add(self, message: dict[str, Any]) -> None:
         if isinstance(sid := message.get("session_id"), str):
             self.session_id = sid
         if message.get("type") == "result":
             self.result = message
+        elif message.get("type") == "rate_limit_event" and isinstance(info := message.get("rate_limit_info"), dict):
+            self.windows = self.windows.merge(parse_rate_limit_info(info))
+            self.rejected = self.rejected or info.get("status") == "rejected"
 
     def build(self, exit_code: int, stderr: str = "") -> HarnessResult:
+        result = self._build(exit_code, stderr)
+        # only a run that failed was cut short: Claude Code may go on after a rejected event (extra usage)
+        limited = result.is_error and (self.rejected or bool(LIMIT_TEXT_RE.search(result.final_message)))
+        return result.model_copy(update={"usage_windows": self.windows, "rate_limited": limited})
+
+    def _build(self, exit_code: int, stderr: str) -> HarnessResult:
         r = self.result
         if r is None:
             return HarnessResult(

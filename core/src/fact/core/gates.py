@@ -53,4 +53,5 @@ class WorkflowStatus(_Model):
     stage: str | None = None  # the stage of the latest step, running or done; None before the first
     attempt: int | None = None
     gate: OpenGate | None = None  # the gate waiting for an answer, if any
+    waiting: str | None = None  # why the run waits without a gate, such as `usage limit until <time>`
     outcomes: list[StageOutcome] = Field(default_factory=list)  # every step that ended, in order

@@ -135,7 +135,8 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     typer.echo(f"Duration: {_duration(r['started_at'], r['ended_at'])}  machine: {r['machine_seconds']:.0f}s")
     typer.echo(f"Cost:     {_cost(r['cost_usd'])}  tokens in/out: {r['tokens_in']}/{r['tokens_out']}")
     if r["status"] != RunStatus.FINISHED:
-        typer.echo(f"Gate:     {_gate_line(r['id'])}")
+        for line in _live_lines(r["id"]):
+            typer.echo(line)
     if not r["steps"]:
         typer.echo("\nNo steps yet.")
         return
@@ -161,17 +162,25 @@ def _live(run_id: str) -> dict[str, Any]:
     return call_api("GET", f"{API}/runs/{quote(run_id, safe='')}/status")
 
 
-def _gate_line(run_id: str) -> str:
-    """Describe the open gate from the workflow's status query; a failed query is shown, not fatal."""
+def _live_lines(run_id: str) -> list[str]:
+    """
+    Describe the open gate, and why the run waits without one, from the workflow's status query.
+
+    A failed query is shown, not fatal.
+    """
     try:
-        gate = _live(run_id)["gate"]
+        live = _live(run_id)
     except httpx.HTTPStatusError as e:
-        return f"unknown ({_detail(e)})"
+        return [f"Gate:     unknown ({_detail(e)})"]
+    gate = live["gate"]
     if gate is None:
-        return "none open"
-    return (
-        f"{gate['gate_id']} ({gate['kind']}, {gate['stage_id']} #{gate['attempt']}) open since {gate['opened_at'][:19]}"
-    )
+        lines = ["Gate:     none open"]
+    else:
+        where = f"{gate['kind']}, {gate['stage_id']} #{gate['attempt']}"
+        lines = [f"Gate:     {gate['gate_id']} ({where}) open since {gate['opened_at'][:19]}"]
+    if waiting := live.get("waiting"):
+        lines.append(f"Waiting:  {waiting}")
+    return lines
 
 
 def gate(

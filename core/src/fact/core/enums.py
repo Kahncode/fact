@@ -43,6 +43,7 @@ class StepOutcome(StrEnum):
     OVER_BUDGET = "over_budget"
     STOPPED_BY_MONITOR = "stopped_by_monitor"
     DROPPED = "dropped"
+    RATE_LIMITED = "rate_limited"  # the agent hit the subscription usage limit; the workflow waits and resumes it
 
 
 class NotificationKind(StrEnum):

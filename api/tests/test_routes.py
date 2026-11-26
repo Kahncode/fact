@@ -66,6 +66,12 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
         "test_notifications.test_unread_filter_newest_first_and_mark_read",
         "test_notifications.test_notification_errors",
     ],
+    ("/api/v1/usage/{account}", "PUT"): [
+        "test_usage.test_report_then_list",
+        "test_usage.test_newer_report_wins_and_unmentioned_windows_stay",
+        "test_usage.test_bad_reports_are_refused",
+    ],
+    ("/api/v1/usage", "GET"): ["test_usage.test_report_then_list"],
 }
 
 

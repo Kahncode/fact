@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 from fact.core.artifacts import step_key
+from fact.core.claude_usage import ClaudeUsage
 from fact.core.enums import StepKind, StepOutcome, StepStatus
 from fact.core.logging import bind_run, get_logger
 from fact.core.types import SUMMARY_MAX_BYTES, StepResult, Usage, limit_text
@@ -224,6 +225,11 @@ class StepReporter:
 
     async def post_events(self, run_id: str, events: list[dict[str, Any]]) -> bool:
         return await self._send("post events", "POST", f"/runs/{run_id}/events", json=events) is not None
+
+    async def report_usage(self, account: str, usage: ClaudeUsage) -> bool:
+        """Record the subscription usage windows a run saw (`PUT /usage/<account>`); False if the API refused."""
+        windows = [w.model_dump(mode="json") for w in usage.windows]
+        return await self._send("report usage", "PUT", f"/usage/{account}", json={"windows": windows}) is not None
 
     async def download_text(self, key: str) -> str | None:
         """Read a UTF-8 artifact; None (after one retry) if the API refused or was unreachable."""

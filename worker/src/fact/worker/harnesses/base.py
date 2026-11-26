@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
+from fact.core.claude_usage import ClaudeUsage
 from fact.core.types import Usage
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -47,6 +48,8 @@ class HarnessResult(_Model):
     usage: Usage = Field(default_factory=Usage)
     structured_output: dict[str, Any] | None = None  # the final answer matching `output_schema`, when one was asked
     permission_denials: list[PermissionDenial] = Field(default_factory=list)
+    usage_windows: ClaudeUsage = Field(default_factory=ClaudeUsage)  # subscription windows the run reported
+    rate_limited: bool = False  # the subscription's usage limit refused the run: wait for the reset, then resume
 
 
 class Harness(Protocol):

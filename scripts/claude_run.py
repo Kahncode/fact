@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from claude_log import format_line
-from fact.core.claude_usage import ClaudeUsage, parse_rate_limit_info
+from fact.core.claude_usage import LIMIT_TEXT_RE, ClaudeUsage, parse_rate_limit_info
 
-LIMIT_TEXT_RE = re.compile(r"usage limit|rate limit|limit reached|hit your limit", re.IGNORECASE)
 BLOCKED_RE = re.compile(r"^\W*BLOCKED:[\s*_]*(.+)$", re.MULTILINE)
 ROOT = Path(__file__).resolve().parents[1]
 UNATTENDED_PROMPT = (

@@ -17,6 +17,7 @@ can start a durable timer) until exactly then.
 import http.client
 import json
 import os
+import re
 import time
 import urllib.request
 from datetime import UTC, datetime, timedelta
@@ -29,6 +30,9 @@ USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 OAUTH_BETA = "oauth-2025-04-20"
 OAUTH_WINDOWS = ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet")
 MILLIS_THRESHOLD = 1e11  # an epoch above this (year 5138 in seconds) is in milliseconds
+# an error result whose text matches this hit a usage or rate limit (also an API 429): wait, then resume
+LIMIT_TEXT_RE = re.compile(r"usage limit|rate limit|limit reached|hit your limit", re.IGNORECASE)
+LIMIT_FALLBACK = timedelta(minutes=30)  # how long to wait for a limit whose reset is unknown or already past
 
 
 class UsageUnavailableError(Exception):

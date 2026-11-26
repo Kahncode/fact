@@ -28,6 +28,7 @@ WAIT_FOR_CI = "wait_for_ci"
 WAIT_FOR_PR_CLOSED = "wait_for_pr_closed"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
+RECORD_RUN_WAITING = "record_run_waiting"
 RECORD_GATE_OPENED = "record_gate_opened"
 RECORD_GATE_ANSWERED = "record_gate_answered"
 NOTIFY = "notify"
@@ -144,6 +145,14 @@ class RunStartedInput(_Input):
 class RunFinishedInput(_Input):
     run_id: str
     outcome: RunOutcome
+
+
+class RunWaitingInput(_Input):
+    """The run starts (`waiting`) or stops waiting without a gate, such as for a usage limit to reset."""
+
+    run_id: str
+    waiting: bool
+    reason: str = ""  # such as `usage limit until <time>`, for the log
 
 
 class GateOpenedInput(_Input):

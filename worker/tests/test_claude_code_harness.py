@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,8 @@ from fact.worker.harnesses.claude_code import parse_line, result_from_messages
 FIXTURES = Path(__file__).parent / "fixtures"
 OK_STREAM = FIXTURES / "claude_stream_ok.jsonl"
 ERROR_STREAM = FIXTURES / "claude_stream_error.jsonl"
+REJECTED_STREAM = FIXTURES / "claude_stream_rejected.jsonl"
+LIMIT_ERROR_STREAM = FIXTURES / "claude_stream_limit_error.jsonl"
 FAKE = [sys.executable, str(FIXTURES / "fake_claude.py")]
 
 # values read from the recorded fixtures
@@ -122,6 +125,44 @@ def test_result_carries_structured_output_and_denials() -> None:
     assert result.permission_denials == [
         PermissionDenial(tool_name="Write", tool_input={"file_path": "probe.txt", "content": "x"})
     ]
+
+
+def test_allowed_rate_limit_events_record_windows_without_a_limit() -> None:
+    result = result_from_messages(_messages(ERROR_STREAM), exit_code=1)
+    assert result.rate_limited is False  # an error, but not the usage limit
+    windows = {w.name: (w.utilization, w.resets_at, w.rejected) for w in result.usage_windows.windows}
+    assert windows == {
+        "five_hour": (0.23, datetime.fromtimestamp(1795584600, UTC), False),
+        "seven_day": (0.43, datetime.fromtimestamp(1795575600, UTC), False),
+    }
+
+
+def test_rejected_rate_limit_event_is_rate_limited() -> None:
+    result = result_from_messages(_messages(REJECTED_STREAM), exit_code=1)
+    assert result.rate_limited is True
+    assert result.session_id == "5b0c3a52-3d0e-4c8e-9a51-6c1b7f0e2a11"
+    windows = {w.name: (w.utilization, w.rejected) for w in result.usage_windows.windows}
+    assert windows == {"five_hour": (1.0, True), "seven_day": (0.61, False)}  # merged: the newer five_hour wins
+    assert result.usage_windows.resume_at(1.0) == datetime.fromtimestamp(1795584600, UTC) + timedelta(seconds=90)
+
+
+def test_limit_error_text_is_rate_limited_without_windows() -> None:
+    result = result_from_messages(_messages(LIMIT_ERROR_STREAM), exit_code=1)
+    assert result.rate_limited is True
+    assert result.usage_windows.windows == ()
+    assert result.usage_windows.resume_at(1.0) is None
+
+
+def test_rejected_event_then_a_successful_result_is_not_a_limit() -> None:
+    """Claude Code can go on after a rejected event (extra usage): only a run that failed was cut short."""
+    *events, result = _messages(REJECTED_STREAM)
+    done = {**result, "is_error": False, "result": "done"}
+    assert result_from_messages([*events, done], exit_code=0).rate_limited is False
+
+
+def test_limit_text_in_a_successful_answer_is_not_a_limit() -> None:
+    message = {"type": "result", "subtype": "success", "is_error": False, "result": "added a rate limit to the API"}
+    assert result_from_messages([message], exit_code=0).rate_limited is False
 
 
 def test_result_without_structured_output_has_none() -> None:

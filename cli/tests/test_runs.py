@@ -171,6 +171,21 @@ def test_status_shows_a_failed_live_query(settings: Settings, monkeypatch: pytes
     assert "Gate:     unknown (Status query failed)" in result.output
 
 
+def test_status_shows_why_the_run_waits(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/status"):
+            live = {"stage": "implement", "attempt": 1, "gate": None, "outcomes": []}
+            return httpx.Response(200, json={**live, "waiting": "usage limit until 2026-11-26 15:00 UTC"})
+        return httpx.Response(200, json={**RUN, "status": "waiting", "outcome": None, "steps": []})
+
+    _use(monkeypatch, settings, handler)
+    result = CliRunner().invoke(app, ["status", "abc123"])
+    assert result.exit_code == 0, result.output
+    assert "Status:   waiting" in result.output
+    assert "Gate:     none open" in result.output
+    assert "Waiting:  usage limit until 2026-11-26 15:00 UTC" in result.output
+
+
 def test_steer_refused_for_a_finished_run(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/instructions"):

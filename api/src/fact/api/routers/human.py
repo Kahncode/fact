@@ -117,7 +117,7 @@ async def steer(run_id: str, body: InstructionIn, request: Request, session: Ses
 
 @router.get("/runs/{run_id}/status")
 async def live_status(run_id: str, request: Request, session: Session) -> WorkflowStatus:
-    """Query the workflow's own view: current stage and attempt, the open gate, outcomes so far."""
+    """Query the workflow's own view: current stage and attempt, the open gate, why it waits, outcomes so far."""
     run, handle = await _handle(request, session, run_id)
     try:
         return await handle.query(STATUS, result_type=WorkflowStatus, rpc_timeout=WORKER_TIMEOUT)

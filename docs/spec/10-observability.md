@@ -33,7 +33,7 @@ Every job runs on a runner pool with its own concurrency cap. Budgets and subscr
 | Concurrent sandboxes | Per runner pool | The job waits for a free slot |
 | Concurrent runs | Whole factory, and per project | The scheduler starts no new run until one ends. v0 (M2-07): `concurrency.max_runs` (default 2) and a project's `max_runs` (default 1) count runs queued, running or waiting; a run started by hand with `fact run` is not held back |
 | Budget (USD) | Per project in USD per day (a project setting), optional per-run cap; Claude Code spend read from its own usage reporting | Alerts at 50% and 80%; at 100% new steps wait and you are notified |
-| Usage window (M2) | Per subscription agent account, such as a Claude Code plan | Over the threshold (default 90%), the scheduler starts no new run; a step that hits the limit sleeps on a durable timer until the window resets, then resumes its session |
+| Usage window (M2) | Per subscription agent account, such as a Claude Code plan | Over the threshold (default 90%), the scheduler starts no new run (M2-14). A step that hits the limit (M2-13) ends `rate_limited` with a `resume_at`; the workflow marks the run `waiting` with the reason `usage limit until <time>` (in `fact status`), sleeps on a durable timer until the window resets, however long, then resumes the same session. These pauses don't count as resumes; after 20 in one agent step it ends `needs_human`. Every agent step records the windows it saw (`PUT /api/v1/usage/claude`, table `usage_windows`; `GET /api/v1/usage` lists them) |
 
 **Monitors: use what already exists.**
 

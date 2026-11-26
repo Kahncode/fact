@@ -25,6 +25,6 @@ Use Temporal with the Python SDK. Workflows are Python code, one or more per pro
 - Gates are Temporal **updates**: the UI or the MCP server sends approve or reject with a note, and gets an error back if the gate is no longer open.
 - Steering is a **signal**: "add this instruction" is queued and added to the next agent attempt's prompt, never interrupting a running one.
 - Status is a **query**: current stage, attempt and pending gate, for the UI and the MCP server.
-- Every step ends with a typed outcome: `passed`, `failed_checks`, `failed_error`, `needs_human`, `over_budget`, `stopped_by_monitor` or `dropped`. Workflows branch on these outcomes, never on parsed agent text.
+- Every step ends with a typed outcome: `passed`, `failed_checks`, `failed_error`, `needs_human`, `over_budget`, `stopped_by_monitor`, `dropped` or `rate_limited` (an agent step the usage limit refused; `FactWorkflow.agent` waits for the reset and resumes it, so a workflow never sees it). Workflows branch on these outcomes, never on parsed agent text.
 - Every run has one `run_id` carried on every log line, event and telemetry record.
 - Picking up work is a Temporal **Schedule**, not a cron or a loop in a process: `fact-scheduler` starts a short `SchedulerTick` workflow every 30 s with overlap `SKIP`, and pausing it (from `fact scheduler off` or the Temporal UI) stops new runs. It is the only background job in fact.

@@ -34,9 +34,18 @@ def test_steering_is_capped_to_the_newest_text() -> None:
     assert extra == "4" * STEER_MAX_CHARS
 
 
+def test_status_says_why_the_run_waits() -> None:
+    flow = FactWorkflow()
+    flow.note_waiting("usage limit until 2030-01-02 15:01 UTC")
+    assert flow.status().waiting == "usage limit until 2030-01-02 15:01 UTC"
+    flow.note_waiting(None)
+    assert flow.status().waiting is None
+
+
 def test_status_tracks_the_latest_stage_and_the_open_gate() -> None:
     flow = FactWorkflow()
-    assert flow.status().model_dump() == {"stage": None, "attempt": None, "gate": None, "outcomes": []}
+    empty = {"stage": None, "attempt": None, "gate": None, "waiting": None, "outcomes": []}
+    assert flow.status().model_dump() == empty
 
     flow.next_attempt("checks")
     flow.next_attempt("checks")

@@ -5,6 +5,7 @@ Control activities: bookkeeping a workflow needs around its steps.
   work and the task's completion as one commit.
 - `record_run_started` and `record_run_finished`: move the run row through the runs API; the start also records the
   worker version the run is pinned to and its home SHA.
+- `record_run_waiting`: mark the run `waiting` while it sleeps without a gate (a usage limit), then `running` again.
 """
 
 from datetime import UTC, datetime
@@ -16,9 +17,11 @@ from fact.core.activity_contract import (
     MARK_TASK_DONE,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
+    RECORD_RUN_WAITING,
     MarkTaskDoneInput,
     RunFinishedInput,
     RunStartedInput,
+    RunWaitingInput,
 )
 from fact.core.enums import RunStatus
 from fact.core.github import GitHubAppConfigError
@@ -128,6 +131,13 @@ class ControlActivities:
     async def record_run_finished(self, spec: RunFinishedInput) -> None:
         body = {"status": RunStatus.FINISHED, "outcome": spec.outcome, "ended_at": _now()}
         await self._patch_run(spec.run_id, body)
+
+    @activity.defn(name=RECORD_RUN_WAITING)
+    async def record_run_waiting(self, spec: RunWaitingInput) -> None:
+        await self._patch_run(spec.run_id, {"status": RunStatus.WAITING if spec.waiting else RunStatus.RUNNING})
+        if spec.reason:
+            with bind_run(spec.run_id):
+                log.info("run_waiting" if spec.waiting else "run_resumed", reason=spec.reason)
 
     async def _patch_run(self, run_id: str, body: dict[str, Any]) -> None:
         """PATCH the run; a 4xx will not get better on retry, anything else is left to the activity's retry policy."""

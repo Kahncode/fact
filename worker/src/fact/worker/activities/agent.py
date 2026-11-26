@@ -4,10 +4,12 @@ import asyncio
 import contextlib
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from fact.core.activity_contract import AGENT_INTERRUPTED, AGENT_STEP, AgentStepInput
+from fact.core.claude_usage import LIMIT_FALLBACK
 from fact.core.enums import StepKind, StepOutcome
 from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
@@ -23,6 +25,7 @@ OUTPUTS_MAX_BYTES = 64 * 1024  # outputs travel in the Temporal payload; anythin
 __all__ = ["AgentActivities", "AgentStepInput"]
 
 MAX_TURNS_REASONS = frozenset({"error_max_turns"})  # harness stop reasons meaning the turn limit was hit
+USAGE_ACCOUNT = "claude"  # one subscription account until runner pools give each its own
 
 
 class _Progress:
@@ -102,6 +105,15 @@ def judge(result: HarnessResult) -> tuple[StepOutcome, str, dict[str, Any]]:
     return outcome, summary, outputs
 
 
+def rate_limited(result: HarnessResult, session_id: str | None, now: datetime) -> tuple[str, dict[str, Any]]:
+    """Summary and outputs (`resume_at` ISO, `session_id`) of a session the usage limit refused."""
+    resume_at = result.usage_windows.resume_at(1.0)
+    if resume_at is None or resume_at <= now:
+        resume_at = now + LIMIT_FALLBACK
+    summary = f"usage limit until {resume_at.isoformat()}: {result.final_message}"
+    return summary, {"resume_at": resume_at.isoformat(), "session_id": result.session_id or session_id}
+
+
 def _non_retryable(exc: Exception) -> ApplicationError:
     return ApplicationError(str(exc), type=type(exc).__name__, non_retryable=True)
 
@@ -167,13 +179,21 @@ class AgentActivities:
                 await beat
             if transcript.exists():
                 await step.attach_transcript(transcript)
-        self._finish(step, result)
+        if result.usage_windows.windows:
+            step.log(f"usage windows: {result.usage_windows.summary()}")
+            await self._reporter.report_usage(USAGE_ACCOUNT, result.usage_windows)
+        self._finish(step, result, progress.session_id)
 
     @staticmethod
-    def _finish(step: StepContext, result: HarnessResult) -> None:
+    def _finish(step: StepContext, result: HarnessResult, session_id: str | None) -> None:
         step.log(f"stop reason {result.stop_reason}, {result.num_turns} turns, exit code {result.exit_code}")
         for denial in result.permission_denials:
             step.log(f"permission denied: {denial.tool_name} {json.dumps(denial.tool_input)[:500]}")
+        if result.rate_limited:
+            summary, outputs = rate_limited(result, session_id, datetime.now(UTC))
+            step.log(summary)
+            step.finish(StepOutcome.RATE_LIMITED, summary, outputs, result.usage)
+            return
         outcome, summary, outputs = judge(result)
         step.finish(outcome, summary, outputs, result.usage)
 

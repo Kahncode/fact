@@ -57,6 +57,7 @@ class HumanSteps:
         self._stage: str | None = None
         self._stage_attempt: int | None = None
         self._outcomes: list[StageOutcome] = []
+        self._waiting: str | None = None
 
     async def gate(self: FactWorkflow, gate_id: str, kind: str, details: dict[str, Any] | None = None) -> GateAnswer:
         """
@@ -160,7 +161,13 @@ class HumanSteps:
     @workflow.query(name=STATUS)
     def status(self) -> WorkflowStatus:
         gate = next(iter(self._open_gates.values()), None)
-        return WorkflowStatus(stage=self._stage, attempt=self._stage_attempt, gate=gate, outcomes=list(self._outcomes))
+        return WorkflowStatus(
+            stage=self._stage,
+            attempt=self._stage_attempt,
+            gate=gate,
+            waiting=self._waiting,
+            outcomes=list(self._outcomes),
+        )
 
     @workflow.signal(name=STEER)
     def steer(self, text: str) -> None:
@@ -178,6 +185,10 @@ class HumanSteps:
 
     def note_stage(self, stage_id: str, attempt: int) -> None:
         self._stage, self._stage_attempt = stage_id, attempt
+
+    def note_waiting(self, reason: str | None) -> None:
+        """Say why the run waits without a gate (the `status` query's `waiting`); None once it goes on."""
+        self._waiting = reason
 
     def note_outcome(self, stage_id: str, attempt: int, outcome: StepOutcome) -> None:
         self._outcomes.append(StageOutcome(stage_id=stage_id, attempt=attempt, outcome=outcome))

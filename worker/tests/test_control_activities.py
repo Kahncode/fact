@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fact.core.activity_contract import MarkTaskDoneInput, RunFinishedInput, RunStartedInput
+from fact.core.activity_contract import MarkTaskDoneInput, RunFinishedInput, RunStartedInput, RunWaitingInput
 from fact.core.enums import RunOutcome
 from fact.core.types import Task, WorkspaceHandle
 from fact.worker.activities.control import ControlActivities
@@ -172,6 +172,16 @@ async def test_record_run_started_and_finished(client: AsyncClient, run_id: str)
     run = (await client.get(f"/api/v1/runs/{run_id}")).json()
     assert (run["status"], run["outcome"]) == ("finished", "needs_human")
     assert run["ended_at"] is not None
+
+
+async def test_record_run_waiting_and_running_again(client: AsyncClient, run_id: str) -> None:
+    activities = ControlActivities(BASE, client)
+    await activities.record_run_started(RunStartedInput(run_id=run_id))
+
+    await activities.record_run_waiting(RunWaitingInput(run_id=run_id, waiting=True, reason="usage limit until 15:00"))
+    assert (await client.get(f"/api/v1/runs/{run_id}")).json()["status"] == "waiting"
+    await activities.record_run_waiting(RunWaitingInput(run_id=run_id, waiting=False))
+    assert (await client.get(f"/api/v1/runs/{run_id}")).json()["status"] == "running"
 
 
 async def test_record_run_started_records_the_pinned_version(client: AsyncClient, run_id: str) -> None:

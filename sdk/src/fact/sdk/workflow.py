@@ -17,7 +17,6 @@ from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
-        AGENT_STEP,
         CONTROL_QUEUE,
         PREPARE_WORKSPACE,
         RECORD_RUN_FINISHED,
@@ -25,35 +24,34 @@ with workflow.unsafe.imports_passed_through():
         SANDBOX_QUEUE,
         SHELL_STEP,
         TEARDOWN_WORKSPACE,
-        AgentStepInput,
         Check,
         CheckResult,
         OpenChangeSetInput,
         PostCostCommentInput,
         RunFinishedInput,
         RunStartedInput,
+        RunWaitingInput,
         ShellStepInput,
     )
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+    from fact.sdk.agents import AgentSteps
     from fact.sdk.drop import DropSteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
-    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, NO_RETRY
+    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, WAIT_CANCELLED
     from fact.sdk.pull_requests import PullRequestSteps
-    from fact.sdk.sessions import INTERRUPTED, MAX_RESUMES, RESUME_DELAY, interrupted_session, retry_reason
     from fact.sdk.stages import Stage, stages
     from fact.sdk.task_status import TaskStatusSteps
 
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
-WAIT_CANCELLED = workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
 # the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
-    """Base class for project workflows: bookkeeping and step helpers; PRs, gates, dropping, the task in mixins."""
+class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
+    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, gates, dropping, the task in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -146,66 +144,6 @@ class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
                 return step
         return None
 
-    async def agent(self, stage_id: str, prompt: str, context: str = "", *, pr_text: bool = True) -> StepResult:
-        """
-        Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.
-
-        The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
-        answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. Nothing else is retried. With `pr_text`,
-        a passed session's `title` and `summary` replace earlier ones for the PR (off for a review: it changes nothing).
-        Instructions queued by the `steer` signal go at the end of the next session's context, then are cleared.
-        """
-        resume: str | None = None
-        for resumes in range(MAX_RESUMES + 1):
-            last = resumes == MAX_RESUMES
-            try:
-                result = await self._agent_session(stage_id, prompt, context, resume)
-            except ActivityError as exc:
-                resume = interrupted_session(exc)
-                if resume is None or last:
-                    raise
-                workflow.logger.warning("%s: worker stopped during the session; resuming %s", stage_id, resume)
-                context = INTERRUPTED
-                continue
-            reason = retry_reason(result)
-            if reason is None or last:
-                break
-            workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
-            await workflow.sleep(RESUME_DELAY)
-            resume, context = result.session_id, f"you reported a temporary problem: {reason}"
-        if pr_text and result.outcome == StepOutcome.PASSED:
-            self._remember_pr_text(result)
-        return result
-
-    async def _agent_session(self, stage_id: str, prompt: str, context: str, resume: str | None) -> StepResult:
-        run = self.input
-        spec = AgentStepInput(
-            run_id=run.run_id,
-            stage_id=stage_id,
-            attempt=self.next_attempt(stage_id),
-            handle=self.handle,
-            task=run.task,
-            prompt_name=prompt.removesuffix(".md"),
-            context=self.with_steering(context),
-            complexity=run.complexity,
-            home_repo=run.home_repo,
-            resume_session_id=resume,
-            handoff_ref=run.handoff_ref,
-        )
-        result = await workflow.execute_activity(
-            AGENT_STEP,
-            spec,
-            result_type=StepResult,
-            task_queue=SANDBOX_QUEUE,
-            start_to_close_timeout=timedelta(seconds=run.limits.agent_timeout_s),
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=NO_RETRY,
-            cancellation_type=WAIT_CANCELLED,  # a drop tears the workspace down only once the session stopped
-        )
-        self.note_outcome(stage_id, spec.attempt, result.outcome)
-        self.note_agent_step(stage_id, spec.attempt, result)
-        return result
-
     async def until_green(
         self,
         checks: Sequence[Check],
@@ -287,7 +225,9 @@ class FactWorkflow(PullRequestSteps, HumanSteps, DropSteps, TaskStatusSteps):
         except ActivityError as exc:
             workflow.logger.warning("teardown failed for run %s: %s", self._handle.run_id, exc.cause or exc)
 
-    async def _record(self, name: str, arg: RunStartedInput | RunFinishedInput | PostCostCommentInput) -> None:
+    async def _record(
+        self, name: str, arg: RunStartedInput | RunFinishedInput | RunWaitingInput | PostCostCommentInput
+    ) -> None:
         """Bookkeeping and evidence are best effort: an API or GitHub outage must not fail a run that did its work."""
         try:
             await self._control(name, arg, type(None))

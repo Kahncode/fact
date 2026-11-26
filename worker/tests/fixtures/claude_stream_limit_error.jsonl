@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","cwd":"C:\work\demo","session_id":"0d8e6c1f-7a42-4b0e-8f5d-2e9c4b7a1c33","tools":["Bash","Edit","Read"],"model":"claude-opus-5-5","permissionMode":"auto"}
+{"type":"result","subtype":"success","is_error":true,"duration_ms":310,"num_turns":1,"result":"You've hit your limit \u00b7 resets 5am (Europe/Paris)","session_id":"0d8e6c1f-7a42-4b0e-8f5d-2e9c4b7a1c33","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}

@@ -1,5 +1,5 @@
 """
-ORM models: projects, repositories, runs, steps, events, notifications.
+ORM models: projects, repositories, runs, steps, events, notifications, usage windows.
 
 Only Postgres-compatible column types. Enum values are stored as plain strings (see `fact.core.enums`).
 """
@@ -124,3 +124,17 @@ class Notification(Base):
     created_at: Mapped[datetime] = _ts(nullable=False, default_now=True)
     read_at: Mapped[datetime | None] = _ts()
     dedupe_key: Mapped[str] = mapped_column(String(300), unique=True)  # one notification per run state
+
+
+class UsageWindow(Base):
+    """The last state seen of one subscription usage window (such as `five_hour`) of an agent account."""
+
+    __tablename__ = "usage_windows"
+    __table_args__ = (UniqueConstraint("account", "window", name="uq_usage_windows_account_window"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account: Mapped[str] = mapped_column(String(50))  # `claude` until runner pools give each its own account
+    window: Mapped[str] = mapped_column(String(50))
+    utilization: Mapped[float] = mapped_column(Float)  # 0..1
+    resets_at: Mapped[datetime] = _ts(nullable=False)
+    updated_at: Mapped[datetime] = _ts(nullable=False, default_now=True)

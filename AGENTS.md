@@ -81,7 +81,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | List registered projects | `uv run fact projects list`                    |
 | Start a run for a task  | `uv run fact run task:<id>` or `gh:<owner/repo>#<n>` (`--force-deps`, `--project`) |
 | List runs               | `uv run fact runs` (`--project`, `--status`)    |
-| Show a run and its steps | `uv run fact status <run id or workflow id>`   |
+| Show a run, its steps and why it waits | `uv run fact status <run id or workflow id>` |
 | Answer a run's open gate | `uv run fact gate <run> approve\|reject` (`--note`, `--gate`) |
 | Send instructions to a run | `uv run fact steer <run> TEXT`               |
 | Drop a run (restart its task with `fact run`) | `uv run fact drop <run>` (`--reason`) |
@@ -106,6 +106,8 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 - Project workflows import the step library from `fact.sdk` and subclass its workflow base class (`fact.sdk.workflow.FactWorkflow`).
 - Queue names, activity names and activity inputs live in `fact.core.activity_contract`; `fact.sdk` calls activities by name and never imports `fact.worker`.
 - Workflow handler names for people (`answer_gate` update, `status` query, `steer` signal) and their models live in `fact.core.gates`; clients call them by name and never import `fact.sdk`. A subclass of `FactWorkflow` that defines `__init__` must call `super().__init__()`.
+- Agent sessions run through `FactWorkflow.agent`, defined in the `fact.sdk.agents.AgentSteps` mixin (resume rules in `fact.sdk.sessions`). A step the Claude usage limit refused ends `rate_limited`; `agent` marks the run `waiting` (`record_run_waiting` control activity, `WorkflowStatus.waiting`), sleeps on a durable timer until the step's `resume_at` and resumes the same session, up to `MAX_LIMIT_PAUSES` (20) times, counted apart from `MAX_RESUMES`, then the step ends `needs_human`. Project workflows never see `rate_limited`.
+- Every agent step reports the usage windows it saw to `PUT /api/v1/usage/claude` (table `usage_windows`); `GET /api/v1/usage` lists them.
 - Dropping a run (`fact drop`) cancels its workflow; `FactWorkflow.execute` turns the cancellation into outcome `dropped` (`fact.sdk.drop.DropSteps`), so project workflows need no drop handling of their own.
 - `python -m fact.worker` loads each project's `.fact/workflows/` from a detached checkout of its default branch at `pinned_dir/projects/<project>/<sha>` and runs them on queue and deployment `wf-<project>` (`workflow_queue`), pinned to build id `<factory SHA[:12]>+<home SHA>`; workflow changes apply at the next worker restart (see `worker/README.md`).
 - The scheduler is the only background job: the worker creates the Temporal Schedule `fact-scheduler` (paused unless `concurrency.scheduler_enabled`), whose `SchedulerTick` starts ready, never-run file tasks through `POST /runs/start` within `concurrency.max_runs` and each project's `max_runs` (`fact.core.scheduler`, `fact.worker.scheduler`).
