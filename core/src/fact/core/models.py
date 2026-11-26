@@ -11,7 +11,19 @@ from typing import Any
 
 from fact.core.db import Base
 from fact.core.enums import RunStatus, RunTrigger, StepStatus
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    false,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 USD = Numeric(12, 6)
@@ -69,9 +81,12 @@ class Run(Base):
     ended_at: Mapped[datetime | None] = _ts()
     machine_seconds: Mapped[float] = mapped_column(Float, default=0)
     human_wait_seconds: Mapped[float] = mapped_column(Float, default=0)
-    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)  # every prompt token: fresh input plus cache
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
-    cost_usd: Mapped[Decimal] = mapped_column(USD, default=Decimal(0))
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # part of tokens_in
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # part of tokens_in
+    cost_usd: Mapped[Decimal] = mapped_column(USD, default=Decimal(0))  # sum of the steps' known costs
+    cost_unknown_steps: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # agent steps, no cost
     human_touches: Mapped[int] = mapped_column(Integer, default=0)
 
 
@@ -92,9 +107,12 @@ class Step(Base):
     started_at: Mapped[datetime | None] = _ts()
     ended_at: Mapped[datetime | None] = _ts()
     wait_seconds: Mapped[float] = mapped_column(Float, default=0)
-    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)  # every prompt token: fresh input plus cache
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
-    cost_usd: Mapped[Decimal] = mapped_column(USD, default=Decimal(0))
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # part of tokens_in
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # part of tokens_in
+    cost_usd: Mapped[Decimal | None] = mapped_column(USD)  # as the harness reported it; NULL when it reported none
+    usage_partial: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # session cut short
     log_ref: Mapped[str | None] = mapped_column(Text)
     transcript_ref: Mapped[str | None] = mapped_column(Text)
     outputs: Mapped[dict[str, Any] | None] = mapped_column(JSON)

@@ -59,6 +59,9 @@ class StepContext:
         self._events: list[dict[str, Any]] = []
         self.result: StepResult | None = None  # set by `finish`; final (with `log_ref`) after the block ends
         self.transcript_ref: str | None = None  # set by `attach_transcript`; kept even if the body raises
+        # the usage reported so far (a whole session's, or a cut-short session's messages), recorded if the body
+        # raises or never calls `finish`
+        self.reported_usage: Usage | None = None
 
     def log(self, line: str) -> None:
         """Append a line to the step's local `output.log`."""
@@ -114,6 +117,18 @@ class StepContext:
         self._log_file.close()
 
 
+def _usage_fields(usage: Usage) -> dict[str, Any]:
+    """Return the step's usage as reported; a cost nobody reported is sent as an explicit null, never 0."""
+    return {
+        "tokens_in": usage.tokens_in,
+        "tokens_out": usage.tokens_out,
+        "cache_read_tokens": usage.cache_read_tokens,
+        "cache_write_tokens": usage.cache_write_tokens,
+        "cost_usd": None if usage.cost_usd is None else str(usage.cost_usd),
+        "usage_partial": usage.partial,
+    }
+
+
 class StepReporter:
     def __init__(self, api_base_url: str, http_client: httpx.AsyncClient, log_dir: Path | None = None) -> None:
         self._base = api_base_url.rstrip("/") + API_PREFIX
@@ -150,7 +165,7 @@ class StepReporter:
                 except BaseException as exc:
                     error = limit_text(f"{type(exc).__name__}: {exc}", SUMMARY_MAX_BYTES)
                     ctx.log(f"step failed: {error}")
-                    ctx.finish(StepOutcome.FAILED_ERROR, error)
+                    ctx.finish(StepOutcome.FAILED_ERROR, error, usage=ctx.reported_usage)
                     raise
                 finally:
                     await self._finalize(ctx, started)
@@ -160,7 +175,7 @@ class StepReporter:
     async def _finalize(self, ctx: StepContext, started: datetime) -> None:
         if ctx.result is None:
             ctx.log("step ended without reporting an outcome")
-            ctx.finish(StepOutcome.FAILED_ERROR, "Step ended without reporting an outcome")
+            ctx.finish(StepOutcome.FAILED_ERROR, "Step ended without reporting an outcome", usage=ctx.reported_usage)
         result = ctx.result
         ctx.close_log()
         await ctx.flush_events()
@@ -212,9 +227,7 @@ class StepReporter:
             "outcome": result.outcome,
             "started_at": started.isoformat(),
             "ended_at": _now().isoformat(),
-            "tokens_in": result.usage.tokens_in,
-            "tokens_out": result.usage.tokens_out,
-            "cost_usd": str(result.usage.cost_usd),
+            **_usage_fields(result.usage),
             "outputs": result.outputs,
         }
         if log_ref is not None:

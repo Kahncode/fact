@@ -5,6 +5,7 @@ import asyncio
 from fact.core.activity_contract import (
     AGENT_STEP,
     OPEN_CHANGE_SET,
+    POST_COST_COMMENT,
     RECORD_RUN_FINISHED,
     REPORT_STATUS,
     TEARDOWN_WORKSPACE,
@@ -59,7 +60,7 @@ async def _at_stage(handle: WorkflowHandle, stage: str) -> None:
 
 
 def _order(fakes: FakeActivities) -> list[str]:
-    names = {WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED, "session_stopped"}
+    names = {WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED, POST_COST_COMMENT, "session_stopped"}
     return [name for name, _ in fakes.calls if name in names]
 
 
@@ -106,7 +107,10 @@ async def test_stop_in_review_keeps_the_pr_for_the_next_run() -> None:
     (note,) = fakes.of(WRITE_HANDOFF)
     assert (note.stage_id, note.prs, note.reason) == (REVIEW_STAGE, [PR], "")
     assert [s.stage_id for s in note.steps] == ["implement", "review", "learn"]
-    assert _order(fakes) == [WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED]
+    # the cost comment goes on the kept PR last, once the stop is recorded
+    assert _order(fakes) == [WRITE_HANDOFF, TEARDOWN_WORKSPACE, RECORD_RUN_FINISHED, POST_COST_COMMENT]
+    (comment,) = fakes.of(POST_COST_COMMENT)
+    assert comment.prs == [PR]
 
     replayed = WorkflowHistory.from_json("run-stop-review", history.to_json())
     replayer = Replayer(workflows=[STANDARD], data_converter=pydantic_data_converter, workflow_runner=sandbox_runner())

@@ -42,7 +42,7 @@ async def _make_step(client: AsyncClient, run_id: str, stage: str = "implement",
     return response.json()
 
 
-async def _finish(client: AsyncClient, step_id: str, seconds: int, cost: str, **extra: object) -> None:
+async def _finish(client: AsyncClient, step_id: str, seconds: int, cost: str | None, **extra: object) -> None:
     body = {
         "status": "finished",
         "outcome": "passed",
@@ -168,11 +168,10 @@ async def test_null_in_patch_is_ignored_for_required_fields(client: AsyncClient)
     run = await _make_run(client)
     step = await _make_step(client, run["id"])
     await _finish(client, step["id"], 5, "0.10")
-    response = await client.patch(
-        f"/api/v1/steps/{step['id']}", json={"cost_usd": None, "wait_seconds": None, "tokens_in": None}
-    )
+    response = await client.patch(f"/api/v1/steps/{step['id']}", json={"wait_seconds": None, "tokens_in": None})
     assert response.status_code == HTTPStatus.OK
     assert Decimal(response.json()["cost_usd"]) == Decimal("0.10")
+    assert response.json()["tokens_in"] == 100  # noqa: PLR2004
     assert (await client.patch(f"/api/v1/runs/{run['id']}", json={"status": None})).status_code == HTTPStatus.OK
 
 
@@ -182,4 +181,31 @@ async def test_totals_drop_step_that_leaves_finished(client: AsyncClient) -> Non
     await _finish(client, step["id"], 5, "0.10")
     await client.patch(f"/api/v1/steps/{step['id']}", json={"status": "running"})
     detail = (await client.get(f"/api/v1/runs/{run['id']}")).json()
+    assert Decimal(detail["cost_usd"]) == 0
+
+
+async def test_an_unreported_cost_stays_null_and_is_counted_not_guessed(client: AsyncClient) -> None:
+    run = await _make_run(client)
+    known = await _make_step(client, run["id"], stage="implement")
+    cut = await _make_step(client, run["id"], stage="review")
+    cache = {"cache_read_tokens": 60, "cache_write_tokens": 30}
+    await _finish(client, known["id"], 10, "0.10", **cache)
+    await _finish(client, cut["id"], 10, None, usage_partial=True, **cache)
+    detail = (await client.get(f"/api/v1/runs/{run['id']}")).json()
+    steps = {s["stage_id"]: s for s in detail["steps"]}
+    assert steps["review"]["cost_usd"] is None
+    assert steps["review"]["usage_partial"] is True
+    assert Decimal(detail["cost_usd"]) == Decimal("0.10")
+    assert detail["cost_unknown_steps"] == 1
+    assert (detail["cache_read_tokens"], detail["cache_write_tokens"]) == (120, 60)
+
+
+async def test_a_step_without_a_harness_has_no_cost(client: AsyncClient) -> None:
+    run = await _make_run(client)
+    body = {"stage_id": "checks", "kind": "shell", "started_at": T0.isoformat()}
+    step = (await client.post(f"/api/v1/runs/{run['id']}/steps", json=body)).json()
+    assert step["cost_usd"] is None
+    await client.patch(f"/api/v1/steps/{step['id']}", json={"status": "finished", "cost_usd": None})
+    detail = (await client.get(f"/api/v1/runs/{run['id']}")).json()
+    assert detail["cost_unknown_steps"] == 0  # only agent steps owe a cost
     assert Decimal(detail["cost_usd"]) == 0

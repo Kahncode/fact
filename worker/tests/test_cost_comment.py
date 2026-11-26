@@ -24,7 +24,7 @@ COMMENTS = f"/repos/{FULL_NAME}/issues/{PR_NUMBER}/comments"
 
 def _step(stage: str, attempt: int, start: str, end: str | None, **kw: object) -> dict:
     base = {"stage_id": stage, "attempt": attempt, "harness": None, "model": None, "wait_seconds": 0.0}
-    base |= {"tokens_in": 0, "tokens_out": 0, "cost_usd": "0", "started_at": start, "ended_at": end}
+    base |= {"tokens_in": 0, "tokens_out": 0, "cost_usd": None, "started_at": start, "ended_at": end}
     return base | kw
 
 
@@ -40,6 +40,8 @@ RUN = {
             "2026-11-25T10:12:35Z",
             tokens_in=120_000,
             tokens_out=8_000,
+            cache_read_tokens=100_000,
+            cache_write_tokens=15_000,
             cost_usd="1.2345",
             **AGENT,
         ),
@@ -57,6 +59,17 @@ RUN = {
         _step("open_pr", 1, "2026-11-25T10:16:10Z", None),
     ],
 }
+CUT_SHORT = _step(
+    "fix_ci",
+    1,
+    "2026-11-25T10:20:00Z",
+    "2026-11-25T10:21:00Z",
+    tokens_in=3_000,
+    tokens_out=200,
+    cache_read_tokens=2_000,
+    usage_partial=True,
+    **AGENT,
+)
 
 
 def test_render_from_a_fixture_run() -> None:
@@ -65,13 +78,24 @@ def test_render_from_a_fixture_run() -> None:
 
     assert lines[0] == COST_MARKER
     assert "**fact run cost:** $1.48 over 15m 34s (5 steps)" in body
-    assert "| prepare | 1 | — | 4s | — | — | — |" in lines
-    assert "| implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | — | 120,000 in / 8,000 out | $1.23 |" in lines
-    assert "| checks | 1 | — | 1m 00s | 30s | — | — |" in lines
-    assert "| open_pr | 1 | — | running | — | — | — |" in lines
-    assert "| **Total** | 5 steps |  | 15m 34s | 30s | 140,000 in / 9,000 out | $1.48 |" in lines
-    assert "| claude-code / claude-sonnet-5-5 | 2 | 14m 30s | 140,000 in / 9,000 out | $1.48 |" in lines
+    route = "claude-code / claude-sonnet-5-5"
+    assert "| prepare | 1 | — | 4s | — | — | — | — | — | — |" in lines
+    assert f"| implement | 1 | {route} | 12m 30s | — | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |" in lines
+    assert "| checks | 1 | — | 1m 00s | 30s | — | — | — | — | — |" in lines
+    assert "| open_pr | 1 | — | running | — | — | — | — | — | — |" in lines
+    assert "| **Total** | 5 steps |  | 15m 34s | 30s | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |" in lines
+    assert f"| {route} | 2 | 14m 30s | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |" in lines
+    assert "unknown" not in body.split("<sub>")[0]
     assert "run-1" in body
+
+
+def test_a_cut_short_session_shows_its_tokens_and_an_unknown_cost() -> None:
+    body = render_cost_comment({"id": "run-1", "steps": [*RUN["steps"], CUT_SHORT]})
+    lines = body.splitlines()
+    route = "claude-code / claude-sonnet-5-5"
+    assert f"| fix_ci (cut short) | 1 | {route} | 1m 00s | — | 1,000 | 2,000 | — | 200 | unknown |" in lines
+    assert "**fact run cost:** $1.48 over 16m 34s (6 steps); cost not reported for 1 agent steps" in body
+    assert "| **Total** | 6 steps |  | 16m 34s | 30s | 26,000 | 102,000 | 15,000 | 9,200 | $1.48 + 1 unknown |" in lines
 
 
 def test_render_a_run_without_agents() -> None:

@@ -14,6 +14,7 @@ from fact.core.enums import StepKind, StepOutcome
 from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
 from fact.worker.harnesses import Harness, HarnessError, HarnessRequest, HarnessResult
+from fact.worker.harnesses.claude_code_usage import StreamUsage
 from fact.worker.prompts import PromptError, output_schema, render_prompt, render_resume
 from fact.worker.reporting import TRANSCRIPT_NAME, StepContext, StepReporter
 from fact.worker.routing import choose
@@ -32,6 +33,8 @@ class _Progress:
     """
     Counts assistant turns from the harness's message stream, for heartbeats, and keeps the session id.
 
+    It also keeps the usage the messages reported, recorded if the session is cut short before its final report.
+
     Claude Code can send one `assistant` message per content block, all with the same `message.id`, so a turn is a
     distinct id; a message without one counts on its own.
     """
@@ -39,11 +42,13 @@ class _Progress:
     def __init__(self) -> None:
         self.turns = 0
         self.session_id: str | None = None
+        self.stream = StreamUsage()
         self._last_id: object = None
 
     def on_message(self, message: dict[str, Any]) -> None:
         if isinstance(sid := message.get("session_id"), str):
             self.session_id = sid
+        self.stream.add(message)
         if message.get("type") != "assistant":
             return
         inner = message.get("message")
@@ -169,10 +174,14 @@ class AgentActivities:
         beat = asyncio.create_task(_heartbeats(spec.stage_id, progress))
         try:
             result = await harness.run(request, transcript, progress.on_message)
+            step.reported_usage = result.usage  # kept if the step is cancelled before `_finish`
         except HarnessError as exc:
             step.log(f"harness error: {exc}")
-            step.finish(StepOutcome.FAILED_ERROR, str(exc))
+            step.finish(StepOutcome.FAILED_ERROR, str(exc), usage=progress.stream.usage())
             return
+        except BaseException:
+            step.reported_usage = progress.stream.usage()  # cancelled or crashed: keep what the messages reported
+            raise
         finally:
             beat.cancel()
             with contextlib.suppress(asyncio.CancelledError):

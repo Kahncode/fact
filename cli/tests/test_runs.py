@@ -29,7 +29,10 @@ RUN = {
     "human_wait_seconds": 0.0,
     "tokens_in": 100,
     "tokens_out": 10,
+    "cache_read_tokens": 60,
+    "cache_write_tokens": 30,
     "cost_usd": "1.234",
+    "cost_unknown_steps": 0,
     "human_touches": 0,
 }
 STEP = {
@@ -48,7 +51,10 @@ STEP = {
     "wait_seconds": 0.0,
     "tokens_in": 100,
     "tokens_out": 10,
+    "cache_read_tokens": 60,
+    "cache_write_tokens": 30,
     "cost_usd": "1.234",
+    "usage_partial": False,
     "log_ref": "runs/abc123/implement/log.txt",
     "transcript_ref": None,
     "outputs": None,
@@ -147,6 +153,7 @@ def test_status_by_workflow_id(settings: Settings, monkeypatch: pytest.MonkeyPat
     assert "outcome: pr_opened" in result.output
     assert "Duration: 2m05s" in result.output
     assert "Cost:     $1.23" in result.output
+    assert "Tokens:   in 10, cache read 60, cache write 30, out 10" in result.output
     step_line = next(line for line in result.output.splitlines() if line.startswith("implement"))
     assert step_line.split()[:7] == ["implement", "1", "agent", "finished", "passed", "1m05s", "$1.23"]
     assert f"log: {BASE}/api/v1/artifacts/runs/abc123/implement/log.txt" in step_line
@@ -197,3 +204,14 @@ def test_steer_refused_for_a_finished_run(settings: Settings, monkeypatch: pytes
     result = CliRunner().invoke(app, ["steer", "abc123", "more tests"])
     assert result.exit_code == 1
     assert "API answered 409: Run run-task-M1-02-1 is not running in Temporal" in result.output
+
+
+def test_status_shows_an_unreported_cost_as_unknown(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    run = {**RUN, "cost_unknown_steps": 1}
+    step = {**STEP, "cost_usd": None, "usage_partial": True}
+    _use(monkeypatch, settings, lambda _: httpx.Response(200, json={**run, "steps": [step]}))
+    result = CliRunner().invoke(app, ["status", "abc123"])
+    assert result.exit_code == 0, result.output
+    assert "Cost:     $1.23 (+ 1 agent steps with no reported cost)" in result.output
+    step_line = next(line for line in result.output.splitlines() if line.startswith("implement"))
+    assert "unknown (cut short)" in step_line

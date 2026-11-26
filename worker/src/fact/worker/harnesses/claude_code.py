@@ -11,6 +11,7 @@ from typing import Any
 from fact.core.claude_usage import LIMIT_TEXT_RE, ClaudeUsage, parse_rate_limit_info
 from fact.core.types import Usage
 from fact.worker.harnesses.base import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
+from fact.worker.harnesses.claude_code_usage import StreamUsage, usage_from
 from fact.worker.runners.process import build_env, kill_tree, spawn
 
 _LINE_LIMIT = 1 << 26  # one stream-json line carries a whole tool result
@@ -36,10 +37,12 @@ class _Collector:
         self.result: dict[str, Any] | None = None
         self.windows = ClaudeUsage()
         self.rejected = False
+        self.stream = StreamUsage()
 
     def add(self, message: dict[str, Any]) -> None:
         if isinstance(sid := message.get("session_id"), str):
             self.session_id = sid
+        self.stream.add(message)
         if message.get("type") == "result":
             self.result = message
         elif message.get("type") == "rate_limit_event" and isinstance(info := message.get("rate_limit_info"), dict):
@@ -61,6 +64,7 @@ class _Collector:
                 is_error=True,
                 exit_code=exit_code,
                 stop_reason="no_result",
+                usage=self.stream.usage(),
             )
         text = r.get("result")
         final = text if isinstance(text, str) else "\n".join(str(e) for e in r.get("errors") or [])
@@ -78,16 +82,10 @@ class _Collector:
 
 
 def _usage(result: dict[str, Any]) -> Usage:
-    """`tokens_in` counts every prompt token the model read: fresh input plus cache writes and cache reads."""
-    u = result.get("usage") or {}
-    tokens_in = sum(
-        int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-    )
-    return Usage(
-        tokens_in=tokens_in,
-        tokens_out=int(u.get("output_tokens") or 0),
-        cost_usd=float(result.get("total_cost_usd") or 0.0),
-    )
+    """Return the usage the `result` message reports; a cost it does not report stays None."""
+    u = result.get("usage")
+    cost = result.get("total_cost_usd")
+    return usage_from(u if isinstance(u, dict) else {}, float(cost) if isinstance(cost, int | float) else None)
 
 
 def _structured(result: dict[str, Any]) -> dict[str, Any] | None:

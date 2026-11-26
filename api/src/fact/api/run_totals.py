@@ -29,4 +29,8 @@ async def recompute_totals(session: AsyncSession, run: Run) -> None:
     run.human_wait_seconds = sum(s.wait_seconds for s in finished)
     run.tokens_in = sum(s.tokens_in for s in finished)
     run.tokens_out = sum(s.tokens_out for s in finished)
-    run.cost_usd = sum((Decimal(s.cost_usd) for s in finished), Decimal(0))
+    run.cache_read_tokens = sum(s.cache_read_tokens for s in finished)
+    run.cache_write_tokens = sum(s.cache_write_tokens for s in finished)
+    # only costs a harness reported; a step that ran an agent without one is counted, never guessed
+    run.cost_usd = sum((Decimal(s.cost_usd) for s in finished if s.cost_usd is not None), Decimal(0))
+    run.cost_unknown_steps = sum(1 for s in finished if s.harness is not None and s.cost_usd is None)

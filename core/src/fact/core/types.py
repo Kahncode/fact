@@ -66,9 +66,19 @@ class WorkspaceHandle(_Model):
 
 
 class Usage(_Model):
+    """
+    What a harness reported a session used: never estimated, so a cost it did not report stays None.
+
+    `tokens_in` is every prompt token (fresh input plus cache writes and cache reads); the cache counts are part of
+    it. `partial` marks a session cut short before its final report: its tokens are those of the messages received.
+    """
+
     tokens_in: int = 0
     tokens_out: int = 0
-    cost_usd: float = 0.0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cost_usd: float | None = None
+    partial: bool = False
 
 
 class StepResult(_Model):

@@ -91,7 +91,8 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, StopSteps, TaskStat
 
         The start carries the worker deployment version (build id `<factory SHA>+<home SHA>`) the run is pinned to.
         A run that ends in `PUSHED_OUTCOMES` tears its workspace down; any other leaves it for a person. A stopped
-        (cancelled) run ends through `stop`.
+        (cancelled) run ends through `stop`. Every ending that recorded its outcome then posts the cost comment on the
+        run's PRs, last, so it covers every step.
 
         Any other exception is a bug in workflow code: it fails the workflow task, which Temporal retries once the
         code is fixed, so the run is not recorded as finished.
@@ -107,9 +108,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, StopSteps, TaskStat
             if self.stop_requested():
                 return await self.stop()
             if isinstance(exc, FailureError):
-                await self._record(
-                    RECORD_RUN_FINISHED, RunFinishedInput(run_id=run_input.run_id, outcome=RunOutcome.FAILED)
-                )
+                await self.record_run_end(RunOutcome.FAILED)
             raise
         if self.stop_requested() and result.outcome not in PUSHED_OUTCOMES:
             return await self.stop()  # stopped as it ended: free the branch for the restart
@@ -118,7 +117,14 @@ class FactWorkflow(AgentSteps, PullRequestSteps, HumanSteps, StopSteps, TaskStat
         await self.report_run_end(result)
         if result.outcome in PUSHED_OUTCOMES:
             await self._teardown()
+        await self.post_cost_comment(self.prs)
         return result
+
+    async def record_run_end(self, outcome: RunOutcome) -> None:
+        """Record how the run ended, then post the cost comment on its PRs (if any), so it covers every step."""
+        self._stopping = True  # the run's work is over: a stop arriving now must not skip its bookkeeping
+        await self._record(RECORD_RUN_FINISHED, RunFinishedInput(run_id=self.input.run_id, outcome=outcome))
+        await self.post_cost_comment(self.prs)
 
     def next_attempt(self, stage_id: str) -> int:
         """Return the next attempt number of `stage_id` (1, 2, ...): a run's steps are unique by stage and attempt."""

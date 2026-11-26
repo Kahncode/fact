@@ -15,7 +15,7 @@ from fact.worker.activities import agent as agent_module
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
 from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
 from fact.worker.prompts import BASE_OUTPUT_SCHEMA
-from fact.worker.reporting import StepReporter
+from fact.worker.reporting import StepContext, StepReporter
 from httpx import AsyncClient
 from temporalio.activity import ActivityCancellationDetails
 from temporalio.exceptions import ApplicationError
@@ -27,9 +27,28 @@ MAX_TURNS = 7
 TASK = Task(key="task:T-1", id="T-1", title="Add a thing", body="Do it", acceptance_criteria=["works"])
 MESSAGES = [
     {"type": "system", "subtype": "init", "session_id": "s-1"},
-    {"type": "assistant", "message": {"content": "working"}},
-    {"type": "assistant", "message": {"content": "done"}},
+    {
+        "type": "assistant",
+        "message": {"id": "m1", "content": "working", "usage": {"input_tokens": 10, "output_tokens": 20}},
+    },
+    {
+        "type": "assistant",
+        "message": {
+            "id": "m2",
+            "content": "done",
+            "usage": {
+                "input_tokens": 5,
+                "cache_read_input_tokens": 600,
+                "cache_creation_input_tokens": 100,
+                "output_tokens": 30,
+            },
+        },
+    },
 ]
+# what the messages above reported, for a session cut short before its result: no cost was reported
+STREAMED = Usage(
+    tokens_in=715, tokens_out=50, cache_read_tokens=600, cache_write_tokens=100, cost_usd=None, partial=True
+)
 
 
 class FakeHarness:
@@ -168,6 +187,7 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     assert step["tokens_in"] == USAGE.tokens_in
     assert step["tokens_out"] == USAGE.tokens_out
     assert float(step["cost_usd"]) == USAGE.cost_usd
+    assert step["usage_partial"] is False
     assert step["outputs"] == DONE
     assert step["transcript_ref"] == f"runs/{env.handle.run_id}/implement/1/transcript.jsonl"
     assert result.transcript_ref == step["transcript_ref"]
@@ -310,6 +330,11 @@ async def test_cancel_keeps_the_transcript(env: Env) -> None:
     step = await env.step()
     assert step["outcome"] == "failed_error"
     assert step["transcript_ref"] == f"runs/{env.handle.run_id}/implement/1/transcript.jsonl"
+    # the tokens the messages reported are kept; the cost was never reported, so it is NULL, not 0
+    assert (step["tokens_in"], step["tokens_out"]) == (STREAMED.tokens_in, STREAMED.tokens_out)
+    assert (step["cache_read_tokens"], step["cache_write_tokens"]) == (600, 100)
+    assert step["cost_usd"] is None
+    assert step["usage_partial"] is True
 
 
 async def test_worker_shutdown_fails_as_interrupted_with_the_session(env: Env) -> None:
@@ -348,3 +373,41 @@ def test_turns_count_distinct_message_ids() -> None:
         progress.on_message({"type": "assistant", "message": {"id": message_id}})
     progress.on_message({"type": "user"})
     assert progress.turns == 4  # noqa: PLR2004
+
+
+class NeverStarts(FakeHarness):
+    """Fails before Claude Code sends a single message, as when `claude` is not on PATH."""
+
+    async def run(
+        self,
+        request: HarnessRequest,
+        transcript_path: Path,  # noqa: ARG002 - nothing to write
+        on_message: OnMessage | None = None,  # noqa: ARG002 - no message ever comes
+    ) -> HarnessResult:
+        self.requests.append(request)
+        msg = "claude not found"
+        raise HarnessError(msg)
+
+
+async def test_a_session_that_never_started_is_not_cut_short(env: Env) -> None:
+    result = await env.run(NeverStarts())
+    assert result.outcome == StepOutcome.FAILED_ERROR
+    step = await env.step()
+    assert (step["tokens_in"], step["tokens_out"], step["cost_usd"]) == (0, 0, None)
+    assert step["usage_partial"] is False
+
+
+async def test_a_stop_after_the_session_ended_keeps_its_reported_usage(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def cancelled(*_: object) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(StepContext, "attach_transcript", cancelled)  # the stop lands during the upload
+    with pytest.raises(asyncio.CancelledError):
+        await env.run(FakeHarness())
+    step = await env.step()
+    assert step["outcome"] == "failed_error"
+    assert (step["tokens_in"], step["tokens_out"]) == (USAGE.tokens_in, USAGE.tokens_out)
+    assert float(step["cost_usd"]) == USAGE.cost_usd  # the cost Claude Code reported, not lost
+    assert step["usage_partial"] is False
