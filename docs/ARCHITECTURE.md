@@ -57,7 +57,7 @@ graph TD
 | fact.yaml | `@fact.yaml` | Exists | Global settings and project registry (one project: `fact`, home `Kahncode/fact`) |
 | scripts | `scripts/` | Exists | Python dev scripts; today only `scripts/tests/` (tests for the `.claude/hooks` scripts). The task loop was retired in M2-14: run every ready task with `fact dev` plus `fact scheduler on`. Every script is Python |
 | Agent tooling | `.agents/` | Exists | Canonical skills (`.agents/skills/`) and subagent definitions (`.agents/agents/`); the SessionStart hook `@.claude/hooks/project_dot_agents.py` projects them into the gitignored `.claude/skills` and `.claude/agents` (see `docs/decisions.md`) |
-| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, pytest on ubuntu and windows |
+| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, pytest (20 min step timeout); PRs on ubuntu, main on ubuntu and windows |
 | Work items | GitHub issues on `Kahncode/fact`, `tasks/` | Exists | fact's work is `fact:ready` issues since M2-12; `tasks/` keeps `backlog.md`, `README.md` (the task-file format for `task_source: files` projects) and the last bootstrap file task, M2-14 |
 | Design spec | `docs/spec/` | Exists | Design, one file per section |
 

@@ -60,7 +60,7 @@ Skills and subagents are edited only under `.agents/`. There is no cross-tool st
 | CLI            | Typer                                          | `fact` command                                                             |
 | Settings       | pydantic-settings + `fact.yaml`                | Layered config, `FACT_*` env overrides                                     |
 | Lint / format  | ruff (`select = ALL`), black (line length 120) | Enforced by pre-commit                                                     |
-| Tests          | pytest, pytest-asyncio (auto mode)             | Per-package `tests/`                                                       |
+| Tests          | pytest, pytest-asyncio (auto mode), pytest-timeout (60 s) | Per-package `tests/`; a deadlocked test fails with its stack       |
 
 See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 
