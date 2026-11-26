@@ -6,11 +6,17 @@ fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.y
 
 - **The spec lives in the issue body**, as the latest plan (`docs/spec/16-decisions.md`, "Where specs live"). Keep it current by editing the body, not by adding comments.
 - **Body sections**, in this order: `## Goal`, `## Read first` (exact files and spec sections), `## Do`, `## Out of scope`, `## Acceptance criteria`. The factory reads the acceptance criteria from the `- [ ]` checklist under the `Acceptance criteria` heading, so every item must be checkable.
-- **Labels**: `fact:planned`, one `type:*` (`feature`, `bug`, `chore`, `incident`) and one `complexity:*` (`trivial`, `standard`, `complex`). See `docs/agents/triage-labels.md`.
-- **Never add `fact:ready`**: approving the issue is the person's decision. Never add `fact:running` or `fact:needs-human`; the factory sets them.
+- **Labels**: one `fact:*` (below), one `type:*` (`feature`, `bug`, `chore`, `incident`, or `epic` for a parent with no work of its own) and one `complexity:*` (`trivial`, `standard`, `complex`; an epic needs none). See `docs/agents/triage-labels.md`.
+- **`fact:ready` or `fact:planned`** (until the M5 planner): a leaf issue, standalone or a sub-issue, is created `fact:ready`; a parent issue (one with sub-issues) is created `fact:planned`. The person approves a plan by setting its parent `fact:ready`; a sub-issue runs only once every ancestor is ready (`docs/spec/08-planning.md`, Parent issues and sub-issues). Create issues only after the person confirmed the breakdown in the conversation. Never set a parent `fact:ready` yourself.
+- **Never add or remove `fact:needs-human` or `fact:running`**: the factory sets `fact:needs-human` and only a person clears it; `fact:running` is retired.
 - **Never edit the text between `<!-- fact:context:start -->` and `<!-- fact:context:end -->`**: the factory owns that section.
-- **Splitting work**: one concern per issue, small enough for one run and one PR (see "How to split work" in `tasks/README.md`). Bigger work becomes a parent issue with sub-issues.
-- **Dependencies**: GitHub blocked-by links. If you can't add them, write a `Depends on #3, #4` line in the body. An issue runs only once everything it depends on is closed as completed.
+- **Sizing a leaf issue**: one agent run, one PR a person can review in one sitting.
+  - One concern per issue; size follows the concern, not a line count.
+  - The acceptance criteria fit on one screen, and `## Read first` lists at most about six files or sections; otherwise split.
+  - It ends green (lint, format, tests, CI) with its tests in the same PR, and can be done from its own body, `AGENTS.md` and `## Read first`.
+  - Mostly a chain, with a side branch where two issues touch different files.
+- **Parents**: work bigger than one leaf becomes a parent issue with sub-issues. A parent's open sub-issues are its dependencies; once they are closed the parent runs as a normal task (an integration or verification pass, with its own acceptance criteria). A parent with no work of its own is `type:epic` and is closed without a run.
+- **Dependencies between leaves**: GitHub blocked-by links. If you can't add them, write a `Depends on #3, #4` line in the body. An issue runs only once everything it depends on is closed as completed. Don't add blocked-by links from a parent to its own sub-issues: being a sub-issue already makes it one.
 
 ## Commands
 
@@ -22,6 +28,15 @@ fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.y
 - **Comment**: `gh issue comment <n> --body-file <file>`.
 - **Labels**: `gh issue edit <n> --add-label ... --remove-label ...`.
 - **Close**: `gh issue close <n> --reason "not planned" --comment "..."`. Close as completed only for work that is really done: the factory closes its own issues when their PRs merge, and a completed close satisfies dependencies.
+
+## Overrides for the mattpocock skills
+
+Where a skill's instructions differ from this file, this file wins.
+
+- **`/grill-with-docs`**: write decisions into `docs/spec/` as they are made (`docs/agents/domain.md`), never into `GLOSSARY.md`, `docs/adr/` or `docs/decisions*.md`. Commit the spec changes before `/to-tickets`, so `## Read first` can point at the updated sections.
+- **`/to-spec`**: publish one parent issue labelled `fact:planned`, never `fact:ready` (ignore the skill's `ready-for-agent`), and `type:epic` unless the parent has work of its own after its sub-issues (then give it `## Acceptance criteria` and its real type). Point at the `docs/spec/` sections it relies on. Skip `/to-spec` for work that fits in one leaf issue.
+- **`/to-tickets`**: pass the parent issue number; every ticket becomes its sub-issue. Write each ticket with this file's body sections (`## Goal`, `## Read first`, `## Do`, `## Out of scope`, `## Acceptance criteria`), not the skill's template, and do list exact files and spec sections in `## Read first`. Label each ticket `fact:ready` plus its `type:*` and `complexity:*`, and add blocked-by links between tickets in dependency order.
+- **`/implement` and `/implement-spec`**: not used for fact's own issues; the factory runs them.
 
 ## Pull requests as a triage surface
 

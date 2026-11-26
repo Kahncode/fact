@@ -10,8 +10,8 @@ Planning is everything before execution: refreshing the issue against today's co
 2. **Grill**: list the open design questions and sort each into resolved (answered by the issue, the code or the conventions) or open, leaning towards open. Open questions go to the issue as one comment, with `fact:needs-human`, and the run waits for your answers. This step is essential; only trivial issues skip it.
 3. **Triage**: a type label on the issue picks the workflow through the label mapping. Without one, the planner proposes the workflow, the complexity level, and the harness and model per step.
 4. **Plan**: rewrite the issue description with the plan: context, approach, acceptance criteria, workflow and execution choices. Your original text stays in a collapsed section, and every later planning pass updates the description again.
-5. **Break down**: subtasks exist to keep each agent's context small, because quality degrades fast when one session carries too much. Work bigger than one small change becomes sub-issues (GitHub sub-issues or Linear sub-issues), each small enough for one low-complexity run, linked by dependencies. Each subtask is one PR; a dependent subtask waits until the one before it has merged (stacked PRs later). Subtasks are created with `fact:planned` and become `fact:ready` when the parent plan is approved.
-6. **Approve**: the workflow switch `require_plan_approval` adds a gate where you approve or edit the plan. It is on for new issues and whenever grilling needed your input; off lets a fully resolved, trivial plan go straight to execution. Approving a parent plan approves its subtasks; each subtask is refreshed when it starts and only asks again if new open questions appear. Unanswered questions wait without a timeout.
+5. **Break down**: subtasks exist to keep each agent's context small, because quality degrades fast when one session carries too much. Work bigger than one small change becomes sub-issues (GitHub sub-issues or Linear sub-issues), each small enough for one low-complexity run, linked by dependencies. Each subtask is one PR; a dependent subtask waits until the one before it has merged (stacked PRs later). Sub-issues are created `fact:ready` under a parent created `fact:planned`: the parent's label is the gate (see Parent issues below).
+6. **Approve**: the workflow switch `require_plan_approval` adds a gate where you approve or edit the plan. It is on for new issues and whenever grilling needed your input; off lets a fully resolved, trivial plan go straight to execution. Approving a parent plan means setting the parent `fact:ready`, which releases its ready sub-issues; each subtask is refreshed when it starts and only asks again if new open questions appear. Unanswered questions wait without a timeout.
 
    Today (M2-04), with no planner yet, the switch is `require_plan_approval` in `project.yaml` (default true), overridden by the same field in a task's front matter, and passed to the run in `RunInput`. When it is on, `Standard` opens an `approve_plan` gate before any workspace exists, showing the task's title, path and acceptance criteria. Approve goes on; reject ends the run `dropped`. Editing the plan from the gate comes with the planner (M5). fact's own project turns the switch off: setting `status: ready` on a task file is already the approval.
 
@@ -20,6 +20,16 @@ Planning is everything before execution: refreshing the issue against today's co
 **Dependencies drive scheduling.** An issue runs only when every issue it depends on has merged. The scheduler takes ready issues in dependency order, then by priority, within the caps. On GitHub, dependencies use sub-issues and blocked-by links where available, otherwise a `Depends on #n` list in the plan; on Linear, its blocking relations.
 
 Today (M2-07, GitHub Issues since M2-09), each tick takes the tasks that are ready (file tasks `ready` on the default branch, or open issues labelled `fact:ready`) with every dependency done and that have never had a run, orders them by dependency depth, then by id (file ids, then issue numbers; no priority yet), and starts them within `concurrency.max_runs` and the project's `max_runs`. A task whose run failed, was dropped or had its PR closed is not started again by the scheduler; a person restarts it with `fact run`. The scheduler is created off: `fact scheduler on` turns it on.
+
+**Parent issues and sub-issues** (decided 26 Nov 2026, not built yet: today the GitHub source ignores sub-issue links and runs any `fact:ready` issue whose blocked-by dependencies are done).
+
+- fact runs only issues labelled `fact:ready`, never anything else.
+- **The parent's label is the gate, transitively.** A sub-issue runs only when it and every ancestor are `fact:ready`. A ready sub-issue under a `fact:planned` parent waits, so approving the plan is one label change on the parent.
+- **Sub-issues are dependencies of their parent.** Only open sub-issues count: a closed one, whatever its close reason, is out of the parent's way. Once none is open, the ready parent runs as a normal task, for example an integration or verification pass.
+- **A run with nothing to do succeeds.** It ends `no_changes`: no PR, the issue is closed as completed with a comment saying why, and the `run_finished` notification has severity `warning` so a person can inspect it.
+- **Epics** (`type:epic`) have no work of their own. Once no sub-issue is open and the epic is `fact:ready`, fact closes it as completed without a run.
+- **Blocked-by links stay strict.** A blocker closed as completed unblocks its dependent. A blocker closed for any other reason (not planned, duplicate) does not: fact adds `fact:needs-human` to the dependent and comments which blocker it was, and never starts it on its own.
+- **`fact:needs-human` holds an issue until a person answers.** The scheduler never starts an issue carrying it and `fact run` refuses one. Only a person's answer clears it: answering the gate with `fact gate`, or removing the label by hand. Run ends never remove it, so a dropped or closed run on an issue that needed a person still shows it if the task is started again.
 
 **Where you talk to the planner.** In v0, from Claude through the fact MCP server, or on the issue itself; in v1, also from the web UI, and later Slack or Discord.
 
@@ -37,6 +47,8 @@ The factory exposes an MCP server with these tools:
 | `run_status` | Progress, cost and PR links for a run |
 
 Nothing reaches the tracker until you confirm in the conversation, and new issues have no fact:ready label, so nothing runs until you add it.
+
+**Until M5: plan in Claude Code with skills.** Grilling (`/grill-with-docs`) updates `docs/spec/` as decisions are made; `/to-spec` writes the parent issue and `/to-tickets` its sub-issues, after you confirm the breakdown in the conversation. Leaf issues are created `fact:ready`, parents `fact:planned`. Rules for agents are in `docs/agents/issue-tracker.md`.
 
 **v1: planning as a workflow**
 

@@ -6,7 +6,7 @@
 | --- | --- |
 | Name | The project is called **fact**: `.fact/` folders, `fact.yaml`, `fact:` labels, `@fact` mentions, `fact/` branches |
 | Plan approval | A workflow switch; on for new issues and whenever grilling needs your input |
-| Where specs live | In the issue description, as the latest plan. PRs describe the code as built, which can differ, and one issue may need several commits or PRs |
+| Where specs live | The system design in `docs/spec/`, kept current (planning updates it as decisions are made); a feature's spec and plan in its issue description, as the latest plan. PRs describe the code as built, which can differ, and one issue may need several commits or PRs |
 | Multi-repo | Supported by the design, not needed yet. The first project is fact itself (one repository); the mobile app (React Native front, FastAPI backend) is the likely first two-repository project |
 | Notifications | Desktop notifications from the web app while it is open; Slack and Discord later |
 | Harness and budget | Claude Code first, its spend read from Claude Code's own usage reporting; budget in USD per day per project. OpenCode, Pi and more models later |
@@ -28,6 +28,8 @@
 - **Bootstrap tasks:** until fact ingests GitHub Issues, tasks are markdown files in tasks/\<milestone>/, one file per commit with its context update, dependencies in front matter. Claude Code runs them until fact can.
 - **Planner:** its own milestone (M5). Until then Claude Code in the repository is the planner, with skills.
 - **Missing task files:** a dependency id whose task file is gone counts as done if its number is below the highest remaining one in its milestone, or its milestone is below the highest present (`FileTaskSource`, M1-02). Finished tasks can then be deleted without rewriting `depends_on`. Cost: `validate()` cannot catch typos below that bound; ids above it are errors. `validate()` runs as a CI test on the real `tasks/` folder.
+- **Parent issues (26 Nov 2026):** fact runs only `fact:ready` issues; a sub-issue also needs every ancestor `fact:ready`, so a parent's label gates its plan. A parent's open sub-issues are its dependencies; it then runs as a normal task, and a run with nothing to do ends `no_changes` (success, warning notification). `type:epic` parents are closed without a run. Details in `08-planning.md`.
+- **`fact:needs-human` (26 Nov 2026):** set by the factory on an issue it will not touch again until a person acts (a gate, a failed or `needs_human` run, a blocker closed without completing). Only a person's answer clears it (`fact gate`, or removing the label); the scheduler skips such issues and `fact run` refuses them. `fact:running` is retired. Details in `12-integrations.md`.
 - **Human actions:** fact needs a way to request and track actions only a person can do, such as downloading the GitHub App private key. In the backlog.
 
 **Still open**

@@ -2,7 +2,7 @@
 
 A project is a set of repos, and a run works on all of them at once in one workspace, producing one change set of PRs.
 
-**Terms.** A *project* is a factory concept: one product, with its workflows, triage rules and budgets. A *repository* is a GitHub repo. A project has one or more repositories, and a run can touch several of them, so every link the factory shows (branch, PR, CI run) belongs to one repository. Linear projects and GitHub Projects are only mapped to factory projects, never the same thing.
+**Terms.** A *project* is a factory concept: one product, with its workflows, triage rules and budgets. A *repository* is a GitHub repo. A project has one or more repositories, and a run can touch several of them, so every link the factory shows (branch, PR, CI run) belongs to one repository. Linear projects and GitHub Projects are only mapped to factory projects, never the same thing. A *task* is an issue (or task file) fact may run. A *parent issue* has sub-issues, which are its dependencies; an *epic* (`type:epic`) is a parent with no work of its own. Sub-issues and blocked-by links are different: see `08-planning.md`.
 
 | Entity | What it is | Key fields |
 | --- | --- | --- |

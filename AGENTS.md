@@ -141,7 +141,7 @@ fact works on its own tasks, so the running factory is never the code an agent e
 
 ### Issue tracker
 
-Tickets are GitHub issues on `Kahncode/fact`, specced in the issue body, created with `fact:planned`. See `docs/agents/issue-tracker.md`.
+Tickets are GitHub issues on `Kahncode/fact`, specced in the issue body: leaf issues are created `fact:ready`, parent issues `fact:planned` (the parent's label gates its sub-issues). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -180,7 +180,7 @@ Single-context, with `docs/spec/05-domain-model.md` as the glossary and the deci
 
 ### 3. Git workflow
 
-Branch first, before editing any files:
+Branch first, before editing any files (planning sessions that only edit docs follow `docs/agents/domain.md` instead: stay on the current branch unless it is `main`):
 
 ```bash
 git checkout -b feat/<task-name>
