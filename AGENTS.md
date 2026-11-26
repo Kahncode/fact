@@ -33,7 +33,7 @@ fact/
 ├── cli/                   fact.cli: the `fact` Typer command
 │   (each package: src/fact/<name>/ and tests/)
 ├── scripts/               Python dev scripts (task loop) and their tests/
-├── web/                   React UI (from M3)
+├── web/                   React UI (from M4)
 ├── .fact/                 fact's own project config, workflows and prompts
 ├── docs/spec/             design, one file per section (start at README.md)
 ├── tasks/                 backlog.md, and the file tasks left from the M0–M2 bootstrap

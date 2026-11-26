@@ -49,7 +49,7 @@ Removing `fact:ready` from an issue with a run in progress does not stop the run
 - PR description: the issue, the spec, what changed, test results, the run link, cost, and links to the sibling PRs.
 - CI: poll the check runs and commit statuses of the PR's head commit until all finish; failures go to a fresh `fix_ci` agent session with the failing jobs' links and log tails, whose fix is pushed to the same PR before CI is awaited again (`until_ci_green`, see `06-workflow-authoring.md`).
 - Comments: a PR comment that mentions the factory sends a signal to the run, which starts an address-comment session.
-- Merge: done by the factory, with no agent, when the change set is classified auto\_merge and CI is green; otherwise you merge. The factory's own repo always needs your merge.
+- Merge: done by the factory, with no agent, when the change set is classified auto\_merge and CI is green; otherwise you merge. The factory's own repo is classified like any other (`14-dogfooding-and-safety.md`).
 
 **GitHub App setup (v0)**
 

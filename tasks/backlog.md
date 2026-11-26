@@ -30,10 +30,11 @@ It probably builds on the gate and notification work in M2 (M2-01 to M2-03).
 
 ## Later milestones (from the spec)
 
-- M3 UI: inbox, runs, run detail with stage graph, live logs, notifications.
-- M4: classification and auto-merge, `@fact` comment trigger, multi-repo change sets.
-- M5 Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner (`plan-tasks` skill).
-- M6 Hardening: Docker runner, Codex harness, budgets that pause runs, Costs view.
+- M3 Classify and auto-merge.
+- M4 UI: the web app covers everything a person does.
+- M5: `@fact` comment trigger, multi-repo change sets.
+- M6 Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner (`plan-tasks` skill).
+- M7 Hardening: Docker runner, Codex harness, budgets that pause runs.
 - Linear task source: in the spec, not yet scheduled.
 
 ## Ideas
@@ -89,3 +90,26 @@ It probably builds on the gate and notification work in M2 (M2-01 to M2-03).
 - **Issue branch names across repositories (from M2-08 review; settled in M2-09, unattended).** A project reads issues from exactly one repository (`task_source.repo`), so `fact/gh-<n>` is unique within it; issues of other repositories are only read as dependencies, never run by that project. Revisit (put the repository in the branch name) if a project ever takes tasks from several repositories.
 - **`report_status` reads the project config from the working tree (from M2-08 review).** `fact run` and the scheduler read `.fact/project.yaml` from `origin/<default>`, but `report_status` reads it from the project's local checkout, which may be on another branch. Not settled by M2-11, which made GitHub write-backs real: a checkout on a branch whose `task_source` differs would write to the wrong place. Settle it, for example by carrying the source in `ReportStatusInput`.
 - Usage limits (M2-13): `PUT /api/v1/usage/{account}` is last-write-wins by arrival, so a long run reporting after a shorter, later one can put an older window state back (such as `utilization 1.0` after a reset); skip an incoming window whose `resets_at` is older than the stored one, or send the time it was observed. `LIMIT_TEXT_RE` also matches an API 429 ("rate limit"), so a transient 429 error becomes a 30-minute `rate_limited` pause rather than `failed_error`. The table has no `rejected` column (the model allows no `Boolean`): a refused window shows only its utilization; M2-14 may want it, stored as an `Integer`. A usage-limit pause sends no notification. `rate_limited` needs the run to have failed: a rejected `rate_limit_event` followed by a successful result is not a limit (unattended decision; the task asked for rejected events alone). `AgentSteps.agent` was moved out of `workflow.py` (~80 lines) to keep it under 300 lines; done unattended without asking. Acceptance was checked with tests, not a live fact run. M2-13 was run with `status: planned` (invoked explicitly).
+
+## Web presence
+
+- **Self-generating landing page and public docs.** The landing page on `sofact.dev` (hosted apart from the app at `app.sofact.dev`) is written and kept current by the factory itself, on a schedule, as fact grows: feature pages showcasing what fact does, and public docs (useful to client agents writing a project's `.fact/` config), all in the brand voice. Needs a brand voice guide and a workflow that regenerates and opens a PR.
+
+## Notifications
+
+- Address notifications to a person (the one who started the run, or the assignee) instead of the whole project, once user accounts exist.
+- Per-user notification preferences, reminders, quiet hours, Slack and Discord (spec `11-ui-and-notifications.md`).
+
+## Insights ideas (from Warp Factories and Factory, `docs/research/2026-11-software-factory-ux.md`)
+
+- Autonomy: share of merged PRs with no human code push (Warp); autonomy ratio avg/p50/p90 (Factory).
+- PR cycle time, median per stage (kickoff → PR, first review, merge).
+- Cost per PR: median, by PR size (S/M/L/XL at 100/500/1,000 changed lines), most expensive PRs, split by cost source.
+- Opened vs merged PRs over time; run breakdown by workflow, status, trigger and model.
+- Spend by who triggered the run; tokens and cost per model per day.
+- Tool calls, skills, MCP and hook usage per session; user turns per session.
+- Files created/edited by language, commits and PRs created per day.
+- Scorer cards (LLM judge per run) and benchmark suites replaying past tasks against new factory versions (spec v0.2).
+- Self-improvement: follow-up runs that open PRs on fact's own workflows and prompts, listing the regressions they address.
+- Usage windows over time, with alerts at 80% and 100%.
+- Insights per organization, once organizations exist.

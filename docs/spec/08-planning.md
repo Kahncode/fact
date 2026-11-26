@@ -13,7 +13,7 @@ Planning is everything before execution: refreshing the issue against today's co
 5. **Break down**: subtasks exist to keep each agent's context small, because quality degrades fast when one session carries too much. Work bigger than one small change becomes sub-issues (GitHub sub-issues or Linear sub-issues), each small enough for one low-complexity run, linked by dependencies. Each subtask is one PR; a dependent subtask waits until the one before it has merged (stacked PRs later). Sub-issues are created `fact:ready` under a parent created `fact:planned`: the parent's label is the gate (see Parent issues below).
 6. **Approve**: the workflow switch `require_plan_approval` adds a gate where you approve or edit the plan. It is on for new issues and whenever grilling needed your input; off lets a fully resolved, trivial plan go straight to execution. Approving a parent plan means setting the parent `fact:ready`, which releases its ready sub-issues; each subtask is refreshed when it starts and only asks again if new open questions appear. Unanswered questions wait without a timeout.
 
-   Today (M2-04), with no planner yet, the switch is `require_plan_approval` in `project.yaml` (default true), overridden by the same field in a task's front matter, and passed to the run in `RunInput`. When it is on, `Standard` opens an `approve_plan` gate before any workspace exists, showing the task's title, path and acceptance criteria. Approve goes on; reject ends the run `dropped`. Editing the plan from the gate comes with the planner (M5). fact's own project turns the switch off: setting `status: ready` on a task file is already the approval.
+   Today (M2-04), with no planner yet, the switch is `require_plan_approval` in `project.yaml` (default true), overridden by the same field in a task's front matter, and passed to the run in `RunInput`. When it is on, `Standard` opens an `approve_plan` gate before any workspace exists, showing the task's title, path and acceptance criteria. Approve goes on; reject ends the run `dropped`. Editing the plan from the gate comes with the planner (M6). fact's own project turns the switch off: setting `status: ready` on a task file is already the approval.
 
 **Acceptance criteria are the contract.** Each criterion is checkable: a test to add or pass, a command and its expected result, or a behaviour a reviewer can verify. The implementation agent works to them, the agent review checks each one, and the run graph shows which passed.
 
@@ -48,7 +48,7 @@ The factory exposes an MCP server with these tools:
 
 Nothing reaches the tracker until you confirm in the conversation, and new issues have no fact:ready label, so nothing runs until you add it.
 
-**Until M5: plan in Claude Code with skills.** Grilling (`/grill-with-docs`) updates `docs/spec/` as decisions are made; `/to-spec` writes the parent issue and `/to-tickets` its sub-issues, after you confirm the breakdown in the conversation. Leaf issues are created `fact:ready`, parents `fact:planned`. Rules for agents are in `docs/agents/issue-tracker.md`.
+**Until M6: plan in Claude Code with skills.** Grilling (`/grill-with-docs`) updates `docs/spec/` as decisions are made; `/to-spec` writes the parent issue and `/to-tickets` its sub-issues, after you confirm the breakdown in the conversation. Leaf issues are created `fact:ready`, parents `fact:planned`. Rules for agents are in `docs/agents/issue-tracker.md`.
 
 **v1: planning as a workflow**
 
