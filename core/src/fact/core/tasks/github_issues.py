@@ -194,6 +194,11 @@ class GitHubIssuesSource(GitHubIssueWrites):
         async with self._client(self.repo) as client:
             return await self._task(client, issue)
 
+    async def is_closed(self, key: str) -> bool:
+        """Whether issue `key` is closed, for any reason; an issue GitHub no longer shows counts as closed."""
+        issue = await self._issue(key)
+        return issue is None or issue.get("state") == "closed"
+
     async def deps_done(self, task: Task) -> bool:
         return not await self._waiting_on(task)
 

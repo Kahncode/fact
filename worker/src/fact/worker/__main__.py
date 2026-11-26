@@ -19,6 +19,7 @@ from fact.core.settings import Settings, get_settings
 from fact.worker.activities.agent import AgentActivities
 from fact.worker.activities.change_set import ChangeSetActivities
 from fact.worker.activities.ci import CIActivities
+from fact.worker.activities.classify import ClassifyActivities
 from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.gates import GateActivities
@@ -104,6 +105,7 @@ def _activity_workers(
     change_set = ChangeSetActivities(github, reporter)
     control_steps = ControlActivities(settings.api_url, http, settings)
     task_status = TaskStatusActivities(settings)
+    classify = ClassifyActivities(settings)
     gates = GateActivities(settings.api_url, http)
     notify = NotifyActivities(settings.api_url, http)
     handoff = HandoffActivities(settings.api_url, http)
@@ -130,6 +132,7 @@ def _activity_workers(
             control_steps.record_run_waiting,
             control_steps.record_run_finished,
             task_status.report_status,
+            classify.classify_signals,
             gates.record_gate_opened,
             gates.record_gate_answered,
             notify.notify,

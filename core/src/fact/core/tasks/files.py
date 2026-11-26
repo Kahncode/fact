@@ -170,6 +170,11 @@ class FileTaskSource:
     async def get(self, key: str) -> Task | None:
         return await asyncio.to_thread(self.find, key)
 
+    async def is_closed(self, key: str) -> bool:
+        """Tell whether the task is closed: a file task is closed once its file is gone (finished) or its status is `done`."""
+        status = await asyncio.to_thread(self.status, key)
+        return status in {None, "done"}
+
     def status(self, key: str) -> str | None:
         entry = self._entries().get(key)
         return entry.status if entry else None
