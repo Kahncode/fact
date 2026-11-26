@@ -34,6 +34,7 @@ PROJECT_YAML = (
 TASK = "---\nid: {id}\ntitle: t\ntype: feature\nstatus: ready\ndepends_on: []\n---\n\n## Goal\n\nDo it.\n"
 WAIT_S = 20.0
 MERGED = {"status": "finished", "outcome": "merged", "ended_at": "2026-11-26T00:00:00Z"}
+FAILED = {**MERGED, "outcome": "failed"}
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -114,7 +115,7 @@ async def test_ticks_start_each_task_once_within_the_cap(app: FastAPI) -> None:
                 env.client,
                 task_queue=CONTROL_QUEUE,
                 workflows=[SchedulerTick],
-                activities=[acts.find_ready_tasks, acts.start_scheduled_run],
+                activities=[acts.find_ready_tasks, acts.check_claude_usage, acts.start_scheduled_run],
             ),
             Worker(env.client, task_queue=workflow_queue(PROJECT), workflows=[StubStandard]),
         ):
@@ -129,6 +130,42 @@ async def test_ticks_start_each_task_once_within_the_cap(app: FastAPI) -> None:
     assert second.started == []
     assert third.started == ["run-task-M1-02-1"]  # never M1-01 again
     assert fourth.started == []
+
+
+async def test_ticks_stop_restarting_a_task_after_three_failed_runs(app: FastAPI) -> None:
+    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    transport = httpx.ASGITransport(app=app)
+    async with (
+        env_cm as env,
+        httpx.AsyncClient(transport=transport, base_url="http://test") as http,
+    ):
+        app.state.temporal = _Connection(env.client)
+        acts = SchedulerActivities("http://test", http)  # no usage gate: OFF
+        async with (
+            Worker(
+                env.client,
+                task_queue=CONTROL_QUEUE,
+                workflows=[SchedulerTick],
+                activities=[acts.find_ready_tasks, acts.check_claude_usage, acts.start_scheduled_run],
+            ),
+            Worker(env.client, task_queue=workflow_queue(PROJECT), workflows=[StubStandard]),
+        ):
+            started = []
+            for _ in range(4):  # M1-01 fails three times, then the cap moves the scheduler on to M1-02
+                started += (await _tick(env.client)).started
+                newest = (await http.get("/api/v1/runs")).json()[0]
+                await http.patch(f"/api/v1/runs/{newest['id']}", json=FAILED)
+            preview = (await http.get("/api/v1/scheduler/preview")).json()
+            await http.post("/api/v1/runs/start", json={"task_key": "task:M1-01", "project": PROJECT})  # `fact run`
+            by_hand = (await http.get("/api/v1/runs")).json()[0]
+            await http.patch(f"/api/v1/runs/{by_hand['id']}", json=FAILED)
+            after_reset = (await _tick(env.client)).started
+
+    assert started == ["run-task-M1-01-1", "run-task-M1-01-2", "run-task-M1-01-3", "run-task-M1-02-1"]
+    m1_01 = next(p for p in preview["tasks"] if p["task"]["task_id"] == "M1-01")
+    assert m1_01["hold"] == "failure_cap"
+    assert by_hand["trigger"] == "manual"
+    assert after_reset == ["run-task-M1-01-5"]  # the manual run reset the count: one failure, retried
 
 
 async def test_schedule_created_once_and_follows_the_interval(settings: Settings) -> None:

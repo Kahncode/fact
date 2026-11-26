@@ -40,7 +40,7 @@ uv run fact runs
 uv run fact status run-task-M1-02-1
 ```
 
-A project whose `.fact/project.yaml` sets `task_source.kind: github` takes its tasks from GitHub issues instead: `uv run fact run gh:owner/repo#12` starts issue 12 (it needs the GitHub App, below). fact's own project still uses task files.
+A project whose `.fact/project.yaml` sets `task_source.kind: github` takes its tasks from GitHub issues instead: `uv run fact run gh:owner/repo#12` starts issue 12 (it needs the GitHub App, below). fact's own work is GitHub issues on `Kahncode/fact`.
 
 `fact run` reads a file task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any, or another reason it waits (`Waiting:`).
 
@@ -65,7 +65,7 @@ uv run fact run task:M1-02
 
 The dropped run ends `dropped`: it leaves a handoff note (the reason, the last stage reached, the PR links, each agent session's summary), removes its workspace and keeps its branch and PR on GitHub. The next run starts from that branch, reuses the PR and gets the note in its prompts. Commits the old run never pushed are lost.
 
-A project can require you to approve each task's plan before work starts: set `require_plan_approval` in its `.fact/project.yaml` (default true), or in a task's front matter to override it. The run then waits at an `approve_plan` gate; rejecting it ends the run `dropped`. fact's own project turns this off, since marking a task `status: ready` already approves it.
+A project can require you to approve each task's plan before work starts: set `require_plan_approval` in its `.fact/project.yaml` (default true), or in a task's front matter to override it. The run then waits at an `approve_plan` gate; rejecting it ends the run `dropped`. fact's own project turns this off, since labelling an issue `fact:ready` already approves it.
 
 To see what needs you, check your inbox. A run notifies you when it waits at a gate, when its PRs are ready for review, and when it fails or gives up:
 
@@ -79,7 +79,7 @@ uv run fact inbox read 3
 
 ## Letting fact pick up work
 
-Instead of starting each task by hand, turn the scheduler on:
+Instead of starting each task by hand, keep `fact dev` running and turn the scheduler on; this is how to run every ready task:
 
 ```
 uv run fact scheduler on
@@ -87,7 +87,14 @@ uv run fact scheduler status
 uv run fact scheduler off
 ```
 
-Every 30 seconds it starts the tasks marked `status: ready` on the default branch (or, for a GitHub Issues project, the open issues labelled `fact:ready`) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`). A task that has already had a run is never started again by the scheduler, even if that run failed or was dropped; restart it with `fact run`. The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. See `docs/ARCHITECTURE.md`.
+Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`).
+
+- A task whose runs failed is retried, up to 3 failed runs in a row (`concurrency.max_failed_runs`); then it waits for you to start it with `fact run`, which resets the count. A task whose last run ended any other way (needs you, dropped, PR merged or closed) is never restarted by the scheduler.
+- It leaves part of your Claude subscription to you: while a usage window is at 90% or more (five-hour) or 95% or more (weekly), it starts no new run (`claude.reserve` in `fact.yaml`; `claude.usage_gate: false` turns this off, and it is off when `ANTHROPIC_API_KEY` is set). It reads usage from your local Claude Code login only when a task would start. Runs already going are not touched.
+- `fact scheduler status` shows what the next tick would start, why the others wait, and the usage it last read with each window's reset time.
+- On Windows, the worker keeps the PC from sleeping while a run is active (`worker.keep_awake`).
+
+The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. After upgrading from a version before the failure cap, check `fact scheduler status` before turning it on: tasks whose past runs failed are retried. See `docs/ARCHITECTURE.md`.
 
 ## Workspaces
 
@@ -107,7 +114,7 @@ To set up a task repository, `uv run fact github labels sync <owner/repo>` creat
 
 ## The API
 
-Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run dropped with `POST /api/v1/runs/{id}/drop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
+Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run dropped with `POST /api/v1/runs/{id}/drop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start and `GET /api/v1/scheduler/preview` what its next tick would do. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
 
 Every response carries an `X-Request-ID` header (send your own to propagate it), and each request produces one `request_completed` log line. Set `FACT_LOG_LEVEL` to override the log level (default DEBUG locally, INFO in `test` and `prod`); see `docs/ARCHITECTURE.md` for logging details.
 
@@ -121,5 +128,5 @@ The worker loads each registered project's workflows from the latest commit on i
 
 - **Design:** `docs/spec/`, one file per section, starting from `docs/spec/README.md`.
 - **Architecture:** `docs/ARCHITECTURE.md`, index of components and what exists in code today.
-- **Work:** `tasks/`, one markdown file per task grouped by milestone. `tasks/backlog.md` holds ideas not yet planned.
+- **Work:** GitHub issues on `Kahncode/fact`. `tasks/backlog.md` holds ideas not yet planned; `tasks/README.md` describes the task-file format for projects that use files.
 

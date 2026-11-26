@@ -12,6 +12,7 @@ from fact.api.run_start import find_task, run_input
 from fact.api.scheduler import _ready_in
 from fact.core.github import GitHubAppConfigError, github_client
 from fact.core.github import app as github_app
+from fact.core.scheduler import Hold
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -120,4 +121,9 @@ async def test_start_without_a_github_app_is_a_bad_gateway(
 
 async def test_scheduler_reads_ready_issues(settings: Settings) -> None:
     ready = await _ready_in(settings, settings.projects[0])
-    assert [(t.task_key, t.task_id) for t in ready] == [("gh:acme/app#12", "12")]
+    # #13 waits on the open #12: listed, held for the preview
+    assert [(t.task_key, t.task_id, t.hold) for t in ready] == [
+        ("gh:acme/app#12", "12", None),
+        ("gh:acme/app#13", "13", Hold.DEPENDENCY),
+    ]
+    assert ready[1].waiting_on == ["gh:acme/app#12"]

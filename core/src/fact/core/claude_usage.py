@@ -3,15 +3,17 @@ Claude Code subscription usage: the 5-hour and weekly windows, and when they res
 
 Two sources feed the same `ClaudeUsage` model:
 
-- `fetch_claude_usage(token)` calls the account's usage endpoint with an OAuth token. fact passes the token from a
-  secret; nothing here reads it from disk. The endpoint is undocumented and may change.
+- `fetch_claude_usage(token)` calls the account's usage endpoint with an OAuth token: the scheduler's usage gate passes
+  `read_cli_token()`, the token of the local Claude Code login. The endpoint is undocumented and may change.
 - `parse_rate_limit_info(info)` reads the `rate_limit_event` that `claude -p --output-format stream-json` emits, which
   needs no token and costs nothing extra when a run is already in progress.
 
 `ClaudeUsage.resume_at()` says when everything is below a threshold again, so a caller can sleep (or a workflow
 can start a durable timer) until exactly then.
 
-`read_cli_token()` is a local-development convenience that reads the token Claude Code itself stored.
+`ClaudeUsage.full(thresholds)` applies one threshold per window (the scheduler's reserves).
+
+`read_cli_token()` reads the token Claude Code itself stored (a `claude setup-token` token is refused by the endpoint).
 """
 
 import http.client
@@ -20,6 +22,7 @@ import os
 import re
 import time
 import urllib.request
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -67,6 +70,10 @@ class ClaudeUsage(BaseModel):
     def blocked(self, threshold: float) -> tuple[UsageWindow, ...]:
         """Windows at or over the threshold (0..1), or already rejecting."""
         return tuple(w for w in self.windows if w.is_blocked(threshold))
+
+    def full(self, thresholds: Mapping[str, float]) -> tuple[UsageWindow, ...]:
+        """Windows at or over their own threshold (0..1; 1.0 for a window not listed), or already rejecting."""
+        return tuple(w for w in self.windows if w.is_blocked(thresholds.get(w.name, 1.0)))
 
     def resume_at(self, threshold: float, margin: timedelta = timedelta(seconds=90)) -> datetime | None:
         """When every blocked window has reset (plus a margin); None when nothing is blocked."""
@@ -155,10 +162,10 @@ def fetch_claude_usage(token: str, *, timeout: float = 15) -> ClaudeUsage:
 
 def read_cli_token(config_dir: Path | None = None) -> str:
     """
-    Local development only: the access token Claude Code stored in `<config dir>/.credentials.json`.
+    Read the access token the local Claude Code login stored in `<config dir>/.credentials.json`.
 
     It is short-lived and only the `claude` CLI refreshes it. Not available where the CLI keeps credentials in a
-    keychain (macOS); fact itself uses a secret instead.
+    keychain (macOS).
     """
     folder = config_dir or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
     try:

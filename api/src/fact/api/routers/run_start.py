@@ -7,7 +7,6 @@ from fact.api.run_start import (
     FoundTask,
     StartError,
     find_task,
-    has_run,
     latest_handoff,
     next_run_number,
     run_input,
@@ -15,14 +14,16 @@ from fact.api.run_start import (
     workflow_id,
     workflow_type,
 )
+from fact.api.scheduler import run_histories
 from fact.api.task_ref import TaskReadError
 from fact.api.temporal import temporal_client
 from fact.core.activity_contract import workflow_queue
 from fact.core.artifacts import LocalArtifactStore
-from fact.core.enums import RunOutcome, RunStatus
+from fact.core.enums import RunOutcome, RunStatus, RunTrigger
 from fact.core.logging import get_logger
 from fact.core.models import Project, Run, new_id
 from fact.core.project_config import ConfigError
+from fact.core.scheduler import run_history_hold
 from fact.core.settings import Settings
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -44,7 +45,7 @@ class RunStart(BaseModel):
     task_key: str
     project: str | None = None
     override_deps: bool = False
-    only_if_never_run: bool = False  # the scheduler's start: 409 if the task already has a run (see `has_run`)
+    scheduled: bool = False  # the scheduler's start: 409 unless the scheduler may still start it (`scheduler_refusal`)
 
 
 class RunStarted(BaseModel):
@@ -71,7 +72,17 @@ async def _find(settings: Settings, body: RunStart) -> FoundTask:
     return found
 
 
-async def _reserve(session: AsyncSession, found: FoundTask, wf_type: str) -> Run:
+async def scheduler_refusal(session: AsyncSession, settings: Settings, found: FoundTask) -> str:
+    """Why the scheduler may no longer start this task (a run in progress or ended, or the failure cap); "" if it may."""
+    key = found.check.task.key
+    history = (await run_histories(session, found.ref.name, key)).get((found.ref.name, key), [])
+    offered, failed, hold = run_history_hold(history, settings.concurrency.max_failed_runs)
+    if not offered:
+        return f"{key} already has a run"
+    return f"{key} failed {failed} runs in a row: start it with `fact run`" if hold else ""
+
+
+async def _reserve(session: AsyncSession, found: FoundTask, wf_type: str, trigger: RunTrigger) -> Run:
     """Insert the run as `queued` under the next free workflow id; its first activity updates this row."""
     project = await session.scalar(select(Project).where(Project.name == found.ref.name))
     if project is None:
@@ -87,6 +98,7 @@ async def _reserve(session: AsyncSession, found: FoundTask, wf_type: str) -> Run
             workflow_type=wf_type,
             status=RunStatus.QUEUED,
             complexity=task.complexity,
+            trigger=trigger,
         )
         session.add(run)
         try:
@@ -116,10 +128,11 @@ async def start_run(body: RunStart, request: Request, session: Session, store: S
     found = await _find(settings, body)
     client = await temporal_client(request)  # after the checks: a refusal needs no Temporal
     wf_type = workflow_type(found)
-    if body.only_if_never_run and await has_run(session, found.ref.name, found.check.task.key):
-        raise HTTPException(status.HTTP_409_CONFLICT, f"{found.check.task.key} already has a run")
+    if body.scheduled and (refusal := await scheduler_refusal(session, settings, found)):
+        raise HTTPException(status.HTTP_409_CONFLICT, refusal)
+    trigger = RunTrigger.SCHEDULER if body.scheduled else RunTrigger.MANUAL
     for _ in range(RESERVE_ATTEMPTS):
-        run = await _reserve(session, found, wf_type)
+        run = await _reserve(session, found, wf_type, trigger)
         handoff = await latest_handoff(session, store, run.project_id, run.task_key)
         try:
             await client.start_workflow(

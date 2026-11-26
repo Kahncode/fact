@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from fact.core.enums import RunOutcome, RunStatus, StepKind, StepOutcome, StepStatus
+from fact.core.enums import RunOutcome, RunStatus, RunTrigger, StepKind, StepOutcome, StepStatus
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -16,6 +16,7 @@ class RunCreate(BaseModel):
     complexity: str | None = None
     worker_version: str | None = None
     home_sha: str | None = None
+    trigger: RunTrigger = RunTrigger.MANUAL
 
 
 class RunUpdate(BaseModel):
@@ -94,6 +95,7 @@ class RunOut(BaseModel):
     status: str
     outcome: str | None
     complexity: str | None
+    trigger: str
     worker_version: str | None
     home_sha: str | None
     created_at: datetime

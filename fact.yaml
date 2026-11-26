@@ -17,6 +17,16 @@ concurrency:
   max_runs: 2
   scheduler_enabled: false
   scheduler_interval_seconds: 30
+  max_failed_runs: 3 # the scheduler stops restarting a task after this many failed runs in a row; `fact run` resets
+# The scheduler starts no run while a Claude usage window is inside its reserve (the share left to you). The gate
+# is off with usage_gate: false, or when ANTHROPIC_API_KEY is set for the worker (API billing, no windows).
+claude:
+  usage_gate: true
+  reserve:
+    five_hour: 0.10
+    weekly: 0.05 # seven_day, seven_day_opus and seven_day_sonnet
+worker:
+  keep_awake: true # Windows: no sleep while a run is queued, running or waiting
 projects:
   - name: fact
     home: Kahncode/fact

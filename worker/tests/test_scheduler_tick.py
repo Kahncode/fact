@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fact.core.activity_contract import CONTROL_QUEUE
 from fact.core.scheduler import (
+    CHECK_CLAUDE_USAGE,
     FIND_READY_TASKS,
     START_SCHEDULED_RUN,
     ProjectLoad,
@@ -15,6 +16,7 @@ from fact.core.scheduler import (
     StartScheduledRunInput,
     TickResult,
 )
+from fact.core.usage_gate import GateState, UsageCheck, UsageCheckInput
 from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.scheduler import SchedulerTick
 from temporalio import activity
@@ -42,6 +44,11 @@ async def find_ready_tasks() -> ReadyTasks:
     return READY
 
 
+@activity.defn(name=CHECK_CLAUDE_USAGE)
+async def check_claude_usage(_: UsageCheckInput) -> UsageCheck:
+    return UsageCheck(state=GateState.OK)
+
+
 @activity.defn(name=START_SCHEDULED_RUN)
 async def start_scheduled_run(spec: StartScheduledRunInput) -> str:
     started.append(spec.task_key)
@@ -62,7 +69,7 @@ async def test_tick_starts_in_order_within_the_caps() -> None:
             env.client,
             task_queue=CONTROL_QUEUE,
             workflows=[SchedulerTick],
-            activities=[find_ready_tasks, start_scheduled_run],
+            activities=[find_ready_tasks, check_claude_usage, start_scheduled_run],
         ),
     ):
         result = await env.client.execute_workflow(
@@ -81,7 +88,7 @@ async def test_tick_starts_in_order_within_the_caps() -> None:
 async def test_start_scheduled_run_answers(status: int, expected: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/runs/start"
-        assert json.loads(request.content) == {"task_key": "task:M1-02", "project": "acme", "only_if_never_run": True}
+        assert json.loads(request.content) == {"task_key": "task:M1-02", "project": "acme", "scheduled": True}
         return httpx.Response(status, json={"workflow_id": "run-task-M1-02-1"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:

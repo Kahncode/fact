@@ -1,8 +1,9 @@
 """
 The scheduler: the `fact-scheduler` Temporal Schedule starts a short `SchedulerTick` workflow on `control`.
 
-- `SchedulerTick` reads what may start (`find_ready_tasks`), orders it and applies the caps (`plan_starts`), and
-  starts each run through the API (`start_scheduled_run`).
+- `SchedulerTick` reads what may start (`find_ready_tasks`), orders it and applies the caps (`plan_starts`), checks
+  the Claude usage gate when something would start (`check_claude_usage`: a full window starts nothing), and starts
+  each run through the API (`start_scheduled_run`).
 - `ensure_schedule` runs at worker start: it creates the Schedule when missing (paused unless
   `concurrency.scheduler_enabled`) and moves its interval to `concurrency.scheduler_interval_seconds`. It never
   pauses or unpauses an existing Schedule: that is `fact scheduler on|off` or the Temporal UI. Only the interval is
@@ -20,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import CONTROL_QUEUE
     from fact.core.logging import get_logger
     from fact.core.scheduler import (
+        CHECK_CLAUDE_USAGE,
         FIND_READY_TASKS,
         SCHEDULE_ID,
         SCHEDULER_TICK,
@@ -31,6 +33,7 @@ with workflow.unsafe.imports_passed_through():
         plan_starts,
     )
     from fact.core.settings import Settings
+    from fact.core.usage_gate import GateState, UsageCheck, UsageCheckInput
     from temporalio.client import (
         Client,
         Schedule,
@@ -48,6 +51,7 @@ with workflow.unsafe.imports_passed_through():
 
 FIND_TIMEOUT = timedelta(minutes=3)  # a git fetch per project
 START_TIMEOUT = timedelta(minutes=1)
+USAGE_TIMEOUT = timedelta(seconds=30)
 TICK_TIMEOUT = timedelta(minutes=10)
 
 
@@ -61,9 +65,15 @@ class SchedulerTick:
             retry_policy=RetryPolicy(maximum_attempts=2),
             result_type=ReadyTasks,
         )
+        chosen = plan_starts(ready)
+        if not chosen:
+            return TickResult()
+        if reason := await self._usage_full():
+            workflow.logger.info("usage window full, starting nothing: %s", reason)
+            return TickResult(usage_full=reason)
         started: list[str] = []
         failed: list[str] = []
-        for task in plan_starts(ready):
+        for task in chosen:
             try:
                 workflow_id = await workflow.execute_activity(
                     START_SCHEDULED_RUN,
@@ -81,6 +91,22 @@ class SchedulerTick:
             else:
                 started.append(workflow_id)
         return TickResult(started=started, failed=failed)
+
+    @staticmethod
+    async def _usage_full() -> str:
+        """Why a full usage window holds every start; "" to start (unreadable usage is an error, not a block)."""
+        try:
+            usage = await workflow.execute_activity(
+                CHECK_CLAUDE_USAGE,
+                UsageCheckInput(now=workflow.now()),
+                start_to_close_timeout=USAGE_TIMEOUT,
+                retry_policy=RetryPolicy(maximum_attempts=1),  # the next tick asks again
+                result_type=UsageCheck,
+            )
+        except ActivityError:
+            workflow.logger.exception("usage gate failed; starting runs as usual")
+            return ""
+        return usage.reason if usage.state == GateState.FULL else ""
 
 
 def schedule_spec(settings: Settings) -> ScheduleSpec:

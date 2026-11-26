@@ -1,6 +1,10 @@
 """
 The scheduler: what it may start (`GET /scheduler/ready`, for its tick) and its Schedule's state, paused or not.
 
+- `GET /scheduler/preview`: what the next tick would start and why the others wait, with the usage gate's last answer.
+- `PUT /scheduler/usage`: the worker reports that answer after each usage check; it is kept in this process only.
+- `GET /scheduler/active`: runs queued, running or waiting, for the worker's keep-awake.
+
 The worker creates the `fact-scheduler` Schedule; this only describes, pauses and unpauses it.
 """
 
@@ -8,10 +12,11 @@ from datetime import datetime
 from typing import Annotated
 
 from fact.api.deps import get_session
-from fact.api.scheduler import find_ready
+from fact.api.scheduler import SchedulerPreview, active_by_project, find_ready, preview
 from fact.api.temporal import temporal_client
 from fact.core.scheduler import SCHEDULE_ID, ReadyTasks
 from fact.core.settings import Settings
+from fact.core.usage_gate import UsageCheck
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +68,28 @@ async def ready(request: Request, session: Session) -> ReadyTasks:
     """Tasks the scheduler may start, read from each project's default branch, and the runs counted against the caps."""
     settings: Settings = request.app.state.settings
     return await find_ready(settings, session)
+
+
+class ActiveRuns(BaseModel):
+    active: int
+
+
+@router.get("/scheduler/preview")
+async def scheduler_preview(request: Request, session: Session) -> SchedulerPreview:
+    """List the ready tasks in the order the next tick would start them, and why each one waits, if it does."""
+    settings: Settings = request.app.state.settings
+    usage: UsageCheck | None = getattr(request.app.state, "scheduler_usage", None)
+    return preview(await find_ready(settings, session), usage)
+
+
+@router.put("/scheduler/usage", status_code=status.HTTP_204_NO_CONTENT)
+async def put_scheduler_usage(body: UsageCheck, request: Request) -> None:
+    request.app.state.scheduler_usage = body
+
+
+@router.get("/scheduler/active")
+async def active_runs(session: Session) -> ActiveRuns:
+    return ActiveRuns(active=sum((await active_by_project(session)).values()))
 
 
 @router.get("/scheduler")

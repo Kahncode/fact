@@ -1,6 +1,8 @@
 # Tasks
 
-fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.yaml` has `task_source: {kind: github}`): an issue labelled `fact:ready` is a task the scheduler may start. Until M2, work was planned as markdown files here. The last one, M2-14, is run by hand with Claude Code (`next-task`); it then removes this folder's task tooling. The format below still applies to any project whose task source is `files`.
+fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.yaml` has `task_source: {kind: github}`): an issue labelled `fact:ready` is a task the scheduler may start. Run every ready task with `uv run fact dev` plus `uv run fact scheduler on`, or one with `uv run fact run gh:Kahncode/fact#<n>`. Until M2, fact's work was planned as markdown files here; `backlog.md` still holds ideas and problems not yet planned.
+
+This file describes the task file format for any project whose task source is `files` (`task_source: {kind: files}`): fact reads the tasks from that project's `tasks/` folder.
 
 ## Layout
 
@@ -49,25 +51,24 @@ What a neighbouring task does instead.
 - **status**
   - `planned`: written, not yet approved to run.
   - `ready`: approved. It may start once every `depends_on` task is `done`.
-  - `done`: still accepted, but a finished task's file is deleted rather than set to `done`: `next-task` does this, and so does fact's `mark_task_done`, in the task's own commit. A dependency whose file is gone counts as done when its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present (so validation cannot catch typos below that bound; an id above it is an error). CI validates the task folder as a test. While a task is running, its status lives in fact's DB, not in the file.
+  - `done`: still accepted, but a finished task's file is deleted rather than set to `done`: fact's `mark_task_done` does this, in the task's own commit. A dependency whose file is gone counts as done when its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present (so validation cannot catch typos below that bound; an id above it is an error). CI validates the task folder as a test. While a task is running, its status lives in fact's DB, not in the file.
 - **complexity** picks the model:
   - `trivial`: mechanical edits, Sonnet.
   - `standard`: normal feature work, Sonnet.
   - `complex`: design judgment or tricky concurrency, Opus.
 - **human_actions**: anything an agent cannot do, such as creating a key or installing a tool. The runner stops and asks before starting a task whose human actions aren't confirmed.
 - **require_plan_approval** (optional): `true` or `false` overrides the project's `require_plan_approval` for this task. When on, a fact run opens an `approve_plan` gate before any work. fact's own project sets it `false`, because `status: ready` is already the approval.
-- **resume** (optional, never written by hand): `"<start>..<end>"`, a commit range left unverified because a run of this task hit the Claude usage limit. `scripts/task_loop.py` restores the task file with this field and a `## Resume` section, and the task runs before any other runnable task to verify and finish that work.
 
 ## Running a task
 
-The `next-task` skill runs a task with Claude Code. From late M1, `fact run task:<id>` does the same.
+`fact run task:<id>` runs a task; with the scheduler on (`uv run fact scheduler on`), fact starts every `ready` task whose dependencies are done. A run:
 
-1. Check that every `depends_on` task is `done` and every `human_action` is confirmed.
-2. Create a branch `fact/task-<id in lower case>`.
-3. Read `CLAUDE.md`, the task, and only what its "Read first" lists.
-4. Implement until every acceptance criterion holds and lint, format and tests pass.
-5. Update the context (`CLAUDE.md`, `docs/spec/`, READMEs) where the change made it wrong. Delete the task's file (`git rm`) in the same commit. In a fact run, leave the file alone: fact deletes it after the checks pass.
-6. Commit and open a PR titled `<type>(<id>): <title>` (conventional commits; `feature`→`feat`, `chore`→`chore`, `bug`→`fix`). PRs are squash-merged, so each task lands on `main` as one commit with its context update. A person merges it.
+1. Checks that every `depends_on` task is `done` (`--force-deps` skips this) and every `human_action` is confirmed.
+2. Works on a branch `fact/task-<id in lower case>` in its own worktree.
+3. Gives the agent `CLAUDE.md`, the task, and what its "Read first" lists.
+4. Implements until every acceptance criterion holds and lint, format and tests pass.
+5. Updates the context (`CLAUDE.md`, `docs/spec/`, READMEs) where the change made it wrong, and deletes the task's file once the checks pass, in the same branch.
+6. Opens a PR titled `<type>(<id>): <title>` (conventional commits; `feature`→`feat`, `chore`→`chore`, `bug`→`fix`). PRs are squash-merged, so each task lands on `main` as one commit with its context update. A person merges it.
 
 ## How to split work
 

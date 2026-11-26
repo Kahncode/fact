@@ -227,9 +227,13 @@ async def test_start_runs_the_project_workflow(app: FastAPI, client: AsyncClient
 async def test_scheduler_start_refused_once_the_task_has_a_run(app: FastAPI, client: AsyncClient) -> None:
     fake = _FailingClient(RPCError("down", RPCStatusCode.UNAVAILABLE, b""))
     app.state.temporal = _Connection(fake)  # type: ignore[arg-type]
-    assert (await _start(client, task_key="task:M1-02", only_if_never_run=True)).status_code == HTTPStatus.BAD_GATEWAY
-    started = await _start(client, task_key="task:M1-02", only_if_never_run=True)  # the failed start does not count
+    assert (await _start(client, task_key="task:M1-02", scheduled=True)).status_code == HTTPStatus.BAD_GATEWAY
+    started = await _start(client, task_key="task:M1-02", scheduled=True)  # the failed start does not count
     assert started.status_code == HTTPStatus.CREATED, started.text
-    again = await _start(client, task_key="task:M1-02", only_if_never_run=True)
+    again = await _start(client, task_key="task:M1-02", scheduled=True)
     assert again.status_code == HTTPStatus.CONFLICT, again.text
-    assert (await _start(client, task_key="task:M1-02")).status_code == HTTPStatus.CREATED  # `fact run` still can
+    by_hand = await _start(client, task_key="task:M1-02")
+    assert by_hand.status_code == HTTPStatus.CREATED  # `fact run` still can
+    runs = {r["id"]: r["trigger"] for r in (await client.get("/api/v1/runs")).json()}
+    assert runs[started.json()["run_id"]] == "scheduler"
+    assert runs[by_hand.json()["run_id"]] == "manual"

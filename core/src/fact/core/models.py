@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any
 
 from fact.core.db import Base
-from fact.core.enums import RunStatus, StepStatus
+from fact.core.enums import RunStatus, RunTrigger, StepStatus
 from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,6 +61,7 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String(20), default=RunStatus.QUEUED, index=True)
     outcome: Mapped[str | None] = mapped_column(String(20))
     complexity: Mapped[str | None] = mapped_column(String(50))
+    trigger: Mapped[str] = mapped_column(String(20), default=RunTrigger.MANUAL, server_default=RunTrigger.MANUAL.value)
     worker_version: Mapped[str | None] = mapped_column(String(64))
     home_sha: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _ts(nullable=False, default_now=True)

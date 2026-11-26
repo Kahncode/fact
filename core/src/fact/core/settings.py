@@ -63,6 +63,21 @@ class ConcurrencySettings(_Section):
     max_runs: int = Field(default=2, ge=1)  # runs queued, running or waiting at once, all projects together
     scheduler_enabled: bool = False  # create `fact-scheduler` unpaused; then `fact scheduler on|off` decides
     scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # applied to the Schedule at worker start
+    max_failed_runs: int = Field(default=3, ge=1)  # the scheduler stops restarting a task after this many failed runs
+
+
+class ClaudeReserve(_Section):  # share of each Claude usage window the scheduler leaves to the person (0..1)
+    five_hour: float = Field(default=0.10, ge=0, le=1)
+    weekly: float = Field(default=0.05, ge=0, le=1)  # `seven_day`, `seven_day_opus` and `seven_day_sonnet`
+
+
+class ClaudeSettings(_Section):
+    usage_gate: bool = True  # the scheduler starts no run while a usage window is inside its reserve
+    reserve: ClaudeReserve = Field(default_factory=ClaudeReserve)
+
+
+class WorkerSettings(_Section):
+    keep_awake: bool = True  # Windows: keep the machine awake while a run is queued, running or waiting
 
 
 class RoutingSettings(_Section):
@@ -171,6 +186,8 @@ class Settings(BaseSettings):
     temporal: TemporalSettings = Field(default_factory=TemporalSettings)
     api: ApiSettings = Field(default_factory=ApiSettings)
     concurrency: ConcurrencySettings = Field(default_factory=ConcurrencySettings)
+    claude: ClaudeSettings = Field(default_factory=ClaudeSettings)
+    worker: WorkerSettings = Field(default_factory=WorkerSettings)
     projects: list[ProjectRef] = Field(default_factory=list)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     step_defaults: StepDefaultsSettings = Field(default_factory=StepDefaultsSettings)

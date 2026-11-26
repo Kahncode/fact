@@ -8,7 +8,7 @@ from fact.api.task_ref import TaskCheck, TaskReadError, check_task, project_task
 from fact.core.artifacts import ArtifactStore, handoff_key
 from fact.core.enums import RunOutcome, RunStatus
 from fact.core.logging import get_logger
-from fact.core.models import Project, Run
+from fact.core.models import Run
 from fact.core.project_config import ConfigError, ProjectConfig
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks import branch_name
@@ -79,16 +79,6 @@ async def latest_handoff(session: AsyncSession, store: ArtifactStore, project_id
 def counts_as_run() -> ColumnElement[bool]:
     """Match the runs that count: all but a start that never reached Temporal (see `_mark_start_failed`)."""
     return or_(Run.status != RunStatus.FINISHED, Run.started_at.is_not(None), Run.ended_at.is_not(None))
-
-
-async def has_run(session: AsyncSession, project: str, task_key: str) -> bool:
-    query = (
-        select(Run.id)
-        .join(Project, Project.id == Run.project_id)
-        .where(Project.name == project, Run.task_key == task_key, counts_as_run())
-        .limit(1)
-    )
-    return await session.scalar(query) is not None
 
 
 def temporal_link(settings: Settings, wf_id: str) -> str:

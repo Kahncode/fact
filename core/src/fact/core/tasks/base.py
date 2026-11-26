@@ -41,10 +41,11 @@ class TaskKey:
 
 @dataclass(frozen=True)
 class ReadyItem:
-    """A task the scheduler may start, with its dependency depth: shallower tasks start first."""
+    """A task marked ready, with its dependency depth (shallower tasks start first) and its dependencies not done."""
 
     task: Task
     depth: int = 0
+    waiting_on: tuple[str, ...] = ()  # keys; empty for a task the scheduler may start
 
 
 def parse_key(key: str) -> TaskKey:
@@ -78,8 +79,8 @@ class TaskSource(Protocol):
     A source whose state lives elsewhere (a file task's lives in its file and in fact's DB) may only log the writes.
     """
 
-    async def list_ready(self) -> list[ReadyItem]:
-        """Tasks marked ready whose dependencies are all done."""
+    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
+        """Tasks marked ready whose dependencies are all done; with `include_waiting`, also the others (`waiting_on`)."""
         ...
 
     async def get(self, key: str) -> Task | None:

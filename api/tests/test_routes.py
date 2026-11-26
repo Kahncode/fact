@@ -24,8 +24,15 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
     ],
     ("/api/v1/scheduler/ready", "GET"): [
         "test_scheduler.test_ready_tasks_with_deps_done_and_never_run",
-        "test_scheduler.test_a_task_with_a_run_is_not_offered_again",
+        "test_scheduler.test_which_tasks_with_runs_are_offered_again",
+        "test_scheduler.test_failure_cap_and_its_reset_by_a_manual_run",
     ],
+    ("/api/v1/scheduler/preview", "GET"): [
+        "test_scheduler.test_preview_order_reasons_and_usage",
+        "test_scheduler.test_failure_cap_and_its_reset_by_a_manual_run",
+    ],
+    ("/api/v1/scheduler/usage", "PUT"): ["test_scheduler.test_preview_order_reasons_and_usage"],
+    ("/api/v1/scheduler/active", "GET"): ["test_scheduler.test_active_runs"],
     ("/api/v1/scheduler", "GET"): ["test_scheduler.test_scheduler_on_off_status"],
     ("/api/v1/scheduler/on", "POST"): ["test_scheduler.test_scheduler_on_off_status"],
     ("/api/v1/scheduler/off", "POST"): ["test_scheduler.test_scheduler_on_off_status"],

@@ -195,14 +195,19 @@ class GitHubIssuesSource(GitHubIssueWrites):
             return await self._task(client, issue)
 
     async def deps_done(self, task: Task) -> bool:
-        for dep in task.depends_on:
-            issue = await self._issue(dependency_key(task, dep))
-            if issue is None or not is_done(issue):
-                return False
-        return True
+        return not await self._waiting_on(task)
 
-    async def list_ready(self) -> list[ReadyItem]:
-        """Open `fact:ready` issues (not PRs) whose dependencies are all done; their dependencies are closed: depth 0."""
+    async def _waiting_on(self, task: Task) -> tuple[str, ...]:
+        """Keys of the dependencies not done, in order."""
+        waiting = []
+        for dep in task.depends_on:
+            issue = await self._issue(key := dependency_key(task, dep))
+            if issue is None or not is_done(issue):
+                waiting.append(key)
+        return tuple(waiting)
+
+    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
+        """Open `fact:ready` issues (not PRs) whose dependencies are closed (depth 0); `include_waiting`: all of them."""
         owner, name = split_full_name(self.repo)
         url = f"/repos/{owner}/{name}/issues?state=open&labels={READY_LABEL}&per_page={PER_PAGE}"
         async with self._client(self.repo) as client:
@@ -210,7 +215,8 @@ class GitHubIssuesSource(GitHubIssueWrites):
             for issue in issues:
                 self._remember(issue, self.repo)
             tasks = [await self._task(client, issue) for issue in issues]
-        return [ReadyItem(task) for task in tasks if await self.deps_done(task)]
+        items = [ReadyItem(task, waiting_on=await self._waiting_on(task)) for task in tasks]
+        return [i for i in items if include_waiting or not i.waiting_on]
 
     def mark_done(self, worktree: Path, key: str) -> str | None:
         """None: an issue is closed when its change set merges, not by a commit."""

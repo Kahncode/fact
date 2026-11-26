@@ -198,12 +198,19 @@ class FileTaskSource:
             if e.status == "ready" and all(self._dep_done(d, entries) for d in e.task.depends_on)
         ]
 
-    async def list_ready(self) -> list[ReadyItem]:
-        """`ready()` with each task's dependency depth (`depths()`)."""
+    async def list_ready(self, *, include_waiting: bool = False) -> list[ReadyItem]:
+        """Tasks with status `ready` and their dependency depth (`depths()`); unless `include_waiting`, deps all done."""
 
         def read() -> list[ReadyItem]:
-            depths = self.depths()
-            return [ReadyItem(task, depths.get(task.key, 0)) for task in self.ready()]
+            entries, depths = self._entries(), self.depths()
+            items = []
+            for e in entries.values():
+                if e.status != "ready":
+                    continue
+                waiting = tuple(KEY_PREFIX + d for d in e.task.depends_on if not self._dep_done(d, entries))
+                if include_waiting or not waiting:
+                    items.append(ReadyItem(e.task, depths.get(e.task.key, 0), waiting))
+            return items
 
         return await asyncio.to_thread(read)
 

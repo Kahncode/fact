@@ -4,7 +4,7 @@
 One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), plus the
 `control` and `sandbox` activity workers; the sandbox worker runs at most `concurrency.sandboxes` activities at once.
 The control worker also runs the scheduler's `SchedulerTick`, and startup creates or updates its `fact-scheduler`
-Schedule (`scheduler.py`).
+Schedule (`scheduler.py`). While runs are active the worker keeps Windows awake (`keep_awake.py`).
 """
 
 import asyncio
@@ -32,11 +32,13 @@ from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.client import connect
 from fact.worker.deployments import deployment_config, set_current_version
 from fact.worker.harnesses import ClaudeCodeHarness
+from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
 from fact.worker.loader import ProjectWorkflows, WorkflowLoadError, factory_sha, load_project, sandbox_runner
 from fact.worker.ping import CONTROL_QUEUE, SANDBOX_QUEUE, PingWorkflow, ping
 from fact.worker.reporting import StepReporter
 from fact.worker.runners import LocalWorktreeRunner, RunnerError
 from fact.worker.scheduler import SchedulerTick, ensure_schedule
+from fact.worker.usage_gate import UsageGate
 from temporalio.client import Client
 from temporalio.worker import Worker
 
@@ -107,7 +109,7 @@ def _activity_workers(
     cost = CostCommentActivities(github, settings.api_url, http)
     ci = CIActivities(github, reporter)
     pr_state = PRStateActivities(github)
-    scheduler = SchedulerActivities(settings.api_url, http)
+    scheduler = SchedulerActivities(settings.api_url, http, UsageGate(settings.claude))
     control = Worker(
         client,
         task_queue=CONTROL_QUEUE,
@@ -130,6 +132,7 @@ def _activity_workers(
             notify.notify,
             handoff.write_handoff,
             scheduler.find_ready_tasks,
+            scheduler.check_claude_usage,
             scheduler.start_scheduled_run,
         ],
     )
@@ -161,7 +164,9 @@ async def run() -> None:
         await ensure_schedule(client, settings)
         queues = [CONTROL_QUEUE, SANDBOX_QUEUE, *(p.task_queue for p in projects)]
         log.info("worker_started", queues=queues, address=settings.temporal.address)
-        await asyncio.Event().wait()  # until cancelled
+        # on this (the event-loop) thread: the keep-awake hold lasts only while its calling thread lives
+        keeper = KeepAwake(enabled=settings.worker.keep_awake)
+        await watch_active_runs(keeper, api_active_runs(settings.api_url, http))  # until cancelled
 
 
 def main() -> None:

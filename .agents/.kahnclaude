@@ -25,5 +25,5 @@
     "python/python-dev.md",
     "python/security-dev.md"
   ],
-  "notes": "Python 3.15/uv workspace, FastAPI, Temporal, SQLAlchemy, Typer; core + python + backend (api-dev, backend-dev, supabase-dev) + frontend agents; excluded mobile. Migrated next-task, plan-tasks to .agents/skills. 2026-11-24: updated document, learn skills, documenter agent (README sync), settings Read(*). 2026-11-26: removed 7 retired hooks and notify.py (global-only), updated block-write-outside-repo, new deny rules, dropped filesystem MCP/Read(*)/read-only allows; kept project's commit skill."
+  "notes": "Python 3.15/uv workspace, FastAPI, Temporal, SQLAlchemy, Typer; core + python + backend (api-dev, backend-dev, supabase-dev) + frontend agents; excluded mobile. Migrated the file-task skills to .agents/skills (retired in M2-14). 2026-11-24: updated document, learn skills, documenter agent (README sync), settings Read(*). 2026-11-26: removed 7 retired hooks and notify.py (global-only), updated block-write-outside-repo, new deny rules, dropped filesystem MCP/Read(*)/read-only allows; kept project's commit skill."
 }

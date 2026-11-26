@@ -1,7 +1,7 @@
 """`/api/v1/scheduler`: ready tasks read from origin and filtered by runs, and the Schedule's on, off and status."""
 
 from collections.abc import AsyncIterator, Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from http import HTTPStatus
 from pathlib import Path
 
@@ -23,6 +23,8 @@ from temporalio.client import (
 from temporalio.testing import WorkflowEnvironment
 
 READY = "/api/v1/scheduler/ready"
+PREVIEW = "/api/v1/scheduler/preview"
+FAILED = {"status": "finished", "outcome": "failed", "ended_at": "2026-11-26T00:00:00Z"}
 
 
 @pytest.fixture
@@ -70,8 +72,9 @@ async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
         yield c
 
 
-async def _add_run(client: AsyncClient, n: int, task_key: str, **update: str) -> None:
+async def _add_run(client: AsyncClient, n: int, task_key: str, trigger: str = "manual", **update: str) -> None:
     body = {"workflow_id": f"run-{n}", "project": PROJECT, "task_key": task_key, "workflow_type": "standard"}
+    body["trigger"] = trigger
     run = (await client.post("/api/v1/runs", json=body)).json()
     if update:
         await client.patch(f"/api/v1/runs/{run['id']}", json=update)
@@ -81,8 +84,13 @@ async def test_ready_tasks_with_deps_done_and_never_run(client: AsyncClient) -> 
     response = await client.get(READY)
     assert response.status_code == HTTPStatus.OK, response.text
     got = response.json()
-    # M1-01 is done, M1-03 waits on M1-02, M1-04 is only in the working tree.
-    assert sorted((t["task_id"], t["depth"]) for t in got["tasks"]) == [("M1-02", 1), ("M2-01", 0), ("M2-02", 0)]
+    # M1-01 is done, M1-03 waits on M1-02 (listed, held), M1-04 is only in the working tree.
+    assert sorted((t["task_id"], t["depth"], t["hold"]) for t in got["tasks"]) == [
+        ("M1-02", 1, None),
+        ("M1-03", 2, "dependency"),
+        ("M2-01", 0, None),
+        ("M2-02", 0, None),
+    ]
     assert (got["active"], got["max_runs"]) == (0, 4)
     assert {p["project"]: (p["active"], p["max_runs"]) for p in got["projects"]} == {
         PROJECT: (0, 3),
@@ -91,15 +99,61 @@ async def test_ready_tasks_with_deps_done_and_never_run(client: AsyncClient) -> 
     }
 
 
-async def test_a_task_with_a_run_is_not_offered_again(client: AsyncClient) -> None:
+async def test_which_tasks_with_runs_are_offered_again(client: AsyncClient) -> None:
     await _add_run(client, 1, "task:M1-02")  # queued: active
-    ended = {"status": "finished", "outcome": "failed", "ended_at": "2026-11-26T00:00:00Z"}
-    await _add_run(client, 2, "task:M2-01", **ended)  # ended: a person restarts it with `fact run`
+    await _add_run(client, 2, "task:M2-01", **FAILED)  # failed: the scheduler retries it
     await _add_run(client, 3, "task:M2-02", status="finished", outcome="failed")  # its start never reached Temporal
     got = (await client.get(READY)).json()
-    assert [t["task_id"] for t in got["tasks"]] == ["M2-02"]
+    assert [(t["task_id"], t["failed_runs"], t["hold"]) for t in got["tasks"]] == [
+        ("M1-03", 0, "dependency"),
+        ("M2-01", 1, None),
+        ("M2-02", 0, None),
+    ]
     assert got["active"] == 1
     assert next(p["active"] for p in got["projects"] if p["project"] == PROJECT) == 1
+    await _add_run(client, 4, "task:M2-02", **{**FAILED, "outcome": "needs_human"})  # a person restarts it
+    assert "M2-02" not in [t["task_id"] for t in (await client.get(READY)).json()["tasks"]]
+
+
+async def test_failure_cap_and_its_reset_by_a_manual_run(client: AsyncClient) -> None:
+    for n in range(1, 4):
+        await _add_run(client, n, "task:M2-01", trigger="scheduler", **FAILED)
+    m2_01 = next(t for t in (await client.get(READY)).json()["tasks"] if t["task_id"] == "M2-01")
+    assert (m2_01["failed_runs"], m2_01["hold"]) == (3, "failure_cap")
+    preview = (await client.get(PREVIEW)).json()
+    held = next(p for p in preview["tasks"] if p["task"]["task_id"] == "M2-01")
+    assert held["hold"] == "failure_cap"
+    assert "3 failed runs in a row" in held["detail"]
+    await _add_run(client, 4, "task:M2-01", trigger="manual", **FAILED)  # `fact run`, failed again
+    m2_01 = next(t for t in (await client.get(READY)).json()["tasks"] if t["task_id"] == "M2-01")
+    assert (m2_01["failed_runs"], m2_01["hold"]) == (1, None)
+
+
+async def test_preview_order_reasons_and_usage(client: AsyncClient) -> None:
+    await _add_run(client, 1, "task:M2-02", trigger="scheduler", **FAILED)
+    preview = (await client.get(PREVIEW)).json()
+    assert preview["usage"] is None
+    # M2-01 and M2-02 (depth 0) before M1-02 (depth 1); M1-03 waits on M1-02; the cap of 3 for acme holds nothing
+    assert [(p["task"]["task_id"], p["hold"]) for p in preview["tasks"]] == [
+        ("M2-01", None),
+        ("M2-02", None),
+        ("M1-02", None),
+        ("M1-03", "dependency"),
+    ]
+    resets = datetime.now(UTC) + timedelta(hours=2)
+    window = {"name": "five_hour", "utilization": 0.93, "reserve": 0.1, "resets_at": resets.isoformat(), "full": True}
+    check = {"state": "full", "windows": [window], "reason": "five_hour 93%", "next_call_at": resets.isoformat()}
+    assert (await client.put("/api/v1/scheduler/usage", json=check)).status_code == HTTPStatus.NO_CONTENT
+    preview = (await client.get(PREVIEW)).json()
+    assert preview["usage"]["windows"][0]["reserve"] == 0.1  # noqa: PLR2004
+    assert preview["usage"]["windows"][0]["resets_at"].startswith(resets.isoformat()[:16])
+    assert [(p["hold"], p["detail"]) for p in preview["tasks"][:3]] == [("usage", "five_hour 93%")] * 3
+
+
+async def test_active_runs(client: AsyncClient) -> None:
+    await _add_run(client, 1, "task:M1-02", status="waiting")  # paused on the usage limit: counts
+    await _add_run(client, 2, "task:M2-01", **FAILED)
+    assert (await client.get("/api/v1/scheduler/active")).json() == {"active": 1}
 
 
 async def test_scheduler_on_off_status(app: FastAPI, client: AsyncClient) -> None:

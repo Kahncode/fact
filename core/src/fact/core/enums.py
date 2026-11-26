@@ -20,6 +20,11 @@ class RunOutcome(StrEnum):
     DROPPED = "dropped"  # a person dropped the run (`fact drop`), or rejected its plan at the `approve_plan` gate
 
 
+class RunTrigger(StrEnum):
+    MANUAL = "manual"  # `fact run` or `POST /runs/start` from a person: resets the scheduler's failure count
+    SCHEDULER = "scheduler"  # started by the scheduler's tick
+
+
 class StepKind(StrEnum):
     AGENT = "agent"
     SHELL = "shell"
