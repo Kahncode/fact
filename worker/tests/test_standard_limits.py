@@ -1,6 +1,5 @@
 """`Standard` when the usage limit refuses an agent session: a durable sleep until the reset, then the same session."""
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET, RECORD_RUN_WAITING
@@ -9,13 +8,13 @@ from fact.core.gates import STATUS, WorkflowStatus
 from fact.core.types import RunResult, StepResult
 from fact.sdk.sessions import LIMIT_PAUSED, MAX_LIMIT_PAUSES
 from fact.worker.loader import sandbox_runner
+from gate_harness import until_status
 from standard_harness import STANDARD, FakeActivities, finished, started_standard
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-POLL_S = 0.05
 WAIT = timedelta(days=3)  # a full weekly window: a wait of days
 
 
@@ -33,11 +32,7 @@ RETRYABLE = StepResult(
 
 
 async def _waiting(handle: WorkflowHandle) -> WorkflowStatus:
-    while True:
-        status = await handle.query(STATUS, result_type=WorkflowStatus)
-        if status.waiting:
-            return status
-        await asyncio.sleep(POLL_S)
+    return await until_status(handle, lambda s: bool(s.waiting))
 
 
 def _implements(fakes: FakeActivities) -> list:

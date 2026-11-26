@@ -15,11 +15,10 @@ from fact.core.activity_contract import (
     WaitForPRClosedInput,
 )
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
-from fact.core.gates import STATUS, WorkflowStatus
 from fact.core.types import RunResult, StepResult
 from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
-from gate_harness import POLL_S, open_gate
+from gate_harness import POLL_S, open_gate, until_status
 from standard_harness import STANDARD, FakeActivities, finished, run_standard, started_standard
 from standard_inputs import PR, run_input
 from temporalio import activity
@@ -56,10 +55,7 @@ class AgentWorks(FakeActivities):
 
 
 async def _at_stage(handle: WorkflowHandle, stage: str) -> None:
-    while True:
-        if (await handle.query(STATUS, result_type=WorkflowStatus)).stage == stage:
-            return
-        await asyncio.sleep(POLL_S)
+    await until_status(handle, lambda s: s.stage == stage)
 
 
 def _order(fakes: FakeActivities) -> list[str]:
