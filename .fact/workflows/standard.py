@@ -1,6 +1,8 @@
 """
 Standard: from a task to a PR.
 
+When the run's `require_plan_approval` is on, an `approve_plan` gate comes first, before any workspace exists: it
+shows the task's title, path and acceptance criteria; approve goes on, reject ends the run `dropped` with the note.
 Prepare the workspace, run each repository's setup commands, implement, loop lint and test with fix sessions until
 green, then review once: a separate session checks the change against the task's acceptance criteria and the review
 checklist. An unmet criterion or a medium or high finding sends the change to an `address_review` session, then
@@ -19,7 +21,7 @@ losing the change over, so the PR still opens with the implement session's title
 conventional title).
 
 A person is notified when a gate opens, when the PRs are ready (CI green), and when the run ends `failed` or
-`needs_human`.
+`needs_human` (`run_failed`) or `dropped` (`run_finished`).
 """
 
 from temporalio import workflow
@@ -46,6 +48,7 @@ MAX_FIX_ATTEMPTS = 3
 MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
 NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
+APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
 
 
 def _ended(stage: str, step: StepResult) -> RunResult:
@@ -58,6 +61,7 @@ def _ended(stage: str, step: StepResult) -> RunResult:
 
 @stages(
     [
+        Stage(APPROVE_PLAN, "Approve plan", StepKind.GATE),
         Stage("prepare", "Prepare workspace", StepKind.SHELL),
         Stage("setup", "Set up workspace", StepKind.SHELL),
         Stage("implement", "Implement", StepKind.AGENT),
@@ -89,6 +93,11 @@ class Standard(FactWorkflow):
         return result
 
     async def _steps(self) -> RunResult:
+        if self.input.require_plan_approval and (dropped := await self._approve_plan()) is not None:
+            return dropped
+        return await self._to_pr()
+
+    async def _to_pr(self) -> RunResult:
         await self.prepare()
         failed_setup = await self.setup()
         if failed_setup is not None:
@@ -109,6 +118,21 @@ class Standard(FactWorkflow):
         prs = await self.open_change_set(*self.pr_text(implemented.summary), criteria=review.criteria)
         await self.post_cost_comment(prs)
         return await self._ci_green(prs)
+
+    async def _approve_plan(self) -> RunResult | None:
+        """Ask a person to approve the task as planned: None if approved, else the run's end, `dropped`."""
+        task = self.input.task
+        details = {
+            "summary": f"Approve the plan for {task.key}: {task.title}",
+            "title": task.title,
+            "path": task.path,
+            "acceptance_criteria": task.acceptance_criteria,
+        }
+        answer = await self.gate(APPROVE_PLAN, APPROVE_PLAN, details)
+        if answer.decision == GateDecision.APPROVE:
+            return None
+        text = f"plan rejected: {answer.note}" if answer.note else "plan rejected"
+        return RunResult(outcome=RunOutcome.DROPPED, summary=limit_text(text, SUMMARY_BYTES))
 
     async def _checks_green(self) -> RunResult | None:
         """Loop the checks with fix sessions, and ask a person each time they stay red; None once they are green."""

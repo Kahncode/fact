@@ -55,6 +55,7 @@ What a neighbouring task does instead.
   - `standard`: normal feature work, Sonnet.
   - `complex`: design judgment or tricky concurrency, Opus.
 - **human_actions**: anything an agent cannot do, such as creating a key or installing a tool. The runner stops and asks before starting a task whose human actions aren't confirmed.
+- **require_plan_approval** (optional): `true` or `false` overrides the project's `require_plan_approval` for this task. When on, a fact run opens an `approve_plan` gate before any work. fact's own project sets it `false`, because `status: ready` is already the approval.
 - **resume** (optional, never written by hand): `"<start>..<end>"`, a commit range left unverified because a run of this task hit the Claude usage limit. `scripts/task_loop.py` restores the task file with this field and a `## Resume` section, and the task runs before any other runnable task to verify and finish that work.
 
 ## Running a task

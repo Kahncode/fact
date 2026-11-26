@@ -17,6 +17,7 @@ class RunOutcome(StrEnum):
     CLOSED = "closed"
     ABANDONED = "abandoned"
     FAILED = "failed"
+    DROPPED = "dropped"  # a person rejected the plan at the `approve_plan` gate: no work was done
 
 
 class StepKind(StrEnum):

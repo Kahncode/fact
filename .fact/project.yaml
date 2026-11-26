@@ -5,5 +5,7 @@ repositories:
 task_source:
   kind: files
   path: tasks
+# A file task is approved when a person sets `status: ready` on it, so no plan approval gate on top of that.
+require_plan_approval: false
 workflows:
   default: standard

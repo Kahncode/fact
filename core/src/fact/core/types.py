@@ -41,6 +41,7 @@ class Task(_Model):
     complexity: Complexity = "standard"
     depends_on: list[str] = Field(default_factory=list)
     path: str | None = None  # for file tasks
+    require_plan_approval: bool | None = None  # the task's own setting; None: the project's
 
 
 class RepoCheckout(_Model):
@@ -130,6 +131,7 @@ class RunInput(_Model):
     home_repo: str | None = None  # full name in `repos` holding `.fact/`; None: the first repository
     limits: RunLimits = Field(default_factory=RunLimits)
     run_url: str = ""  # where a person follows the run (the Temporal UI for now), linked from the PR
+    require_plan_approval: bool = False  # open an `approve_plan` gate before any work (task, else project setting)
 
 
 class RunResult(_Model):

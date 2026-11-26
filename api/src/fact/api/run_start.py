@@ -133,6 +133,7 @@ def run_input(settings: Settings, found: FoundTask, run_id: str, run_url: str = 
         shell_timeout_s=defaults.shell.timeout_minutes * SECONDS_PER_MINUTE,
     )
     home = next((r.full_name for r in repos if r.full_name.lower() == found.ref.home.lower()), None)
+    approval = task.require_plan_approval
     return RunInput(
         run_id=run_id,
         project=found.ref.name,
@@ -142,6 +143,7 @@ def run_input(settings: Settings, found: FoundTask, run_id: str, run_url: str = 
         home_repo=home,
         limits=limits,
         run_url=run_url,
+        require_plan_approval=found.config.require_plan_approval if approval is None else approval,
     )
 
 

@@ -245,6 +245,7 @@ async def test_failing_activity_fails_the_run_and_records_it() -> None:
 
 def test_standard_stage_manifest() -> None:
     assert STANDARD.manifest() == [
+        {"id": "approve_plan", "label": "Approve plan", "kind": "gate", "loops_to": None},
         {"id": "prepare", "label": "Prepare workspace", "kind": "shell", "loops_to": None},
         {"id": "setup", "label": "Set up workspace", "kind": "shell", "loops_to": None},
         {"id": "implement", "label": "Implement", "kind": "agent", "loops_to": None},
@@ -257,4 +258,4 @@ def test_standard_stage_manifest() -> None:
         {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
         {"id": "needs_human", "label": "Needs a person", "kind": "gate", "loops_to": None},
     ]
-    assert json.loads(json.dumps(STANDARD.manifest()))[3]["loops_to"] == "implement"
+    assert json.loads(json.dumps(STANDARD.manifest()))[4]["loops_to"] == "implement"

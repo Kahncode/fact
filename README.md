@@ -52,6 +52,8 @@ uv run fact steer run-task-M1-02-1 "Keep the old function name"
 
 `fact gate` answers the open gate; pass `--gate <id>` to answer a specific one.
 
+A project can require you to approve each task's plan before work starts: set `require_plan_approval` in its `.fact/project.yaml` (default true), or in a task's front matter to override it. The run then waits at an `approve_plan` gate; rejecting it ends the run `dropped`. fact's own project turns this off, since marking a task `status: ready` already approves it.
+
 To see what needs you, check your inbox. A run notifies you when it waits at a gate, when its PRs are ready for review, and when it fails or gives up:
 
 ```

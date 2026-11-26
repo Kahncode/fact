@@ -258,21 +258,23 @@ MAX_FIX_ATTEMPTS = _standard.MAX_FIX_ATTEMPTS
 
 @asynccontextmanager
 async def started_standard(
-    fakes: FakeActivities, workflow_id: str
+    fakes: FakeActivities, workflow_id: str, run: RunInput | None = None
 ) -> AsyncIterator[tuple[WorkflowEnvironment, WorkflowHandle]]:
     """Start `Standard` on a time-skipping server; the test drives it (gates, signals) and awaits the result."""
     env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter, identity=IDENTITY)
     async with env_cm as env, workers(env.client, fakes, STANDARD):
         fakes.client = env.client
         handle = await env.client.start_workflow(
-            STANDARD.run, run_input(), id=workflow_id, task_queue=WORKFLOW_QUEUE, result_type=RunResult
+            STANDARD.run, run or run_input(), id=workflow_id, task_queue=WORKFLOW_QUEUE, result_type=RunResult
         )
         yield env, handle
 
 
-async def run_standard(fakes: FakeActivities, workflow_id: str) -> tuple[RunResult, WorkflowHistory]:
-    """Run `Standard` to its end; `fakes.gate_decisions` answers its gates."""
-    async with started_standard(fakes, workflow_id) as (_, handle):
+async def run_standard(
+    fakes: FakeActivities, workflow_id: str, run: RunInput | None = None
+) -> tuple[RunResult, WorkflowHistory]:
+    """Run `Standard` to its end (on `run`, else `run_input()`); `fakes.gate_decisions` answers its gates."""
+    async with started_standard(fakes, workflow_id, run) as (_, handle):
         result = await handle.result()
         history = await handle.fetch_history()
     return result, history

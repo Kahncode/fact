@@ -56,6 +56,18 @@ def test_parses_task(tmp_path: Path) -> None:
     assert src.validate() == []
 
 
+def test_front_matter_can_set_plan_approval(tmp_path: Path) -> None:
+    path = _task(tmp_path, "M1-02")
+    task = FileTaskSource(tmp_path).get("task:M1-02")
+    assert task is not None
+    assert task.require_plan_approval is None  # unset: the project decides
+    text = path.read_text(encoding="utf-8").replace("human_actions", "require_plan_approval: false\nhuman_actions")
+    path.write_text(text, encoding="utf-8")
+    task = FileTaskSource(tmp_path).get("task:M1-02")
+    assert task is not None
+    assert task.require_plan_approval is False
+
+
 def test_skips_moved_tasks(tmp_path: Path) -> None:
     path = _task(tmp_path, "M1-02")
     path.write_text(path.read_text(encoding="utf-8").replace("human_actions", "moved_to: gh:a/b#1\nhuman_actions"))

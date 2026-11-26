@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 from fact.api.app import create_app
-from fact.api.run_start import next_run_number, safe_key, workflow_id
+from fact.api.run_start import FoundTask, next_run_number, run_input, safe_key, workflow_id
+from fact.api.task_ref import TaskCheck
 from fact.core.activity_contract import workflow_queue
-from fact.core.settings import CONFIG_VAR, Settings, reset_settings
-from fact.core.types import RunInput
+from fact.core.project_config import ProjectConfig
+from fact.core.settings import CONFIG_VAR, ProjectRef, Settings, reset_settings
+from fact.core.types import RunInput, Task
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from temporalio import workflow
@@ -135,6 +137,27 @@ class StubStandard:
 
 async def _start(client: AsyncClient, **body: Any) -> Any:  # noqa: ANN401
     return await client.post("/api/v1/runs/start", json={"project": PROJECT, **body})
+
+
+@pytest.mark.parametrize(
+    ("project", "task", "expected"),
+    [(True, None, True), (False, None, False), (False, True, True), (True, False, False)],
+)
+def test_plan_approval_from_task_else_project(project: bool, task: bool | None, expected: bool) -> None:  # noqa: FBT001
+    config = ProjectConfig.model_validate(
+        {
+            "name": PROJECT,
+            "repositories": [{"full_name": "acme/home", "role": "backend"}],
+            "require_plan_approval": project,
+            "workflows": {"default": "standard"},
+        }
+    )
+    found = FoundTask(
+        ProjectRef(name=PROJECT, home="acme/home"),
+        config,
+        TaskCheck(Task(key="task:M1-01", id="M1-01", title="t", require_plan_approval=task), []),
+    )
+    assert run_input(Settings(), found, "run-1").require_plan_approval is expected
 
 
 def test_workflow_id_safe_form() -> None:

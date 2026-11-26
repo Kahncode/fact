@@ -19,7 +19,7 @@ def test_loads_real_project_file() -> None:
     assert cfg.task_source.path == "tasks"
     assert cfg.workflows.default == "standard"
     assert cfg.runner_pool == "local"
-    assert cfg.require_plan_approval is True
+    assert cfg.require_plan_approval is False  # file tasks are approved by `status: ready`
 
 
 def test_loads_real_repo_file() -> None:

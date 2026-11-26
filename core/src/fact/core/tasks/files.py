@@ -71,6 +71,7 @@ def _parse(path: Path, rel: str) -> _Entry:
         complexity=meta.get("complexity", "standard"),
         depends_on=[str(d) for d in meta.get("depends_on") or []],
         path=rel,
+        require_plan_approval=meta.get("require_plan_approval"),
     )
     return _Entry(task, str(meta.get("status", "")), moved=bool(meta.get("moved_to")))
 
