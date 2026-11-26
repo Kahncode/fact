@@ -5,6 +5,8 @@ from typing import Any
 
 import pytest
 from fact.core.activity_contract import ReportStatusInput, TaskEvent
+from fact.core.github import GitHubApp
+from fact.core.github import app as github_app
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks.events import NEEDS_HUMAN, RUNNING, report
 from fact.core.types import PRRef
@@ -100,9 +102,27 @@ async def test_activity_dispatches_to_the_file_source(tmp_path: Path) -> None:
     assert any(e["event"] == "task_status_reported" for e in logs)
 
 
-@pytest.mark.parametrize("kind", ["github", None])
-async def test_activity_skips_without_a_writable_source(tmp_path: Path, kind: str | None) -> None:
-    settings = _project(tmp_path, kind) if kind else Settings(projects=[ProjectRef(name="acme", home="acme/widget")])
+def _project_settings(tmp_path: Path, kind: str = "files") -> Settings:
+    base = _project(tmp_path, kind)
+    return Settings(projects=base.projects, github_app_id=None, github_app_private_key_path=None)
+
+
+async def test_activity_dispatches_to_the_github_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(github_app, "shared_app", lambda _settings=None: GitHubApp("1", "unused"))
+    with capture_logs() as logs:
+        await TaskStatusActivities(_project_settings(tmp_path, "github")).report_status(_spec("run_started"))
+    skipped = [(e.get("source"), e.get("action")) for e in logs if e["event"] == "task_write_back_skipped"]
+    assert skipped == [("github", "set_labels"), ("github", "comment")]  # log-only until M2-11
+
+
+async def test_activity_skips_github_without_an_app(tmp_path: Path) -> None:
+    with capture_logs() as logs:
+        await TaskStatusActivities(_project_settings(tmp_path, "github")).report_status(_spec("run_started"))
+    assert [e["event"] for e in logs] == ["task_source_unavailable", "report_status_skipped"]
+
+
+async def test_activity_skips_without_a_checkout() -> None:
+    settings = Settings(projects=[ProjectRef(name="acme", home="acme/widget")])
     with capture_logs() as logs:
         await TaskStatusActivities(settings).report_status(_spec("run_started"))
     assert [e["event"] for e in logs] == ["report_status_skipped"]

@@ -3,9 +3,10 @@
 from pathlib import Path
 
 import pytest
+from fact.core.github import GitHubApp, GitHubAppConfigError
 from fact.core.project_config import ProjectConfig
 from fact.core.settings import Settings
-from fact.core.tasks import TaskKey, TaskSource, branch_name, dependency_key, parse_key, source_for
+from fact.core.tasks import GitHubIssuesSource, TaskKey, TaskSource, branch_name, dependency_key, parse_key, source_for
 from fact.core.types import PRRef, Task
 
 TASK = """---
@@ -98,8 +99,18 @@ def test_source_for_files_needs_root() -> None:
         source_for(_config(), Settings())
 
 
-def test_source_for_github_is_not_readable_yet(tmp_path: Path) -> None:
-    assert source_for(_config("github"), Settings(), tmp_path) is None
+def test_source_for_github_uses_the_given_app(tmp_path: Path) -> None:
+    app = GitHubApp("1", "not-a-key")
+    source = source_for(_config("github"), Settings(), tmp_path, app=app)
+    assert isinstance(source, GitHubIssuesSource)
+    assert source.repo == "acme/tasks"
+    assert source.app is app
+
+
+def test_source_for_github_needs_a_configured_app(tmp_path: Path) -> None:
+    settings = Settings(github_app_id=None, github_app_private_key_path=None)
+    with pytest.raises(GitHubAppConfigError):
+        source_for(_config("github"), settings, tmp_path)
 
 
 async def test_file_source_through_the_protocol(tmp_path: Path) -> None:

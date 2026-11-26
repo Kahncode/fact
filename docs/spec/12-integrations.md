@@ -2,7 +2,7 @@
 
 The issue tracker is where work starts and where its status is reported; GitHub is where code lands and humans review. Task ingestion is modular: markdown task files in the repository bootstrap fact until GitHub Issues is live; GitHub Issues is the first tracker, Linear the second, and others plug in behind the same interface.
 
-**Task source interface**: `list_ready()`, `get(issue)`, `comment(issue, text)`, `set_labels(issue, add, remove)`, `write_context(issue, section)`, `link_prs(issue, prs)`, `close(issue)`. Issue keys carry their source, for example `gh:acme/app#123` or `lin:APP-123`, and branch names use a safe form such as `fact/gh-123`. In code: `fact.core.tasks.TaskSource`, chosen per project by `source_for`; the file source (`task:M1-02`) implements it with write-backs that only log, and also `deps_done(task)` and `mark_done(worktree, key)`. A run reports status changes through the `report_status` control activity.
+**Task source interface**: `list_ready()`, `get(issue)`, `comment(issue, text)`, `set_labels(issue, add, remove)`, `write_context(issue, section)`, `link_prs(issue, prs)`, `close(issue)`. Issue keys carry their source, for example `gh:acme/app#123` or `lin:APP-123`, and branch names use a safe form such as `fact/gh-123`. In code: `fact.core.tasks.TaskSource`, chosen per project by `source_for`, with `deps_done(task)` and `mark_done(worktree, key)` besides the methods above. Two sources implement it: the file source (`task:M1-02`) and the GitHub Issues source (`gh:owner/repo#12`, `GitHubIssuesSource`, M2-09); both only log their write-backs until M2-11. A run reports status changes through the `report_status` control activity.
 
 **Where a project's issues live** (set in `.fact/project.yaml`):
 
@@ -12,7 +12,8 @@ The issue tracker is where work starts and where its status is reported; GitHub 
 
 **GitHub Issues (first task source)**
 
-- Trigger: open issues labelled `fact:ready` in the project's task repository. v0 polls every 30 s with the GitHub App's token; webhooks come once fact is hosted.
+- Trigger: open issues labelled `fact:ready` in the project's task repository. v0 polls every 30 s with the GitHub App's token (the scheduler's tick); webhooks come once fact is hosted.
+- Reading (M2-09): type from the `type:*` label (`type:incident` runs as `bug` until incidents get their own type), complexity from `complexity:*`, acceptance criteria from the checklist under an "Acceptance criteria" heading. Dependencies are GitHub's blocked-by links plus `Depends on #3, owner/other#4` lines. A dependency is done when its issue is closed as completed (or closed before GitHub recorded a reason), or when it is a merged PR; closed as not planned or duplicate is not done, nor is an issue the App cannot read.
 - Status: GitHub issues are only open or closed, so progress shows as labels (`fact:running`, `fact:needs-human`) plus comments with the run and PR links.
 - Factory context: written into the issue body between marker comments, so your own text stays untouched.
 - Closing: the factory closes the issue itself once the whole change set is merged, because the task repository can differ from the code repositories.

@@ -7,6 +7,7 @@ from fact.core.github.app import (
     GitHubAppConfigError,
     Installation,
     InstallationToken,
+    shared_app,
     split_full_name,
 )
 from fact.core.github.client import (
@@ -34,6 +35,7 @@ __all__ = [
     "LabelAction",
     "LabelChange",
     "github_client",
+    "shared_app",
     "split_full_name",
     "sync_labels",
 ]

@@ -86,6 +86,15 @@ async def test_mark_task_done_deletes_the_task_file(worktree: Path, client: Asyn
     assert _git("status", "--porcelain", cwd=worktree) == ""
 
 
+async def test_mark_task_done_skips_an_issue(worktree: Path, client: AsyncClient) -> None:
+    head = _git("rev-parse", "HEAD", cwd=worktree)
+    task = Task(key="gh:acme/app#12", id="12", title="An issue")
+    handle = WorkspaceHandle(run_id="run-1", root=str(worktree.parent), repos={REPO: str(worktree)})
+    spec = MarkTaskDoneInput(run_id="run-1", task=task, handle=handle)
+    assert await ControlActivities(BASE, client).mark_task_done(spec) is False
+    assert _git("rev-parse", "HEAD", cwd=worktree) == head
+
+
 async def test_mark_task_done_twice_adds_no_commit(worktree: Path, client: AsyncClient) -> None:
     activities = ControlActivities(BASE, client)
     await activities.mark_task_done(_spec(worktree))

@@ -40,7 +40,9 @@ uv run fact runs
 uv run fact status run-task-M1-02-1
 ```
 
-`fact run` reads the task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any.
+A project whose `.fact/project.yaml` sets `task_source.kind: github` takes its tasks from GitHub issues instead: `uv run fact run gh:owner/repo#12` starts issue 12 (it needs the GitHub App, below). fact's own project still uses task files.
+
+`fact run` reads a file task from the project's default branch on `origin` (not your working tree), refuses if its dependencies are not done (`--force-deps` starts anyway), and prints the run id, workflow id and a link to the run in the Temporal UI. Pass `--project` when several projects hold the same task key. `fact status` accepts a run id or a workflow id and shows each step with its duration, outcome, cost and log links, plus the gate the run is waiting at, if any.
 
 When a run waits for you, answer its gate, or send instructions to its next agent session (a running session is not interrupted):
 
@@ -83,7 +85,7 @@ uv run fact scheduler status
 uv run fact scheduler off
 ```
 
-Every 30 seconds it starts the tasks marked `status: ready` on the default branch whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`). A task that has already had a run is never started again by the scheduler, even if that run failed or was dropped; restart it with `fact run`. The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. See `docs/ARCHITECTURE.md`.
+Every 30 seconds it starts the tasks marked `status: ready` on the default branch (or, for a GitHub Issues project, the open issues labelled `fact:ready`) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`). A task that has already had a run is never started again by the scheduler, even if that run failed or was dropped; restart it with `fact run`. The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. See `docs/ARCHITECTURE.md`.
 
 ## Workspaces
 
@@ -99,7 +101,7 @@ uv run fact github check <owner/repo>
 
 It prints the App, the installation and the token expiry (never the token), or a readable error. With the App configured, the worker commits as `fact[bot]`, pushes each run's branch and opens its PR as the App; without it, commits use `commit_author_name`/`commit_author_email` and opening a PR fails (see `worker/README.md`).
 
-To set up a task repository, `uv run fact github labels sync <owner/repo>` creates the labels fact uses (`fact:*`, `type:*`, `complexity:*`) and fixes the colour and description of existing ones. It prints what changed and never deletes a label.
+To set up a task repository, `uv run fact github labels sync <owner/repo>` creates the labels fact uses (`fact:*`, `type:*`, `complexity:*`) and fixes the colour and description of existing ones. It prints what changed and never deletes a label. fact picks up open issues labelled `fact:ready`; their `type:*` and `complexity:*` labels, an "Acceptance criteria" checklist and blocked-by links or `Depends on #n` lines become the task (see `docs/spec/12-integrations.md`). fact does not yet comment on, label or close issues (M2-11).
 
 ## The API
 

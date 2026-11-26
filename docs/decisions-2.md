@@ -33,3 +33,28 @@ Continuation of `docs/decisions.md`, which reached the 300-line limit; earlier e
 
 **What:** The `report_status` control activity (`@worker/src/fact/worker/activities/task_status.py`, input `ReportStatusInput`) resolves the project's source and applies a `TaskEvent` via `fact.core.tasks.events.report`, with the label and comment mapping M2-11 lists. No workflow calls it yet.
 **Why:** M2-08 must not change behaviour, and new activity calls in `FactWorkflow.execute` would change every workflow test's expected activity sequence; M2-11 owns sending the events (its task says so). Defining the mapping here lets M2-11 only implement the GitHub methods and add the calls.
+
+### [2026-11-26 23:59] An issue dependency is done when closed as completed, closed without a reason, or a merged PR
+
+**What:** `is_done` (`@core/src/fact/core/tasks/github_issues.py`) counts a dependency as done when its issue is `closed` with `state_reason` `completed` or with no `state_reason`, or when it is a PR with `merged_at` set. Closed as `not_planned` or `duplicate` is not done; neither is a dependency the App cannot read (404, or not installed on that repository), which logs `task_issue_unreadable`. M2-09's task text said only "closed as completed".
+**Why:** Issues closed before GitHub recorded a close reason have `state_reason` null; treating them as not done would block every task depending on old work forever. A blocked-by link or a `Depends on #n` line may point at a PR, and a merged PR is the work landing. Not planned and duplicate mean the work did not happen, so the dependent task must wait for a person. An unreadable dependency fails safe: the task waits rather than starting on work fact cannot verify.
+
+### [2026-11-26 23:59] `type:incident` runs as `bug`
+
+**What:** `task_type` maps the label `type:incident` to `TaskType` `bug` (`TYPE_ALIASES`); an unknown or missing `type:*` label is `feature`.
+**Why:** `TaskType` has no `incident`, and adding one would need a workflow for it in every project's `workflows` map. An incident's work today is a bug fix, so the bug workflow is the closest fit. The follow-up (add the type when incidents need their own workflow) is in `tasks/backlog.md`.
+
+### [2026-11-26 23:59] One `GitHubApp` per process through `shared_app`
+
+**What:** `fact.core.github.shared_app(settings)` returns one `GitHubApp` per App configuration (App id, key path, API URL), built on first use; an unconfigured App raises `GitHubAppConfigError` and is retried on the next call. `source_for` uses it for `github` sources unless given `app`, and the worker's `_github_app` uses it instead of building its own.
+**Why:** Installation tokens are cached on the `GitHubApp` instance. The API opens a task source per request and per scheduler tick; building an App each time would mint a new token per read and hit GitHub's rate limits. Passing an App through every caller of `source_for` (API routes, scheduler, worker activities) would thread it through code that otherwise knows nothing of GitHub. Keying by configuration gives a different App configuration its own instance instead of reusing a stale one.
+
+### [2026-11-26 23:59] The GitHub Issues source only logs its write-backs until M2-11
+
+**What:** `GitHubIssuesSource.comment`, `set_labels`, `write_context`, `link_prs` and `close` log `task_write_back_skipped` with `source=github`; `mark_done` returns None, and `mark_task_done` returns False for a `gh:` task without touching the worktree.
+**Why:** M2-09 is reading only; M2-11 owns writing to issues and sending the run events. Logging keeps `report_status` and the workflow path identical for both sources, so M2-11 only fills in the methods. An issue is closed when its change set merges, not by a commit on the branch, so there is nothing for `mark_done` to change.
+
+### [2026-11-26 23:59] GitHub read failures surface as `TaskReadError`
+
+**What:** `project_tasks` (`@api/src/fact/api/task_ref.py`) converts `GitHubError` and `httpx.HTTPError` raised while opening or reading a `github` source, including `GitHubAppConfigError` for an unconfigured App, into `TaskReadError`. `POST /api/v1/runs/start` answers 502 for it when the project is given (otherwise the project is skipped and named in the 404); the scheduler skips the project with `scheduler_skipped_project`.
+**Why:** The API and scheduler already treat `TaskReadError` (a failed git read of task files) as "this project's tasks cannot be read now"; GitHub being down, refusing, or not set up is the same condition. One error type keeps the callers source-agnostic, and 502 says an upstream failed rather than the request being wrong. A missing App on one project must not stop the scheduler starting other projects' tasks.

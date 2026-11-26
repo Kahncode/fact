@@ -1,0 +1,247 @@
+"""The GitHub Issues task source against a fake GitHub (`httpx.MockTransport`): listing, parsing, dependencies."""
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import httpx
+import pytest
+from fact.core.github import GitHubError, github_client
+from fact.core.tasks import GitHubIssuesSource, ReadyItem, TaskSource, branch_name
+from fact.core.tasks.github_issues import acceptance_criteria, complexity, depends_on_lines, task_type
+
+REPO = "acme/app"
+BODY = """## Goal
+
+Do the thing.
+
+Depends on #3, acme/lib#4 and #2
+
+### Acceptance criteria
+
+- [ ] `uv run pytest` passes.
+- [x] It works.
+
+## Notes
+
+- [ ] not a criterion
+"""
+
+
+def _issue(
+    n: int, *, labels: tuple[str, ...] = (), state: str = "open", reason: str | None = None, **extra: object
+) -> dict:
+    return {
+        "number": n,
+        "title": f"Issue {n}",
+        "body": extra.pop("body", ""),
+        "state": state,
+        "state_reason": reason,
+        "labels": [{"name": name} for name in labels],
+        "repository_url": f"https://api.github.com/repos/{extra.pop('repo', REPO)}",
+        **extra,
+    }
+
+
+def _closed(n: int, reason: str = "completed", repo: str = REPO) -> dict:
+    return _issue(n, state="closed", reason=reason, repo=repo)
+
+
+@dataclass
+class FakeGitHub:
+    """Serves issues by (repo, number), blocked-by links by number, and the `fact:ready` listing in two pages."""
+
+    issues: dict[tuple[str, int], dict] = field(default_factory=dict)
+    blocked_by: dict[int, list[dict]] = field(default_factory=dict)
+    requests: list[httpx.Request] = field(default_factory=list)
+
+    def add(self, issue: dict, repo: str = REPO) -> None:
+        self.issues[repo, issue["number"]] = issue
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        parts = request.url.path.strip("/").split("/")  # repos, owner, repo, issues, ...
+        repo = f"{parts[1]}/{parts[2]}"
+        rest = parts[4:]
+        if not rest:
+            return self._listing(request, repo)
+        number = int(rest[0])
+        if rest[1:] == ["dependencies", "blocked_by"]:
+            return httpx.Response(200, json=self.blocked_by.get(number, []))
+        issue = self.issues.get((repo, number))
+        return httpx.Response(200, json=issue) if issue else httpx.Response(404, json={"message": "Not Found"})
+
+    def _listing(self, request: httpx.Request, repo: str) -> httpx.Response:
+        assert request.url.params["state"] == "open"
+        assert request.url.params["labels"] == "fact:ready"
+        ready = [
+            i
+            for (r, _), i in sorted(self.issues.items())
+            if r == repo and i["state"] == "open" and "fact:ready" in [x["name"] for x in i["labels"]]
+        ]
+        if request.url.params.get("page") == "2":
+            return httpx.Response(200, json=ready[1:])
+        next_url = f"https://gh.test/repos/{repo}/issues?state=open&labels=fact:ready&per_page=100&page=2"
+        return httpx.Response(200, json=ready[:1], headers={"Link": f'<{next_url}>; rel="next"'})
+
+
+@dataclass(frozen=True)
+class _Token:
+    token: str
+
+
+@dataclass
+class FakeApp:
+    """Stands in for `GitHubApp`: one token per repository, clients on the fake transport."""
+
+    github: FakeGitHub
+    token_repos: list[str] = field(default_factory=list)
+
+    async def installation_token(self, full_name: str) -> _Token:
+        self.token_repos.append(full_name)
+        return _Token(f"tok-{full_name}")
+
+    def api_client(self, token: str | None) -> httpx.AsyncClient:
+        return github_client(token, api_url="https://gh.test", transport=httpx.MockTransport(self.github.handle))
+
+
+def _source(github: FakeGitHub) -> GitHubIssuesSource:
+    return GitHubIssuesSource(REPO, FakeApp(github))  # type: ignore[arg-type]
+
+
+def test_parsing_helpers() -> None:
+    assert acceptance_criteria(BODY) == ["`uv run pytest` passes.", "It works."]
+    assert depends_on_lines(BODY, REPO) == ["gh:acme/app#3", "gh:acme/lib#4", "gh:acme/app#2"]
+    assert depends_on_lines("- **Depends on:** #7\nnot depends on #8", REPO) == ["gh:acme/app#7"]
+    assert task_type(["type:chore"]) == "chore"
+    assert task_type(["Type:Incident"]) == "bug"
+    assert task_type(["type:weird"]) == task_type([]) == "feature"
+    assert complexity(["complexity:complex"]) == "complex"
+    assert complexity([]) == "standard"
+
+
+async def test_get_reads_an_issue() -> None:
+    github = FakeGitHub()
+    github.add(_issue(12, labels=("fact:ready", "type:bug", "complexity:trivial"), body=BODY.replace("\n", "\r\n")))
+    github.blocked_by[12] = [_closed(5), _closed(4, repo="acme/lib")]
+    source: TaskSource = _source(github)
+    task = await source.get("gh:acme/app#12")
+    assert task is not None
+    assert (task.key, task.id, task.title, task.type, task.complexity) == (
+        "gh:acme/app#12",
+        "12",
+        "Issue 12",
+        "bug",
+        "trivial",
+    )
+    assert "\r" not in task.body
+    assert task.acceptance_criteria == ["`uv run pytest` passes.", "It works."]
+    # blocked-by links first, then `Depends on` lines, without repeats
+    assert task.depends_on == ["gh:acme/app#5", "gh:acme/lib#4", "gh:acme/app#3", "gh:acme/app#2"]
+    assert task.path is None
+    assert branch_name(task.key) == "fact/gh-12"
+    auth = {r.headers["Authorization"] for r in github.requests}
+    assert auth == {"Bearer tok-acme/app"}
+
+
+async def test_get_returns_none_for_unknown_pr_and_foreign_keys() -> None:
+    github = FakeGitHub()
+    github.add(_issue(7, pull_request={"url": "x"}))
+    source = _source(github)
+    assert await source.get("gh:acme/app#99") is None
+    assert await source.get("gh:acme/app#7") is None
+    assert await source.get("gh:acme/other#1") is None
+    assert await source.get("task:M1-01") is None
+    assert all("other" not in str(r.url) for r in github.requests)
+
+
+@pytest.mark.parametrize(
+    ("dep", "done"),
+    [
+        (_closed(3), True),
+        (_closed(3, reason="not_planned"), False),
+        (_closed(3, reason="duplicate"), False),
+        (_issue(3), False),
+        (_issue(3, state="closed"), True),  # closed before GitHub recorded a reason
+        (_issue(3, pull_request={"merged_at": "2026-01-01T00:00:00Z"}), True),
+        (_issue(3, state="closed", pull_request={"merged_at": None}), False),
+        (None, False),
+    ],
+)
+async def test_deps_done_from_depends_on_lines(dep: dict | None, *, done: bool) -> None:
+    github = FakeGitHub()
+    github.add(_issue(12, body="Depends on #3"))
+    if dep is not None:
+        github.add(dep)
+    source = _source(github)
+    task = await source.get("gh:acme/app#12")
+    assert task is not None
+    assert task.depends_on == ["gh:acme/app#3"]
+    assert await source.deps_done(task) is done
+
+
+async def test_deps_done_from_blocked_by_uses_the_listed_state() -> None:
+    github = FakeGitHub()
+    github.add(_issue(12))
+    github.blocked_by[12] = [_closed(4, repo="acme/lib"), _issue(6)]
+    source = _source(github)
+    task = await source.get("gh:acme/app#12")
+    assert task is not None
+    assert not await source.deps_done(task)
+    assert await source.deps_done(task.model_copy(update={"depends_on": ["gh:acme/lib#4"]}))
+    # the states came with the blocked-by listing: no lookup of the blockers, no token for acme/lib
+    assert not any(r.url.path.endswith(("/issues/4", "/issues/6")) for r in github.requests)
+
+
+async def test_deps_done_reads_another_repository_with_its_token() -> None:
+    github = FakeGitHub()
+    github.add(_issue(12, body="Depends on acme/lib#4"))
+    github.add(_closed(4, repo="acme/lib"), repo="acme/lib")
+    app = FakeApp(github)
+    source = GitHubIssuesSource(REPO, app)  # type: ignore[arg-type]
+    task = await source.get("gh:acme/app#12")
+    assert task is not None
+    assert await source.deps_done(task)
+    assert "acme/lib" in app.token_repos
+
+
+async def test_list_ready() -> None:
+    github = FakeGitHub()
+    github.add(_issue(1, labels=("fact:ready",)))  # no dependencies
+    github.add(_issue(2, labels=("fact:ready",), body="Depends on #9"))  # #9 still open
+    github.add(_issue(3, labels=("fact:ready", "type:chore")))  # its blocker is done
+    github.add(_issue(4, labels=("fact:ready",)))  # its blocker was closed as not planned
+    github.add(_issue(5, labels=("fact:ready",), pull_request={"url": "x"}))  # a PR, never a task
+    github.add(_issue(6))  # not ready
+    github.add(_issue(9))
+    github.blocked_by[3] = [_closed(8)]
+    github.blocked_by[4] = [_closed(7, reason="not_planned")]
+    ready = await _source(github).list_ready()
+    assert all(isinstance(r, ReadyItem) and r.depth == 0 for r in ready)
+    assert [(r.task.key, r.task.type) for r in ready] == [("gh:acme/app#1", "feature"), ("gh:acme/app#3", "chore")]
+    assert any(r.url.params.get("page") == "2" for r in github.requests)  # followed the Link header
+
+
+async def test_api_errors_raise() -> None:
+    github = FakeGitHub()
+    source = _source(github)
+    github.handle = lambda _request: httpx.Response(500, json={"message": "boom"})  # type: ignore[method-assign]
+    with pytest.raises(GitHubError):
+        await source.list_ready()
+
+
+async def test_write_back_only_logs(tmp_path: Path) -> None:
+    github = FakeGitHub()
+    source = _source(github)
+    key = "gh:acme/app#1"
+    await source.comment(key, "hi")
+    await source.set_labels(key, ["fact:running"], [])
+    await source.write_context(key, "ctx")
+    await source.link_prs(key, [])
+    await source.close(key)
+    assert source.mark_done(tmp_path, key) is None
+    assert github.requests == []
+
+
+def test_rejects_a_bad_repo() -> None:
+    with pytest.raises(ValueError, match="owner/repo"):
+        GitHubIssuesSource("not-a-repo", FakeApp(FakeGitHub()))  # type: ignore[arg-type]

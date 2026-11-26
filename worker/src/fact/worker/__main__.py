@@ -13,7 +13,7 @@ import sys
 from contextlib import AsyncExitStack
 
 import httpx
-from fact.core.github import GitHubApp, GitHubAppConfigError
+from fact.core.github import GitHubApp, GitHubAppConfigError, shared_app
 from fact.core.logging import configure_logging, get_logger
 from fact.core.settings import Settings, get_settings
 from fact.worker.activities.agent import AgentActivities
@@ -56,7 +56,7 @@ def _cancel_on_ctrl_break() -> None:
 def _github_app(settings: Settings) -> GitHubApp | None:
     """Build the process's one GitHub App, or None when it is not configured (pushing and PRs then fail)."""
     try:
-        return GitHubApp.from_settings(settings)
+        return shared_app(settings)
     except GitHubAppConfigError as exc:
         get_logger("fact.worker").warning("github_app_unavailable", error=str(exc))
         return None

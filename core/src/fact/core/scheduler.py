@@ -61,8 +61,11 @@ class TickResult(_Model):
 
 
 def _order(task: ReadyTask) -> tuple[int, int, int, str, str]:
-    m = _ID_RE.match(task.task_id)
-    milestone, number = (int(m.group(1)), int(m.group(2))) if m else (1 << 30, 1 << 30)
+    """Depth, then milestone and number for a file task (`M2-09`), else the issue number (`12`), then the id."""
+    if m := _ID_RE.match(task.task_id):
+        milestone, number = int(m.group(1)), int(m.group(2))
+    else:
+        milestone, number = 1 << 30, int(task.task_id) if task.task_id.isdigit() else 1 << 30
     return task.depth, milestone, number, task.task_id, task.project
 
 

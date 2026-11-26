@@ -21,10 +21,11 @@ from fact.core.activity_contract import (
     RunStartedInput,
 )
 from fact.core.enums import RunStatus
+from fact.core.github import GitHubAppConfigError
 from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, load_project_config
 from fact.core.settings import Settings, get_settings
-from fact.core.tasks import TaskSource, source_for
+from fact.core.tasks import TaskSource, parse_key, source_for
 from fact.worker.git_push import run_git
 from fact.worker.loader import home_sha_of
 from temporalio import activity
@@ -70,7 +71,10 @@ def _task_source(worktree: Path, settings: Settings) -> TaskSource | None:
         config = load_project_config(worktree)
     except ConfigError as exc:
         raise _non_retryable(str(exc)) from exc
-    return source_for(config, settings, worktree)
+    try:
+        return source_for(config, settings, worktree)
+    except GitHubAppConfigError:  # a file task in a project whose source is GitHub: nothing to mark here
+        return None
 
 
 class ControlActivities:
@@ -83,6 +87,9 @@ class ControlActivities:
     async def mark_task_done(self, spec: MarkTaskDoneInput) -> bool:
         """Commit `chore(<id>): mark done`, deleting the task file, on the run's branch; False when nothing to do."""
         with bind_run(spec.run_id):
+            if spec.task.path is None and parse_key(spec.task.key).kind != "task":
+                log.info("mark_task_done_skipped", reason="an issue is closed when its PR merges, not by a commit")
+                return False
             worktree = _home_worktree(spec)
             source = _task_source(worktree, self._settings or get_settings())
             if source is None:

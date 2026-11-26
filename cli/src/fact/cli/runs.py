@@ -51,7 +51,7 @@ def api_error(e: httpx.HTTPStatusError) -> typer.Exit:
 
 
 def run(
-    task_key: Annotated[str, typer.Argument(help="Task key, such as task:M1-02.")],
+    task_key: Annotated[str, typer.Argument(help="Task key, such as task:M1-02 or gh:owner/repo#12.")],
     *,
     force_deps: Annotated[bool, typer.Option("--force-deps", help="Start even if dependencies are not done.")] = False,
     project: Annotated[

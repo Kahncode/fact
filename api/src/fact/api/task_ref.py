@@ -1,4 +1,8 @@
-"""Open a project's task source; a `files` source reads the files as on `origin/<default branch>`, not the working tree."""
+"""
+Open a project's task source; a `files` source reads the files as on `origin/<default branch>`, not the working tree.
+
+A `github` source reads the issues through the GitHub App; its failures surface as `TaskReadError`.
+"""
 
 import asyncio
 import io
@@ -11,6 +15,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+from fact.core.github import GitHubError
 from fact.core.logging import get_logger
 from fact.core.project_config import ProjectConfig, load_project_config
 from fact.core.settings import ProjectRef, Settings, project_path
@@ -25,7 +31,7 @@ GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
 
 class TaskReadError(RuntimeError):
-    """The task files could not be read from git."""
+    """The task source could not be read: git failed on the task files, or GitHub on the issues."""
 
 
 @dataclass(frozen=True)
@@ -92,10 +98,11 @@ class ProjectTasks:
 @asynccontextmanager
 async def project_tasks(settings: Settings, ref: ProjectRef) -> AsyncIterator[ProjectTasks | None]:
     """
-    Open the project's task source; None without a local checkout or while its kind cannot be read.
+    Open the project's task source; None without a local checkout.
 
     A `files` source reads a snapshot of `origin/<default branch>`, fetched first (offline: the last fetched state),
     so it sees the tasks as merged, not as the working tree has them. The snapshot lasts as long as the context.
+    GitHub errors (App not configured, API refusals, network), here or inside the context, raise `TaskReadError`.
     """
     path = project_path(ref)
     if path is None:
@@ -106,8 +113,11 @@ async def project_tasks(settings: Settings, ref: ProjectRef) -> AsyncIterator[Pr
         root = Path(tmp)
         if config.task_source.kind == "files":  # git is blocking
             await asyncio.to_thread(_snapshot, path, default_branch(ref, config), config.task_source.path, root)
-        source = source_for(config, settings, root)
-        yield ProjectTasks(config, source) if source is not None else None
+        try:
+            yield ProjectTasks(config, source_for(config, settings, root))
+        except (GitHubError, httpx.HTTPError) as exc:
+            msg = f"cannot read the GitHub issues of project {ref.name}: {exc}"
+            raise TaskReadError(msg) from exc
 
 
 async def check_task(source: TaskSource, key: str) -> TaskCheck | None:

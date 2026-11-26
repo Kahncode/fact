@@ -212,3 +212,23 @@ class GitHubApp:
                 user = (await client.get(f"/users/{name}")).json()
             self._bot = BotIdentity(slug=info.slug, name=name, email=f"{user['id']}+{name}@users.noreply.github.com")
         return self._bot
+
+
+_SHARED: dict[tuple[str | None, str | None, str], GitHubApp] = {}
+
+
+def shared_app(settings: Settings | None = None) -> GitHubApp:
+    """
+    Return the process's `GitHubApp` for these settings, built on first use so every caller shares its token caches.
+
+    Raises `GitHubAppConfigError` while the App is not configured (and tries again on the next call).
+    """
+    s = settings or get_settings()
+    key = (
+        None if s.github_app_id is None else str(s.github_app_id),
+        None if s.github_app_private_key_path is None else str(s.github_app_private_key_path),
+        s.github_api_url,
+    )
+    if key not in _SHARED:
+        _SHARED[key] = GitHubApp.from_settings(s)
+    return _SHARED[key]

@@ -19,7 +19,7 @@ Planning is everything before execution: refreshing the issue against today's co
 
 **Dependencies drive scheduling.** An issue runs only when every issue it depends on has merged. The scheduler takes ready issues in dependency order, then by priority, within the caps. On GitHub, dependencies use sub-issues and blocked-by links where available, otherwise a `Depends on #n` list in the plan; on Linear, its blocking relations.
 
-Today (M2-07), the scheduler reads file tasks only. Each tick takes the tasks `ready` on the default branch with every dependency done that have never had a run, orders them by dependency depth, then by id (file tasks have no priority), and starts them within `concurrency.max_runs` and the project's `max_runs`. A task whose run failed, was dropped or had its PR closed is not started again by the scheduler; a person restarts it with `fact run`. The scheduler is created off: `fact scheduler on` turns it on.
+Today (M2-07, GitHub Issues since M2-09), each tick takes the tasks that are ready (file tasks `ready` on the default branch, or open issues labelled `fact:ready`) with every dependency done and that have never had a run, orders them by dependency depth, then by id (file ids, then issue numbers; no priority yet), and starts them within `concurrency.max_runs` and the project's `max_runs`. A task whose run failed, was dropped or had its PR closed is not started again by the scheduler; a person restarts it with `fact run`. The scheduler is created off: `fact scheduler on` turns it on.
 
 **Where you talk to the planner.** In v0, from Claude through the fact MCP server, or on the issue itself; in v1, also from the web UI, and later Slack or Discord.
 

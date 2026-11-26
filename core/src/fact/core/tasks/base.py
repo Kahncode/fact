@@ -3,7 +3,7 @@ The task source interface: how fact reads work from a tracker and reports back t
 
 Every caller (the scheduler, `fact run`, the worker's activities) goes through `TaskSource` and `source_for`, so it
 does not care whether a task is a file or an issue. Keys carry their source: `task:M1-02` is a file task, and
-`gh:owner/repo#12` a GitHub issue (read from M2-09).
+`gh:owner/repo#12` a GitHub issue (`GitHubIssuesSource`).
 """
 
 import re
@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from fact.core.types import PRRef, Task
 
 if TYPE_CHECKING:
+    from fact.core.github.app import GitHubApp
     from fact.core.project_config import ProjectConfig
     from fact.core.settings import Settings
 
@@ -110,13 +111,15 @@ class TaskSource(Protocol):
         ...
 
 
-def source_for(config: ProjectConfig, settings: Settings, root: Path | None = None) -> TaskSource | None:
+def source_for(
+    config: ProjectConfig, settings: Settings, root: Path | None = None, *, app: GitHubApp | None = None
+) -> TaskSource:
     """
-    Return the task source the project's `.fact/project.yaml` names; None while its kind cannot be read (M2-09).
+    Return the task source the project's `.fact/project.yaml` names.
 
-    `root` is the checkout holding a `files` source's folder, such as a snapshot of the default branch.
+    `root` is the checkout holding a `files` source's folder, such as a snapshot of the default branch. A `github`
+    source uses `app`, else the process's shared App (`GitHubAppConfigError` while it is not configured).
     """
-    del settings  # the GitHub source takes its App and API settings from here
     source = config.task_source
     if source.kind == "files":
         if root is None:
@@ -125,4 +128,8 @@ def source_for(config: ProjectConfig, settings: Settings, root: Path | None = No
         from fact.core.tasks.files import FileTaskSource  # noqa: PLC0415 - files imports this module
 
         return FileTaskSource(root, source.path)
-    return None
+    from fact.core.github.app import shared_app  # noqa: PLC0415 - keep GitHub out of the files path
+    from fact.core.tasks.github_issues import GitHubIssuesSource  # noqa: PLC0415 - it imports this module
+
+    assert source.repo is not None  # noqa: S101 - TaskSourceConfig requires it for github
+    return GitHubIssuesSource(source.repo, app or shared_app(settings))

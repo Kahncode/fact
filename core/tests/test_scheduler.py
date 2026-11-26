@@ -24,6 +24,11 @@ def test_orders_by_depth_then_id() -> None:
     assert _ids(plan_starts(_ready(tasks, a=(0, 10)))) == ["M2-02", "M2-10", "M10-01", "odd", "M1-03"]
 
 
+def test_orders_issues_by_number() -> None:
+    issues = [ReadyTask(project="a", task_key=f"gh:acme/app#{n}", task_id=n) for n in ("12", "9", "100")]
+    assert _ids(plan_starts(_ready(issues, a=(0, 10)))) == ["9", "12", "100"]
+
+
 def test_overall_cap_counts_active_runs() -> None:
     tasks = [_task("M1-01"), _task("M1-02"), _task("M1-03")]
     assert _ids(plan_starts(_ready(tasks, max_runs=2, a=(0, 5)))) == ["M1-01", "M1-02"]

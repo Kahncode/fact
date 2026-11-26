@@ -8,6 +8,7 @@ bookkeeping: a project without a checkout, or whose source cannot be written yet
 import asyncio
 
 from fact.core.activity_contract import REPORT_STATUS, ReportStatusInput
+from fact.core.github import GitHubAppConfigError
 from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, load_project_config
 from fact.core.settings import Settings, get_settings, project_path
@@ -33,7 +34,11 @@ class TaskStatusActivities:
             config = await asyncio.to_thread(load_project_config, path)
         except ConfigError as exc:
             raise ApplicationError(str(exc), non_retryable=True) from exc
-        return source_for(config, settings, path)
+        try:
+            return source_for(config, settings, path)
+        except GitHubAppConfigError as exc:  # reporting is bookkeeping: skip it rather than retry forever
+            log.warning("task_source_unavailable", project=project, error=str(exc))
+            return None
 
     @activity.defn(name=REPORT_STATUS)
     async def report_status(self, spec: ReportStatusInput) -> None:
