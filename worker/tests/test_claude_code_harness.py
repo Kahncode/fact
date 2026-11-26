@@ -40,6 +40,8 @@ def test_ok_fixture_parses_into_result() -> None:
     assert result.usage.tokens_in == 2 + 19489 + 13121
     assert result.usage.tokens_out == OK_TOKENS_OUT
     assert result.usage.cost_usd == pytest.approx(0.00403121)
+    assert (result.usage.cache_write_tokens, result.usage.cache_read_tokens) == (19489, 13121)
+    assert result.usage.partial is False
 
 
 def test_max_turns_fixture_is_an_error() -> None:
@@ -65,7 +67,8 @@ def test_missing_result_reports_stderr_and_session() -> None:
     assert result.stop_reason == "no_result"
     assert result.session_id == init["session_id"]
     assert result.final_message == "Error: not logged in"
-    assert result.usage.cost_usd == 0.0
+    assert result.usage.cost_usd is None  # no result message: Claude Code reported no cost
+    assert result.usage.partial is False  # only `init` arrived: the session never ran, nothing was cut short
 
 
 @pytest.mark.parametrize("line", ["", "not json", "[1, 2]", "Warning: something"])

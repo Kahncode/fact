@@ -627,6 +627,14 @@
       },
       "RunDetail": {
         "properties": {
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
           "complexity": {
             "anyOf": [
               {
@@ -637,6 +645,10 @@
               }
             ],
             "title": "Complexity"
+          },
+          "cost_unknown_steps": {
+            "title": "Cost Unknown Steps",
+            "type": "integer"
           },
           "cost_usd": {
             "title": "Cost Usd",
@@ -779,7 +791,10 @@
           "human_wait_seconds",
           "tokens_in",
           "tokens_out",
+          "cache_read_tokens",
+          "cache_write_tokens",
           "cost_usd",
+          "cost_unknown_steps",
           "human_touches",
           "steps"
         ],
@@ -788,6 +803,14 @@
       },
       "RunOut": {
         "properties": {
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
           "complexity": {
             "anyOf": [
               {
@@ -798,6 +821,10 @@
               }
             ],
             "title": "Complexity"
+          },
+          "cost_unknown_steps": {
+            "title": "Cost Unknown Steps",
+            "type": "integer"
           },
           "cost_usd": {
             "title": "Cost Usd",
@@ -933,7 +960,10 @@
           "human_wait_seconds",
           "tokens_in",
           "tokens_out",
+          "cache_read_tokens",
+          "cache_write_tokens",
           "cost_usd",
+          "cost_unknown_steps",
           "human_touches"
         ],
         "title": "RunOut",
@@ -1322,9 +1352,24 @@
             "title": "Attempt",
             "type": "integer"
           },
+          "cache_read_tokens": {
+            "title": "Cache Read Tokens",
+            "type": "integer"
+          },
+          "cache_write_tokens": {
+            "title": "Cache Write Tokens",
+            "type": "integer"
+          },
           "cost_usd": {
-            "title": "Cost Usd",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
           },
           "ended_at": {
             "anyOf": [
@@ -1457,6 +1502,10 @@
             ],
             "title": "Transcript Ref"
           },
+          "usage_partial": {
+            "title": "Usage Partial",
+            "type": "boolean"
+          },
           "wait_seconds": {
             "title": "Wait Seconds",
             "type": "number"
@@ -1478,7 +1527,10 @@
           "wait_seconds",
           "tokens_in",
           "tokens_out",
+          "cache_read_tokens",
+          "cache_write_tokens",
           "cost_usd",
+          "usage_partial",
           "log_ref",
           "transcript_ref",
           "outputs"
@@ -1512,6 +1564,30 @@
       },
       "StepUpdate": {
         "properties": {
+          "cache_read_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Read Tokens"
+          },
+          "cache_write_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Write Tokens"
+          },
           "cost_usd": {
             "anyOf": [
               {
@@ -1628,6 +1704,17 @@
               }
             ],
             "title": "Transcript Ref"
+          },
+          "usage_partial": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage Partial"
           },
           "wait_seconds": {
             "anyOf": [

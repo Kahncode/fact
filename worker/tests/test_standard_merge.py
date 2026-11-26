@@ -53,7 +53,7 @@ async def test_run_ends_as_its_pr_did_and_tears_down(
     assert answered.wait_seconds >= 0
 
 
-async def test_prs_ready_and_cost_come_before_the_wait_and_the_end_after() -> None:
+async def test_prs_ready_comes_before_the_wait_and_the_cost_comment_once_at_the_end() -> None:
     fakes = FakeActivities()
     await run_standard(fakes, "run-pr-order")
 
@@ -64,13 +64,13 @@ async def test_prs_ready_and_cost_come_before_the_wait_and_the_end_after() -> No
     )
     assert names.index(RECORD_GATE_OPENED) < wait
     assert ready < wait
-    assert POST_COST_COMMENT in names[:wait]
+    assert POST_COST_COMMENT not in names[:wait]
     assert names[wait + 1 :] == [
         RECORD_GATE_ANSWERED,
-        POST_COST_COMMENT,  # last, with the review wait
         RECORD_RUN_FINISHED,
         REPORT_STATUS,
         TEARDOWN_WORKSPACE,
+        POST_COST_COMMENT,  # once, last, with every step recorded
         NOTIFY,
     ]
 
@@ -89,6 +89,10 @@ async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
     assert "wait_for_pr_closed is broken" in answered.note
     assert finished(fakes) == RunOutcome.FAILED
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # the workspace stays for a person
+    (comment,) = fakes.of(POST_COST_COMMENT)  # a failed run with a PR still gets its cost, after the end is recorded
+    assert comment.prs == [PR]
+    names = [n for n, _ in fakes.calls]
+    assert names.index(POST_COST_COMMENT) > names.index(RECORD_RUN_FINISHED)
 
 
 async def test_a_tracker_outage_does_not_fail_the_run() -> None:

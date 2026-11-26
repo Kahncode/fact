@@ -9,7 +9,7 @@ from fact.core.enums import RunStatus, StepKind, StepOutcome, StepStatus
 from fact.core.migrate import upgrade
 from fact.core.models import Event, Project, Run, Step
 from fact.core.settings import Settings
-from sqlalchemy import JSON, DateTime, Float, Integer, Numeric, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, Numeric, String, Text
 from sqlalchemy import create_engine as create_sync_engine
 from sqlalchemy.exc import IntegrityError
 
@@ -111,7 +111,7 @@ def test_migrations_match_models(tmp_path: Path) -> None:
 
 
 def test_only_portable_column_types() -> None:
-    allowed = (String, Text, Integer, Float, Numeric, DateTime, JSON)
+    allowed = (String, Text, Integer, Float, Numeric, DateTime, JSON, Boolean)
     for table in Base.metadata.tables.values():
         for column in table.columns:
             assert type(column.type) in allowed, (table.name, column.name, column.type)

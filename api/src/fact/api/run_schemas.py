@@ -47,7 +47,10 @@ class StepUpdate(BaseModel):
     wait_seconds: float | None = Field(default=None, ge=0)
     tokens_in: int | None = Field(default=None, ge=0)
     tokens_out: int | None = Field(default=None, ge=0)
-    cost_usd: Decimal | None = Field(default=None, ge=0)
+    cache_read_tokens: int | None = Field(default=None, ge=0)
+    cache_write_tokens: int | None = Field(default=None, ge=0)
+    cost_usd: Decimal | None = Field(default=None, ge=0)  # an explicit null records a cost the harness never reported
+    usage_partial: bool | None = None
     log_ref: str | None = None
     transcript_ref: str | None = None
     outputs: dict[str, Any] | None = None
@@ -78,7 +81,10 @@ class StepOut(BaseModel):
     wait_seconds: float
     tokens_in: int
     tokens_out: int
-    cost_usd: Decimal
+    cache_read_tokens: int
+    cache_write_tokens: int
+    cost_usd: Decimal | None
+    usage_partial: bool
     log_ref: str | None
     transcript_ref: str | None
     outputs: dict[str, Any] | None
@@ -105,7 +111,10 @@ class RunOut(BaseModel):
     human_wait_seconds: float
     tokens_in: int
     tokens_out: int
+    cache_read_tokens: int
+    cache_write_tokens: int
     cost_usd: Decimal
+    cost_unknown_steps: int
     human_touches: int
 
 

@@ -74,8 +74,20 @@ def run(
     typer.echo(f"Temporal: {started['temporal_url']}")
 
 
-def _cost(value: object) -> str:
+def _cost(value: object, *, agent: bool = False) -> str:
+    """Format a reported cost; an agent step whose harness reported none reads `unknown`, never $0."""
+    if value is None:
+        return "unknown" if agent else "-"
     return f"${float(str(value)):.2f}"
+
+
+def _run_usage(r: dict[str, Any]) -> list[str]:
+    cost = _cost(r["cost_usd"])
+    if unknown := r.get("cost_unknown_steps"):
+        cost += f" (+ {unknown} agent steps with no reported cost)"
+    fresh = r["tokens_in"] - r["cache_read_tokens"] - r["cache_write_tokens"]
+    tokens = f"in {fresh}, cache read {r['cache_read_tokens']}, cache write {r['cache_write_tokens']}"
+    return [f"Cost:     {cost}", f"Tokens:   {tokens}, out {r['tokens_out']}"]
 
 
 def list_runs(
@@ -133,7 +145,8 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     typer.echo(f"Run:      {r['id']}")
     typer.echo(f"Status:   {r['status']}  outcome: {r['outcome'] or '-'}")
     typer.echo(f"Duration: {_duration(r['started_at'], r['ended_at'])}  machine: {r['machine_seconds']:.0f}s")
-    typer.echo(f"Cost:     {_cost(r['cost_usd'])}  tokens in/out: {r['tokens_in']}/{r['tokens_out']}")
+    for line in _run_usage(r):
+        typer.echo(line)
     if r["status"] != RunStatus.FINISHED:
         for line in _live_lines(r["id"]):
             typer.echo(line)
@@ -149,7 +162,7 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
             s["status"],
             s["outcome"] or "-",
             _duration(s["started_at"], s["ended_at"]),
-            _cost(s["cost_usd"]),
+            _cost(s["cost_usd"], agent=s["harness"] is not None) + (" (cut short)" if s["usage_partial"] else ""),
             _links(s, base),
         )
         for s in r["steps"]

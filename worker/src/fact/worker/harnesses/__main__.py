@@ -21,8 +21,11 @@ async def _main(prompt: str, model: str | None, max_turns: int) -> int:
         result = await ClaudeCodeHarness().run(request, transcript)
         lines = len(transcript.read_text(encoding="utf-8").splitlines())
     print(f"session_id:    {result.session_id}")  # noqa: T201
-    print(f"cost_usd:      {result.usage.cost_usd:.6f}")  # noqa: T201
-    print(f"tokens in/out: {result.usage.tokens_in}/{result.usage.tokens_out}")  # noqa: T201
+    u = result.usage
+    cost = "unknown" if u.cost_usd is None else f"{u.cost_usd:.6f}"
+    print(f"cost_usd:      {cost}")  # noqa: T201
+    cache = f"cache read {u.cache_read_tokens}, write {u.cache_write_tokens}"
+    print(f"tokens in/out: {u.tokens_in}/{u.tokens_out} ({cache})")  # noqa: T201
     print(f"stop_reason:   {result.stop_reason} (exit {result.exit_code}, turns {result.num_turns})")  # noqa: T201
     print(f"transcript:    {lines} lines")  # noqa: T201
     print(f"final_message: {result.final_message}")  # noqa: T201

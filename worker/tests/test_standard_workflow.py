@@ -61,18 +61,16 @@ async def test_green_path() -> None:
         MARK_TASK_DONE,
         OPEN_CHANGE_SET,
         REPORT_STATUS,  # prs_opened
-        POST_COST_COMMENT,
         WAIT_FOR_CI,
-        POST_COST_COMMENT,
         MERGE_CHANGE_SET,  # refused by default in the fakes: a person reviews
         NOTIFY,  # PRs ready
         RECORD_GATE_OPENED,  # the review wait
         WAIT_FOR_PR_CLOSED,
         RECORD_GATE_ANSWERED,
-        POST_COST_COMMENT,
         RECORD_RUN_FINISHED,
         REPORT_STATUS,  # merged: the issue closes
         TEARDOWN_WORKSPACE,
+        POST_COST_COMMENT,  # once, last, so it covers every step
         NOTIFY,  # merged
     ]
     assert [(r.task_key, r.event) for r in fakes.of(REPORT_STATUS)] == [
@@ -96,7 +94,7 @@ async def test_green_path() -> None:
     assert pr_spec.attempt == 1
     (ci_spec,) = fakes.of(WAIT_FOR_CI)
     assert (ci_spec.stage_id, ci_spec.attempt, ci_spec.pr) == ("wait_for_ci", 1, PR)
-    assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])] * 3
+    assert [(c.run_id, c.prs) for c in fakes.of(POST_COST_COMMENT)] == [("run-1", [PR])]
     assert finished(fakes) == RunOutcome.MERGED
 
     # Replay through JSON: the code is deterministic and the history serializes with our converter.
@@ -135,6 +133,7 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert len(checks(fakes)) == 2 * (MAX_FIX_ATTEMPTS + 1)
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
+    assert fakes.of(POST_COST_COMMENT) == []  # no PR to comment on
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
     (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected

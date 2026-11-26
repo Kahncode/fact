@@ -41,7 +41,7 @@ async def _step_or_404(session: AsyncSession, step_id: str) -> Step:
 
 
 RUN_NULLABLE = {"outcome", "started_at", "ended_at"}
-STEP_NULLABLE = {"outcome", "started_at", "ended_at", "log_ref", "transcript_ref", "outputs"}
+STEP_NULLABLE = {"outcome", "started_at", "ended_at", "cost_usd", "log_ref", "transcript_ref", "outputs"}
 
 
 def _changes(body: BaseModel, nullable: set[str]) -> dict[str, Any]:

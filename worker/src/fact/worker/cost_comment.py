@@ -2,7 +2,8 @@
 The cost comment on a run's PR: time, tokens and cost per step and per harness and model.
 
 `render_cost_comment` turns a run as the runs API returns it (`GET /runs/{id}`, with its steps) into markdown;
-`upsert_comment` creates fact's comment on the PR, or updates the one carrying `COST_MARKER`.
+`upsert_comment` creates fact's comment on the PR, or updates the one carrying `COST_MARKER`. Only reported usage is
+shown: a cost the harness did not report reads `unknown` and is left out of the totals, which say how many are missing.
 """
 
 from collections import defaultdict
@@ -16,6 +17,8 @@ import httpx
 COST_MARKER = "<!-- fact:cost -->"
 COMMENTS_PAGE = 100
 NONE = "—"
+UNKNOWN = "unknown"
+TOTAL = "**Total**"
 SECONDS_PER_MINUTE = 60
 SECONDS_PER_HOUR = 3600
 
@@ -27,9 +30,17 @@ class StepCost:
     route: str  # `harness / model`, or `—` for steps without an agent
     duration_s: float | None  # wall time; None while the step has not ended
     wait_s: float
-    tokens_in: int
+    tokens_in: int  # every prompt token; the cache counts are part of it
     tokens_out: int
-    cost: Decimal
+    cache_read: int
+    cache_write: int
+    cost: Decimal | None  # None: the harness reported no cost
+    partial: bool = False  # the session was cut short: tokens of the messages received
+    unknown_costs: int = 0  # for totals: agent steps whose cost is None
+
+    @property
+    def fresh_in(self) -> int:
+        return max(self.tokens_in - self.cache_read - self.cache_write, 0)
 
 
 def _seconds(start: str | None, end: str | None) -> float | None:
@@ -45,20 +56,25 @@ def _route(step: dict[str, Any]) -> str:
     return " / ".join(part for part in (harness, model) if part)
 
 
+def _step_cost(s: dict[str, Any]) -> StepCost:
+    cost = s.get("cost_usd")
+    return StepCost(
+        stage=s["stage_id"],
+        attempt=s["attempt"],
+        route=_route(s),
+        duration_s=_seconds(s.get("started_at"), s.get("ended_at")),
+        wait_s=float(s.get("wait_seconds") or 0),
+        tokens_in=int(s.get("tokens_in") or 0),
+        tokens_out=int(s.get("tokens_out") or 0),
+        cache_read=int(s.get("cache_read_tokens") or 0),
+        cache_write=int(s.get("cache_write_tokens") or 0),
+        cost=None if cost is None else Decimal(str(cost)),
+        partial=bool(s.get("usage_partial")),
+    )
+
+
 def step_costs(run: dict[str, Any]) -> list[StepCost]:
-    return [
-        StepCost(
-            stage=s["stage_id"],
-            attempt=s["attempt"],
-            route=_route(s),
-            duration_s=_seconds(s.get("started_at"), s.get("ended_at")),
-            wait_s=float(s.get("wait_seconds") or 0),
-            tokens_in=int(s.get("tokens_in") or 0),
-            tokens_out=int(s.get("tokens_out") or 0),
-            cost=Decimal(str(s.get("cost_usd") or 0)),
-        )
-        for s in run.get("steps", [])
-    ]
+    return [_step_cost(s) for s in run.get("steps", [])]
 
 
 def format_duration(seconds: float | None) -> str:
@@ -73,25 +89,38 @@ def format_duration(seconds: float | None) -> str:
     return f"{total // SECONDS_PER_HOUR}h {minutes:02d}m"
 
 
-def _tokens(tokens_in: int, tokens_out: int) -> str:
-    return f"{tokens_in:,} in / {tokens_out:,} out" if tokens_in or tokens_out else NONE
+def _count(n: int) -> str:
+    return f"{n:,}" if n else NONE
 
 
-def _cost(cost: Decimal) -> str:
-    return f"${cost:,.2f}" if cost else NONE
+def _token_cells(s: StepCost) -> list[str]:
+    return [_count(s.fresh_in), _count(s.cache_read), _count(s.cache_write), _count(s.tokens_out)]
 
 
-def _total(steps: list[StepCost]) -> StepCost:
+def _cost(s: StepCost) -> str:
+    if s.stage == TOTAL:
+        known = f"${s.cost or 0:,.2f}"
+        return f"{known} + {s.unknown_costs} {UNKNOWN}" if s.unknown_costs else known
+    if s.cost is None:
+        return UNKNOWN if s.route != NONE else NONE
+    return f"${s.cost:,.2f}"
+
+
+def _total(steps: list[StepCost], stage: str = TOTAL) -> StepCost:
     durations = [s.duration_s for s in steps if s.duration_s is not None]
     return StepCost(
-        stage="**Total**",
+        stage=stage,
         attempt=len(steps),
         route="",
         duration_s=sum(durations, 0.0),
         wait_s=sum(s.wait_s for s in steps),
         tokens_in=sum(s.tokens_in for s in steps),
         tokens_out=sum(s.tokens_out for s in steps),
-        cost=sum((s.cost for s in steps), Decimal(0)),
+        cache_read=sum(s.cache_read for s in steps),
+        cache_write=sum(s.cache_write for s in steps),
+        cost=sum((s.cost for s in steps if s.cost is not None), Decimal(0)),
+        partial=any(s.partial for s in steps),
+        unknown_costs=sum(1 for s in steps if s.cost is None and s.route != NONE),
     )
 
 
@@ -99,15 +128,19 @@ def _row(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
+TOKEN_HEADERS = ["Input", "Cache read", "Cache write", "Output"]
+
+
 def _steps_table(steps: list[StepCost]) -> list[str]:
     lines = [
-        _row(["Stage", "Attempt", "Harness / model", "Duration", "Wait", "Tokens", "Cost"]),
-        _row(["---", "---:", "---", "---:", "---:", "---:", "---:"]),
+        _row(["Stage", "Attempt", "Harness / model", "Duration", "Wait", *TOKEN_HEADERS, "Cost"]),
+        _row(["---", "---:", "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]),
     ]
     for s in [*steps, _total(steps)]:
-        attempt = str(s.attempt) if s.stage != "**Total**" else f"{s.attempt} steps"
+        attempt = f"{s.attempt} steps" if s.stage == TOTAL else str(s.attempt)
+        stage = f"{s.stage} (cut short)" if s.partial and s.stage != TOTAL else s.stage
         timing = [format_duration(s.duration_s), format_duration(s.wait_s) if s.wait_s else NONE]
-        lines.append(_row([s.stage, attempt, s.route, *timing, _tokens(s.tokens_in, s.tokens_out), _cost(s.cost)]))
+        lines.append(_row([stage, attempt, s.route, *timing, *_token_cells(s), _cost(s)]))
     return lines
 
 
@@ -119,23 +152,36 @@ def _routes_table(steps: list[StepCost]) -> list[str]:
     if not by_route:
         return []
     lines = [
-        _row(["Harness / model", "Steps", "Duration", "Tokens", "Cost"]),
-        _row(["---", "---:", "---:", "---:", "---:"]),
+        _row(["Harness / model", "Steps", "Duration", *TOKEN_HEADERS, "Cost"]),
+        _row(["---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]),
     ]
     for route, group in by_route.items():
         t = _total(group)
-        cells = [route, str(len(group)), format_duration(t.duration_s), _tokens(t.tokens_in, t.tokens_out)]
-        lines.append(_row([*cells, _cost(t.cost)]))
+        lines.append(_row([route, str(len(group)), format_duration(t.duration_s), *_token_cells(t), _cost(t)]))
     return ["", "**Per harness and model**", "", *lines]
+
+
+def _headline(total: StepCost, steps: int) -> str:
+    text = f"**fact run cost:** ${total.cost or 0:,.2f} over {format_duration(total.duration_s)} ({steps} steps)"
+    if total.unknown_costs:
+        text += f"; cost not reported for {total.unknown_costs} agent steps"
+    return text
+
+
+FOOTNOTE = (
+    "Durations are wall time; wait is time spent on a person. Input is fresh prompt tokens; cache read and cache write "
+    "are prompt tokens served from or written to the prompt cache. Cost is what Claude Code reported "
+    "(`total_cost_usd`, at API prices even on a subscription login). A session cut short reports the tokens of the "
+    "messages received and no cost."
+)
 
 
 def render_cost_comment(run: dict[str, Any]) -> str:
     """Markdown for the PR comment, starting with `COST_MARKER` so fact finds and updates it later."""
     steps = step_costs(run)
     total = _total(steps)
-    headline = f"**fact run cost:** ${total.cost:,.2f} over {format_duration(total.duration_s)} ({len(steps)} steps)"
-    body = [COST_MARKER, "### Cost", "", headline, "", *_steps_table(steps), *_routes_table(steps)]
-    body += ["", f"<sub>Run `{run.get('id', '?')}`. Durations are wall time; wait is time spent on a person.</sub>"]
+    body = [COST_MARKER, "### Cost", "", _headline(total, len(steps)), "", *_steps_table(steps), *_routes_table(steps)]
+    body += ["", f"<sub>Run `{run.get('id', '?')}`. {FOOTNOTE}</sub>"]
     return "\n".join(body) + "\n"
 
 

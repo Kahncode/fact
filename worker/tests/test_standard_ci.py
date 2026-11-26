@@ -16,8 +16,6 @@ from standard_harness import FakeActivities, agent_sessions, finished, run_stand
 from standard_inputs import PR
 
 MAX_CI_FIX_ATTEMPTS = 2
-COST_COMMENTS = 2  # after the PR opens, and at the end of the run
-MERGED_COST_COMMENTS = 3  # after the PR opens, once CI is green, and once it is merged
 
 
 def _fix_ci_sessions(fakes: FakeActivities) -> list[tuple[str, int, str]]:
@@ -43,7 +41,7 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     assert result.prs == [PR.model_copy(update={"head_sha": "fix1"})]
     assert fakes.of(POST_COST_COMMENT)[-1].prs == result.prs
     tail = [n for n, _ in fakes.calls][-5:]
-    assert tail == [POST_COST_COMMENT, "record_run_finished", "report_status", TEARDOWN_WORKSPACE, NOTIFY]
+    assert tail == ["record_run_finished", "report_status", TEARDOWN_WORKSPACE, POST_COST_COMMENT, NOTIFY]
 
 
 async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
@@ -56,7 +54,10 @@ async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
     assert len(_fix_ci_sessions(fakes)) == MAX_CI_FIX_ATTEMPTS
     assert len(fakes.of(WAIT_FOR_CI)) == MAX_CI_FIX_ATTEMPTS + 1
     assert len(fakes.of(OPEN_CHANGE_SET)) == MAX_CI_FIX_ATTEMPTS + 1
-    assert len(fakes.of(POST_COST_COMMENT)) == COST_COMMENTS
+    (comment,) = fakes.of(POST_COST_COMMENT)  # once, after the run's end is recorded, on the open PR
+    assert comment.prs == result.prs
+    names = [n for n, _ in fakes.calls]
+    assert names.index(POST_COST_COMMENT) > names.index("record_run_finished")
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []
     (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected
@@ -75,7 +76,7 @@ async def test_approve_waits_for_ci_and_fixes_once_more() -> None:
     assert len(waits) == MAX_CI_FIX_ATTEMPTS + 2  # the loop again, from the last pushed head
     assert waits[-1].pr.head_sha == f"fix{MAX_CI_FIX_ATTEMPTS}"
     assert result.prs == [PR.model_copy(update={"head_sha": f"fix{MAX_CI_FIX_ATTEMPTS}"})]
-    assert len(fakes.of(POST_COST_COMMENT)) == MERGED_COST_COMMENTS
+    assert len(fakes.of(POST_COST_COMMENT)) == 1
 
 
 async def test_ci_that_never_finishes_needs_a_human_without_a_fix() -> None:

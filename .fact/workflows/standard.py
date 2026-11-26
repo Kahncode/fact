@@ -8,13 +8,12 @@ green, then review once: a separate session checks the change against the task's
 checklist. An unmet criterion or a medium or high finding sends the change to an `address_review` session, then
 through the check loop again. Then a `learn` session updates the repositories' context (`CLAUDE.md`, `docs/`,
 READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch, open the PR (with
-the review's criteria table) and comment the run's cost on it. Then wait for CI on the PR's head commit: a failure goes
-to a `fix_ci` session with the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most
-`MAX_CI_FIX_ATTEMPTS` times. Once CI is green, the cost comment is updated and, while `MERGE_WHEN_GREEN` is on, fact
-merges the PRs itself (squash, at the head commit CI passed on) and the run ends `merged`. If the switch is off or
+the review's criteria table). Then wait for CI on the PR's head commit: a failure goes to a `fix_ci` session with
+the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most `MAX_CI_FIX_ATTEMPTS`
+times. Once CI is green, while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head commit CI passed on) and the run ends `merged`. If the switch is off or
 GitHub refuses the merge, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
-closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. The cost comment is updated
-once more at the end.
+closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. However the run ends,
+`FactWorkflow` comments its cost on the PRs last, once every step is recorded.
 
 A failing setup ends the run `failed`. If the checks never go green, or CI stays red or never finishes, a `needs_human`
 gate opens: approve runs that loop once more (instructions sent with `steer` reach its fix sessions), reject ends the
@@ -125,7 +124,6 @@ class Standard(FactWorkflow):
         await self._learn()
         await self.mark_task_done()
         prs = await self.open_change_set(*self.pr_text(implemented.summary), criteria=review.criteria)
-        await self.post_cost_comment(prs)
         return await self._ci_green(prs)
 
     async def _approve_plan(self) -> RunResult | None:
@@ -163,18 +161,15 @@ class Standard(FactWorkflow):
                 break
             summary = f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {', '.join(pr.url for pr in prs)}"
             if (stuck := await self._ask("wait_for_ci", summary)) is not None:
-                await self.post_cost_comment(prs)  # again, with the CI wait, the fixes and any human wait
                 return stuck
         return await self._until_closed(prs)
 
     async def _until_closed(self, prs: list[PRRef]) -> RunResult:
         """CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed."""
-        await self.post_cost_comment(prs)  # again, with the CI wait and the fixes, for the reviewer
         if MERGE_WHEN_GREEN and await self.merge_change_set(prs):
             return RunResult(outcome=RunOutcome.MERGED, prs=prs, summary=", ".join(pr.url for pr in prs))
         await self.notify_prs_ready(prs)
         outcome = await self.wait_for_pr_closed(prs)
-        await self.post_cost_comment(prs)  # last, with the review wait
         return RunResult(outcome=outcome, prs=prs, summary=", ".join(pr.url for pr in prs))
 
     async def _ask(self, loop: str, summary: str) -> RunResult | None:
