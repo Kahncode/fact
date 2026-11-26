@@ -23,6 +23,7 @@ from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.handoff import HandoffActivities
+from fact.worker.activities.merge import MergeActivities
 from fact.worker.activities.notify import NotifyActivities
 from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.scheduler import SchedulerActivities
@@ -107,6 +108,7 @@ def _activity_workers(
     cost = CostCommentActivities(github, settings.api_url, http)
     ci = CIActivities(github, reporter)
     pr_state = PRStateActivities(github)
+    merge = MergeActivities(github)
     scheduler = SchedulerActivities(settings.api_url, http)
     control = Worker(
         client,
@@ -120,6 +122,7 @@ def _activity_workers(
             cost.post_cost_comment,
             ci.wait_for_ci,
             pr_state.wait_for_pr_closed,
+            merge.merge_change_set,
             control_steps.mark_task_done,
             control_steps.record_run_started,
             control_steps.record_run_waiting,

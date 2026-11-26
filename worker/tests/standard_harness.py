@@ -1,18 +1,14 @@
 """Harness for the `Standard` workflow tests: fake activities registered under the real names, and a test server."""
 
-import importlib
-import sys
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
-from types import ModuleType
-from typing import Any
 
 from fact.core.activity_contract import (
     AGENT_STEP,
     CONTROL_QUEUE,
     MARK_TASK_DONE,
+    MERGE_CHANGE_SET,
     NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
@@ -34,6 +30,7 @@ from fact.core.activity_contract import (
     GateOpenedInput,
     HandoffInput,
     MarkTaskDoneInput,
+    MergeChangeSetInput,
     NotifyInput,
     OpenChangeSetInput,
     PostCostCommentInput,
@@ -48,11 +45,11 @@ from fact.core.activity_contract import (
 )
 from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
-from fact.core.settings import REPO_ROOT
 from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
 from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
+from standard_env import IDENTITY, OPTIONS, WORKFLOW_QUEUE, load_standard
 from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, PR, run_input
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporalio import activity
@@ -61,19 +58,6 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
-
-WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
-WORKFLOW_QUEUE = "wf-test"
-IDENTITY = "test-worker"  # a fixed worker identity instead of the host name
-# Heartbeats reach the server at once, so an activity sees its cancellation without the 60 s default throttle
-OPTIONS: dict[str, Any] = {"identity": IDENTITY, "max_heartbeat_throttle_interval": timedelta(milliseconds=50)}
-
-
-def load_standard() -> ModuleType:
-    """Import `.fact/workflows/standard.py` by name, so the workflow sandbox can import it again."""
-    if str(WORKFLOWS_DIR) not in sys.path:
-        sys.path.insert(0, str(WORKFLOWS_DIR))
-    return importlib.import_module("standard")
 
 
 @dataclass
@@ -99,6 +83,7 @@ class FakeActivities:
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
     fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
     pr_state: PRState = "merged"  # how `wait_for_pr_closed` says each PR ended
+    merges: bool = False  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
     # How `record_gate_opened` answers each gate, in order, then reject; None: the test answers them itself.
     # Answering inside the activity keeps the time-skipping server busy, so it never skips to the workflow's timeout.
     gate_decisions: list[GateDecision] | None = field(default_factory=list)
@@ -232,6 +217,11 @@ class FakeActivities:
         self._call(WAIT_FOR_PR_CLOSED, spec)
         return [self.pr_state for _ in spec.prs]
 
+    @activity.defn(name=MERGE_CHANGE_SET)
+    async def merge_change_set(self, spec: MergeChangeSetInput) -> bool:
+        self._call(MERGE_CHANGE_SET, spec)
+        return self.merges
+
     def of(self, name: str) -> list:
         return [arg for n, arg in self.calls if n == name]
 
@@ -253,6 +243,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.post_cost_comment,
         fakes.wait_for_ci,
         fakes.wait_for_pr_closed,
+        fakes.merge_change_set,
         fakes.record_gate_opened,
         fakes.record_gate_answered,
         fakes.notify,

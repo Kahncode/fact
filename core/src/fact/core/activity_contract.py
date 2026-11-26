@@ -26,6 +26,7 @@ MARK_TASK_DONE = "mark_task_done"
 POST_COST_COMMENT = "post_cost_comment"
 WAIT_FOR_CI = "wait_for_ci"
 WAIT_FOR_PR_CLOSED = "wait_for_pr_closed"
+MERGE_CHANGE_SET = "merge_change_set"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 RECORD_RUN_WAITING = "record_run_waiting"
@@ -39,6 +40,7 @@ Check = Literal["lint", "test", "build", "setup"]
 # a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
 TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "dropped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
+MergeMethod = Literal["squash", "merge", "rebase"]
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
@@ -133,6 +135,12 @@ class WaitForCIInput(_Input):
 class WaitForPRClosedInput(_Input):
     run_id: str
     prs: list[PRRef]  # each is polled until it is merged or closed
+
+
+class MergeChangeSetInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # merged in this order, each only at its `head_sha`
+    method: MergeMethod = "squash"
 
 
 class RunStartedInput(_Input):

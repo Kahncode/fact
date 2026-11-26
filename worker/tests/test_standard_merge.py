@@ -2,6 +2,7 @@
 
 import pytest
 from fact.core.activity_contract import (
+    MERGE_CHANGE_SET,
     NOTIFY,
     POST_COST_COMMENT,
     RECORD_GATE_ANSWERED,
@@ -97,3 +98,25 @@ async def test_a_tracker_outage_does_not_fail_the_run() -> None:
     assert result.outcome == RunOutcome.MERGED
     assert finished(fakes) == RunOutcome.MERGED
     assert [r.event for r in fakes.of(REPORT_STATUS)] == ["run_started", "prs_opened", "merged"]  # each tried once
+
+
+async def test_merge_when_green_ends_merged_without_a_person() -> None:
+    fakes = FakeActivities(merges=True)
+    result, _ = await run_standard(fakes, "run-merge-when-green")
+
+    assert (result.outcome, result.prs) == (RunOutcome.MERGED, [PR])
+    assert finished(fakes) == RunOutcome.MERGED
+    (merged,) = fakes.of(MERGE_CHANGE_SET)
+    assert (merged.prs, merged.method) == ([PR], "squash")
+    assert not fakes.of(WAIT_FOR_PR_CLOSED)
+    assert not [spec for name, spec in fakes.calls if name == NOTIFY and spec.kind == NotificationKind.PRS_READY]
+    assert len(fakes.of(TEARDOWN_WORKSPACE)) == 1
+
+
+async def test_a_refused_merge_falls_back_to_waiting_for_a_person() -> None:
+    fakes = FakeActivities(merges=False)
+    result, _ = await run_standard(fakes, "run-merge-refused")
+
+    names = [n for n, _ in fakes.calls]
+    assert names.index(MERGE_CHANGE_SET) < names.index(WAIT_FOR_PR_CLOSED)
+    assert result.outcome == RunOutcome.MERGED  # the person merged it

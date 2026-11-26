@@ -16,6 +16,7 @@ from temporalio.exceptions import ActivityError
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
         CONTROL_QUEUE,
+        MERGE_CHANGE_SET,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
         RECORD_GATE_ANSWERED,
@@ -23,6 +24,8 @@ with workflow.unsafe.imports_passed_through():
         WAIT_FOR_CI,
         WAIT_FOR_PR_CLOSED,
         CriterionResult,
+        MergeChangeSetInput,
+        MergeMethod,
         OpenChangeSetInput,
         PostCostCommentInput,
         PRState,
@@ -141,6 +144,13 @@ class PullRequestSteps:
                 break
             current = pushed
         return StepOutcome.NEEDS_HUMAN
+
+    async def merge_change_set(self: FactWorkflow, prs: Sequence[PRRef], method: MergeMethod = "squash") -> bool:
+        """Merge the PRs (each at its pushed head SHA) without a person: False if GitHub refused one, so wait instead."""
+        if not prs:
+            return False
+        spec = MergeChangeSetInput(run_id=self.input.run_id, prs=list(prs), method=method)
+        return await self._control(MERGE_CHANGE_SET, spec, bool)
 
     async def wait_for_pr_closed(self: FactWorkflow, prs: Sequence[PRRef], stage_id: str = REVIEW_STAGE) -> RunOutcome:
         """
