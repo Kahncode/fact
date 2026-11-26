@@ -33,7 +33,7 @@ fact/
 ├── cli/                   fact.cli: the `fact` Typer command
 │   (each package: src/fact/<name>/ and tests/)
 ├── scripts/               Python dev scripts (task loop) and their tests/
-├── web/                   React UI (from M3)
+├── web/                   React UI (from M4)
 ├── .fact/                 fact's own project config, workflows and prompts
 ├── docs/spec/             design, one file per section (start at README.md)
 ├── tasks/                 backlog.md, and the file tasks left from the M0–M2 bootstrap
@@ -137,6 +137,22 @@ fact works on its own tasks, so the running factory is never the code an agent e
 
 ---
 
+## Agent skills
+
+### Issue tracker
+
+Tickets are GitHub issues on `Kahncode/fact`, specced in the issue body: leaf issues are created `fact:ready`, parent issues `fact:planned` (the parent's label gates its sub-issues). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five triage roles map onto fact's own labels (`fact:planned`, `fact:ready`), assignment and close reasons. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context, with `docs/spec/05-domain-model.md` as the glossary and the decisions files as the ADR log. See `docs/agents/domain.md`.
+
+---
+
 ## Project-specific rules
 
 - Python 3.15, uv. Run things with `uv run ...`.
@@ -164,7 +180,7 @@ fact works on its own tasks, so the running factory is never the code an agent e
 
 ### 3. Git workflow
 
-Branch first, before editing any files:
+Branch first, before editing any files (planning sessions that only edit docs follow `docs/agents/domain.md` instead: stay on the current branch unless it is `main`):
 
 ```bash
 git checkout -b feat/<task-name>
