@@ -200,7 +200,7 @@ class Standard(FactWorkflow):
         prs = await self.open_change_set(label=route)
         await self.until_ci_green(prs, fix_prompt="fix_ci.md", max_attempts=2)
 
-        # Open until merged or closed; each @fact comment starts a new session
+        # Open until merged or closed; each @sofact-dev comment starts a new session
         async for comment in self.comments_until_merged(prs, auto_merge=(route == "auto_merge")):
             await self.agent("address_comment", prompt="address_comment.md", context=comment)
             await self.until_green(["lint", "test"], fix_prompt="fix_checks.md", max_attempts=3)
@@ -235,7 +235,7 @@ The example is the target shape. What exists today (M1, plus M2-01 gates) is the
 - **Wait for review, target (decided 27 Nov 2026)**: the wait also reads each PR's reviews: an approval on the head merges it once CI is green, and a review requesting changes starts a `review_reply` round (`converse`), as in `07-reference-workflow.md`; each PR ends on its own and the run waits for all.
 - **Wait for review (M2-05)**: `wait_for_pr_closed(prs)` keeps the run open until a person merges or closes every PR. It is a gate-like step (stage `wait_for_review`, kind `gate`): the run shows `waiting` and the whole wait is human wait time, but GitHub answers it, not `answer_gate`, so `fact gate` cannot and the `status` query shows the stage with no open gate. The `wait_for_pr_closed` control activity polls each open PR every 60 s, heartbeating, for up to 30 days (`LONG_WAIT_RETRY`: unlimited attempts within that, so worker restarts do not exhaust retries); it returns `merged` or `closed` per PR. The run ends `merged` when all merged, else `closed`; with no PR it returns `pr_opened` without waiting. A failed wait (30 days, or GitHub refusing) ends the step `needs_human` and fails the run, keeping the workspace. Because the run is pinned to its worker build, a worker restarted on new code while a run waits leaves it stalled (see "Versions are pinned" above).
 - **Merge**: auto-merge is a project setting, on by default (decided 26 Nov 2026, built in #14): a change set classified `auto_merge` is merged by fact through the GitHub App, with no agent, once CI is green on the exact head commit; the merge method is a project setting (`squash`, `merge` or `rebase`, default `squash`). The run ends `merged` and notifies no one. If branch protection refuses the merge, the change set falls back to `needs-review` and notifies. Built (#14, M3): `Standard` merges through `merge_change_set` (the head-SHA guard, then the project's `merge_method`, in the recorded repository order); fact's own repository is classified and merged like any other (`.fact/project.yaml`: `auto_merge: true`, with `core/migrations/**`, `api/openapi.json`, `.fact/**` and `.github/**` always routed to a review).
-- **Comments**: a PR comment that mentions the factory sends a signal to the run, which stays open until its PRs merge or close. The fact GitHub App sees every comment; v0 finds them by polling with the App's token (no public URL needed), webhooks come once fact is hosted. Comments may use `/fact` or @fact.
+- **Comments**: a PR comment that mentions the factory sends a signal to the run, which stays open until its PRs merge or close. The fact GitHub App sees every comment; v0 finds them by polling with the App's token (no public URL needed), webhooks come once fact is hosted. Comments may use `/fact` or `@sofact-dev`, the App's handle.
 
 ### Review evidence and extra gates
 

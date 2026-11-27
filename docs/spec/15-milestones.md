@@ -7,7 +7,7 @@ v0 is done when the factory has shipped one of its own GitHub issues end to end,
 3. **M2 Issues and gates**: gates and steering answered through the API or CLI (including plan approval), a scheduler that starts ready tasks in dependency order and waits out Claude Code usage windows, then the GitHub Issues task source with the label trigger by polling and status and comment write-back; the remaining task files move to GitHub issues.
 4. **M3 Classify and auto-merge** (moved ahead of the UI on 26 Nov 2026): the classify stage and its signals, auto-merge on by default (`06-workflow-authoring.md`).
 5. **M4 UI**: the web app covers everything a person does (`11-ui-and-notifications.md`), and the CLI keeps only `fact dev` and `fact use`.
-6. **M5 Loops and multi-repo**: the @fact comment trigger, change sets across several repos.
+6. **M5 Loops and multi-repo**: the `@sofact-dev` comment trigger, change sets across several repos.
 7. **M6 Planner**: the planning phase as a workflow (refresh, grill, triage, plan, break down into subtasks) and the MCP server for planning from Claude. Until then, Claude Code in the repository plans.
 8. **M7 Hardening:** secrets management (to design), Docker runner, a second harness (Codex), budgets that pause runs, the Costs view. Linear, the second task source, is in the spec but not yet scheduled.
 
