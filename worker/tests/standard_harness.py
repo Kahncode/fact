@@ -151,7 +151,7 @@ class FakeActivities(FakePRSteps):
         if spec.prompt_name == "address_review":
             self.test_failures += self.test_failures_after_address
             return StepResult(outcome=self.address_outcome, summary="addressed", outputs={"summary": "addressed"})
-        outputs = {"title": "feat(M1-99): add the widget"} if implementing else {}
+        outputs = {"title": "feat(widget): add the widget"} if implementing else {}
         outcome = self.implement_outcome if implementing else StepOutcome.PASSED
         return StepResult(outcome=outcome, summary=f"{spec.prompt_name} done", outputs=outputs)
 

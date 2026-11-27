@@ -79,12 +79,12 @@ With an output path, after the agent finishes, write this JSON there yourself (a
 
 ```json
 {
-  "pr_title": "feat(M1-18): learn stage writes the PR title",
+  "pr_title": "feat(sdk): learn stage writes the PR title",
   "pr_summary": "Adds a `learn` session after review that updates the docs and writes the PR text. ..."
 }
 ```
 
-- `pr_title`: a [Conventional Commits](https://www.conventionalcommits.org) subject for the whole change (the diff, not only the doc updates), such as `feat(<scope>): <what it adds>`; use the task id as the scope when a task is known.
+- `pr_title`: a [Conventional Commits](https://www.conventionalcommits.org) subject for the whole change (the diff, not only the doc updates), such as `feat(worker): <what it adds>`. The scope is the area of the code the change touches (a package, module or component, as the repository's `git log` already uses), left out when the change spans several areas; never the task or issue id.
 - `pr_summary`: a few sentences of markdown on what changed and why, and anything a reviewer should check, including the doc updates this run made.
 
 Check that the file parses as JSON with exactly these two string fields; fix it if it does not.

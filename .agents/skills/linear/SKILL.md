@@ -129,13 +129,13 @@ Ask the user what to do next:
 
 Stage relevant files and commit using conventional format:
 ```
-feat(ENG-42): <concise imperative description>
+feat(<area>): <concise imperative description>
 
 Implements <Linear issue title>
 Fixes ENG-42
 ```
 
-The `Fixes ENG-42` footer links the commit to Linear and triggers the GitHub integration.
+The scope is the area of the code the change touches (a package, module or component, as `git log` already uses), left out when the change spans several areas; never the issue id. The `Fixes ENG-42` footer links the commit to Linear and triggers the GitHub integration.
 
 ### If "Commit + PR":
 
@@ -166,6 +166,6 @@ Add a comment on the Linear issue linking to the PR URL using `mcp__claude_ai_Li
 Report the branch name and remind the user:
 ```
 Branch: <branchName>
-When ready: /commit  or  git commit -m "feat(ID): ..."
+When ready: /commit  or  git commit -m "feat(<area>): ..."
 PR link trigger: include "Fixes ENG-42" in commit or PR description
 ```
