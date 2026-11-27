@@ -40,6 +40,7 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 - M3 Classify and auto-merge.
 - M4 UI: the web app covers everything a person does.
 - M5: Ability to be deployed and factory running on real backend. Runners can still use the local compute, but the factory is in the cloud and self managed. This means already moving to supabase for persistence, handling auth.
+- M5.2: Multi tenancy, organizations, projects, teams, etc.
 - M5.3: Queue based processing, this app is inherently a queue system. So the polling of task tracker should be slow poll, things should be pushed to a queue and later processed, but the queue should be able to be reordered also for new urgency. So there's some design to do. Relevant after we move to a "real backend".
   - **Concurrency counts compute** (target in `docs/spec/10-observability.md`, decided 27 Nov 2026). The factory cap (`fact.yaml`, ours) and each project's cap (its `.fact/project.yaml`: the project regulating its throughput and spend) count concurrent runs only: queued or running, using a worker and compute. Today both count waiting runs too (`active_by_project`: queued, running or waiting), so one run waiting days on review holds a slot.
   - A run waiting on a person or a usage limit frees its slot. When its gate is answered, its PR needs a `sync_base`, or its usage window resets, it goes back into the queue and waits for a slot like a new start, in queue order, never going over a cap. That needs a durable slot queue shared by scheduled starts and resumes (a DB-backed semaphore, or Temporal) and a wait for a slot in every resume path of `FactWorkflow` (gates, `wait_for_review`, usage-limit sleeps), surviving restarts (no in-process state).
@@ -49,7 +50,6 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
   - Until then keep it simple: the v0 caps, low concurrency.
 - M6: Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner. Also how do ideas in the backlog become planned and how does the planner work with the humans to get that done?
 - M7: Using some sort of serverless compute for runners. Docker runner, even for local development, ideally.
-- M5.2: Multi tenancy, organizations, projects, teams, etc.
 - M8: Landing page, self-updatding. Brand book & voice. Taking its own screenshots and animations. Stretch: generated logos on a schedule (#72). 
 - M9: Billing for third party users, Also billing for my clients when i run projects on their behalf inside of sofact
 - M10: `@fact` comment trigger, multi-repo change sets.
