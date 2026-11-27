@@ -96,3 +96,23 @@ def test_issue_task_links_its_issue_fully_qualified(pr_count: int, reference: st
     )
     assert f"## Task\n\nacme/tracker#12: Push the branch and open the PR\n\n{reference}\n\n### Acceptance" in body
     assert ("Closes" in body) == (pr_count == 1)
+
+
+def _body(**extra: object) -> str:
+    return render_pr_body(
+        summary="s", task=_task(), repo_url=REPO_URL, default_branch="main", check_results=[], run_url="", **extra
+    )
+
+
+def test_assumptions_are_listed_after_the_summary() -> None:
+    body = _body(assumptions=["Retries default to 3.", "Names\nfollow the API."], spec_ambiguous=True)
+    assert body.startswith(
+        "s\n\n## Assumptions\n\nThe implementation found the spec ambiguous.\n\n"
+        "- Retries default to 3.\n- Names follow the API.\n\n## Task\n"
+    )
+
+
+def test_without_assumptions_there_is_no_section() -> None:
+    body = _body(assumptions=[])
+    assert "Assumptions" not in body
+    assert body.startswith("s\n\n## Task\n")

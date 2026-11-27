@@ -5,8 +5,8 @@ When to resume is decided in `fact.sdk.sessions`. A session the usage limit refu
 durable timer until its `resume_at`, however far away (a full weekly window means days), with the run marked
 `waiting` and the `status` query saying `usage limit until <time>`; then the same session is resumed.
 
-`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `_record` and
-`_remember_pr_text`.
+`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `_record`,
+`_remember_pr_text` and `_remember_assumptions`.
 """
 
 from datetime import UTC, timedelta
@@ -58,7 +58,7 @@ class AgentSteps:
         answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. A session the usage limit refused waits
         for the reset and is resumed, up to `MAX_LIMIT_PAUSES` times, then ends `needs_human`. Nothing else is
         retried. With `pr_text`, a passed session's `title` and `summary` replace earlier ones for the PR (off for a
-        review: it changes nothing). Instructions queued by the `steer` signal go at the end of the next session's
+        review: it changes nothing); its `assumptions` and `spec_ambiguous` are always kept. Instructions queued by the `steer` signal go at the end of the next session's
         context, then are cleared.
         """
         first_context, resume = context, None
@@ -89,8 +89,10 @@ class AgentSteps:
             workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
             await workflow.sleep(RESUME_DELAY)
             resume, context = result.session_id, f"you reported a temporary problem: {reason}"
-        if pr_text and result.outcome == StepOutcome.PASSED:
-            self._remember_pr_text(result)
+        if result.outcome == StepOutcome.PASSED:
+            self._remember_assumptions(result)
+            if pr_text:
+                self._remember_pr_text(result)
         return result
 
     async def wait_out_limit(self: FactWorkflow, stage_id: str, result: StepResult) -> str | None:

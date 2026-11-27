@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fact.core.settings import REPO_ROOT
 from fact.core.types import Task
-from fact.worker.prompts import PromptError, render, render_prompt
+from fact.worker.prompts import PromptError, output_schema, render, render_prompt
 
 TASK = Task(key="task:T-1", id="T-1", title="Add a thing", body="Body text", acceptance_criteria=["one", "two"])
 
@@ -68,3 +68,9 @@ def test_shipped_prompts_render(name: str) -> None:
     assert "Add a thing" in text
     assert "- one" in text
     assert "$" not in text  # no placeholder left unrendered
+
+
+def test_implement_answer_requires_ambiguity_and_assumptions() -> None:
+    schema = output_schema(REPO_ROOT, "implement")
+    assert {"status", "summary", "spec_ambiguous", "assumptions"} <= set(schema["required"])
+    assert schema["properties"]["assumptions"]["items"] == {"type": "string"}

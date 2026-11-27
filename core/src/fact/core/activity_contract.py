@@ -114,6 +114,8 @@ class OpenChangeSetInput(_Input):
     summary: str  # top of the PR description, written by the last agent session
     check_results: list[CheckResult] = Field(default_factory=list)
     criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
+    assumptions: list[str] = Field(default_factory=list)  # the agent sessions' `assumptions`, for the PR description
+    spec_ambiguous: bool = False  # an agent session found the spec ambiguous
     run_url: str = ""
     attempt: int = 1  # of stage `open_pr`: a CI fix pushes and updates the PR again as the next attempt
 

@@ -35,5 +35,6 @@ End with the structured answer:
 
 - `status`: `done` only when the fix is committed and the checks pass; `blocked` when you could not fix them.
 - `summary`: what was wrong and how you fixed it.
+- `assumptions`: each assumption you made where the task or the docs did not say, one sentence each; leave it out or `[]` when you made none. They are added to the PR description.
 - `blocker`: when blocked, what stopped you and what would unblock it.
 - `retryable`: when blocked, `true` only if the cause was temporary and outside your control (network, rate limit, a flaky service) and trying again later, with nothing changed by a person, would likely succeed. Permissions, a missing tool, an unclear or too large task are never retryable.

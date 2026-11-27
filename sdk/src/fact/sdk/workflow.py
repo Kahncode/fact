@@ -64,6 +64,8 @@ class FactWorkflow(AgentSteps, PullRequestSteps, BaseSyncSteps, HumanSteps, Stop
         self.check_results: list[CheckResult] = []  # from the last `until_green` round, for the PR description
         self.pr_title: str | None = None  # from the last agent session whose structured answer had a `title`
         self.pr_summary: str | None = None  # likewise, `summary`
+        self.assumptions: list[str] = []  # every passed agent session's `assumptions`, for the PR description
+        self.spec_ambiguous = False  # an agent session found the spec ambiguous
         self.prs: list[PRRef] = []  # from the last `open_change_set`, with the head SHA it pushed
         self._change_set: OpenChangeSetInput | None = None  # its input, to push again after a CI fix
 
