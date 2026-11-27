@@ -24,12 +24,13 @@ from fact.worker.activities.change_set import ChangeSetActivities
 from fact.worker.activities.ci import CIActivities
 from fact.worker.activities.classify import ClassifyActivities
 from fact.worker.activities.control import ControlActivities
+from fact.worker.activities.conversation import ConversationActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.activities.merge import MergeActivities
 from fact.worker.activities.notify import NotifyActivities
-from fact.worker.activities.pr_state import PRStateActivities
+from fact.worker.activities.review_wait import ReviewWaitActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
@@ -118,6 +119,7 @@ def factory_activities(
     change_set = ChangeSetActivities(github, reporter)
     control = ControlActivities(settings.api_url, http, settings)
     gates = GateActivities(settings.api_url, http)
+    conversation = ConversationActivities(github)
     return [
         workspace.prepare_workspace,
         workspace.teardown_workspace,
@@ -128,7 +130,10 @@ def factory_activities(
         change_set.label_change_set,
         CostCommentActivities(github, settings.api_url, http).post_cost_comment,
         CIActivities(github, reporter).wait_for_ci,
-        PRStateActivities(github).wait_for_pr_closed,
+        ReviewWaitActivities(github).wait_for_review,
+        conversation.collect_comments,
+        conversation.post_replies,
+        conversation.request_review,
         MergeActivities(github).merge_change_set,
         control.mark_task_done,
         control.record_run_started,

@@ -6,12 +6,18 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from fact.core.activity_contract import MergeChangeSetInput, PostCostCommentInput, WaitForPRClosedInput
+from fact.core.activity_contract import (
+    CollectCommentsInput,
+    MergeChangeSetInput,
+    PostCostCommentInput,
+    WaitForReviewInput,
+)
 from fact.core.github import GitHubApp
 from fact.core.types import PRRef
+from fact.worker.activities.conversation import ConversationActivities
 from fact.worker.activities.cost_comment import CostCommentActivities
 from fact.worker.activities.merge import MergeActivities
-from fact.worker.activities.pr_state import PRStateActivities
+from fact.worker.activities.review_wait import ReviewWaitActivities
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -37,12 +43,17 @@ async def _merge(github: GitHubApp | None) -> object:
     return await ActivityEnvironment().run(MergeActivities(github).merge_change_set, spec)
 
 
-async def _wait_for_pr_closed(github: GitHubApp | None) -> object:
-    activities = PRStateActivities(github, poll_interval_s=0)
-    return await ActivityEnvironment().run(activities.wait_for_pr_closed, WaitForPRClosedInput(run_id="r", prs=[PR]))
+async def _wait_for_review(github: GitHubApp | None) -> object:
+    activities = ReviewWaitActivities(github, poll_interval_s=0)
+    return await ActivityEnvironment().run(activities.wait_for_review, WaitForReviewInput(run_id="r", prs=[PR]))
 
 
-ACTIVITIES = [_post_cost_comment, _merge, _wait_for_pr_closed]
+async def _collect_comments(github: GitHubApp | None) -> object:
+    spec = CollectCommentsInput(run_id="r", repo=REPO, number=PR.number)
+    return await ActivityEnvironment().run(ConversationActivities(github).collect_comments, spec)
+
+
+ACTIVITIES = [_post_cost_comment, _merge, _wait_for_review, _collect_comments]
 
 
 def _refusing_github(status: int) -> GitHubApp:

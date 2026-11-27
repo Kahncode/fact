@@ -1,0 +1,26 @@
+{
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["implement", "reply"],
+      "description": "implement: the change must change, per `instructions`; reply: nothing changes."
+    },
+    "replies": {
+      "type": "array",
+      "description": "One reply per comment you answer; empty when none needs an answer.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "comment_id": { "type": "integer", "description": "The id in the comment's heading." },
+          "body": { "type": "string", "description": "The reply, markdown, addressed to the reviewer." }
+        },
+        "required": ["comment_id", "body"]
+      }
+    },
+    "instructions": {
+      "type": "string",
+      "description": "With implement: each change the implement session must make, where and why; empty otherwise."
+    }
+  },
+  "required": ["decision", "replies", "instructions"]
+}

@@ -29,6 +29,7 @@ $handoff
 - Never rewrite history that was there before you started: no rebase, reset or force of existing commits.
 - The task may have been written before the repository's design docs were last updated. Where they disagree, follow the docs for the design and the task for what to build; the docs may describe more than is built yet.
 - Stay within the task. Note follow-up ideas in your final message instead of doing them.
+- In a review round (the context starts with `## Review round`), the change is already committed and its PR open: make what the reviewer asked on top of it. Never change a repository whose PR is already merged; if the review needs one, answer `blocked` and say so.
 - Never commit secrets, and never write outside `$workspace`.
 
 ## Final answer
