@@ -44,13 +44,13 @@ The factory exposes an MCP server with these tools:
 | `list_projects` | Projects, their repos and recent runs |
 | `read_repo_context` | README, architecture docs and open issues for a project |
 | `draft_issues` | Returns proposed issues, with specs, for you to edit; writes nothing |
-| `create_issues` | Creates the agreed issues in the project's task source, with the `fact`:ready label if you want them run |
+| `create_issues` | Creates the agreed issues in the project's task source, with the `fact`:ready label if you want them run; each starts with its task status set (Backlog, or Todo when `fact:ready`; `12-integrations.md`) |
 | `start_run` | Starts a run for an issue now |
 | `run_status` | Progress, cost and PR links for a run |
 
 Nothing reaches the tracker until you confirm in the conversation, and new issues have no fact:ready label, so nothing runs until you add it.
 
-**Until M6: plan in Claude Code with skills.** Grilling (`/grill-with-docs`) updates `docs/spec/` as decisions are made; `/to-spec` writes the parent issue and `/to-tickets` its sub-issues, after you confirm the breakdown in the conversation. Leaf issues are created `fact:ready`, parents `fact:planned`. Rules for agents are in `docs/agents/issue-tracker.md`.
+**Until M6: plan in Claude Code with skills.** Grilling (`/grill-with-docs`) updates `docs/spec/` as decisions are made; `/to-spec` writes the parent issue and `/to-tickets` its sub-issues, after you confirm the breakdown in the conversation. Leaf issues are created `fact:ready` with status Todo, parents `fact:planned` with status Backlog; a parent set `fact:ready` moves to Todo. Rules for agents are in `docs/agents/issue-tracker.md`.
 
 **v1: planning as a workflow**
 
