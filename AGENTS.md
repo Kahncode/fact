@@ -25,7 +25,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 fact/
 ├── AGENTS.md, CLAUDE.md   instructions (CLAUDE.md is the @AGENTS.md shim)
 ├── fact.yaml              global settings and project registry
-├── pyproject.toml         uv workspace root, ruff/black/pytest config
+├── pyproject.toml         uv workspace root, ruff/black/import-linter/pytest config
 ├── core/                  fact.core: settings, logging, DB models, migrations, artifact store, shared types
 ├── api/                   fact.api: FastAPI app
 ├── worker/                fact.worker: Temporal workers and activities
