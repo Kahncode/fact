@@ -114,6 +114,8 @@ class Step(Base):
     cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # part of tokens_in
     cost_usd: Mapped[Decimal | None] = mapped_column(USD)  # as the harness reported it; NULL when it reported none
     usage_partial: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())  # session cut short
+    turns: Mapped[int | None] = mapped_column(Integer)  # agent steps: model calls over the whole session
+    peak_context_tokens: Mapped[int | None] = mapped_column(Integer)  # agent steps: the input of the largest turn
     log_ref: Mapped[str | None] = mapped_column(Text)
     transcript_ref: Mapped[str | None] = mapped_column(Text)
     outputs: Mapped[dict[str, Any] | None] = mapped_column(JSON)

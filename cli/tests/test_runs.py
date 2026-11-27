@@ -56,6 +56,8 @@ STEP = {
     "cache_write_tokens": 30,
     "cost_usd": "1.234",
     "usage_partial": False,
+    "turns": 12,
+    "peak_context_tokens": 45_000,
     "log_ref": "runs/abc123/implement/log.txt",
     "transcript_ref": None,
     "outputs": None,
@@ -142,7 +144,8 @@ def test_status_by_workflow_id(settings: Settings, monkeypatch: pytest.MonkeyPat
         if request.url.path == "/api/v1/runs":
             return httpx.Response(200, json=[RUN])
         checks = [
-            {**STEP, "stage_id": "checks", "name": check, "attempt": n} for n, check in ((1, "lint"), (2, "test"))
+            {**STEP, "stage_id": "checks", "name": check, "attempt": n, "turns": None, "peak_context_tokens": None}
+            for n, check in ((1, "lint"), (2, "test"))
         ]
         return httpx.Response(200, json={**RUN, "steps": [STEP, *checks]})
 
@@ -155,10 +158,23 @@ def test_status_by_workflow_id(settings: Settings, monkeypatch: pytest.MonkeyPat
     assert "$1.23" in result.output
     assert "cache read 60" in result.output
     step_line = next(line for line in result.output.splitlines() if line.startswith("implement"))
-    assert step_line.split()[:8] == ["implement", "-", "1", "agent", "finished", "passed", "1m05s", "$1.23"]
+    assert step_line.split()[:10] == [
+        "implement",
+        "-",
+        "1",
+        "agent",
+        "finished",
+        "passed",
+        "1m05s",
+        "12",
+        "45,000",
+        "$1.23",
+    ]
     assert f"log: {BASE}/api/v1/artifacts/runs/abc123/implement/log.txt" in step_line
     checks = [line.split()[:3] for line in result.output.splitlines() if line.startswith("checks")]
     assert checks == [["checks", "lint", "1"], ["checks", "test", "2"]]
+    check_line = next(line for line in result.output.splitlines() if line.startswith("checks"))
+    assert check_line.split()[7:9] == ["-", "-"]  # a shell step has no turns or peak context
 
 
 def test_status_unknown_run(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

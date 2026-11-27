@@ -38,13 +38,27 @@ class PermissionDenial(_Model):
     tool_input: dict[str, Any] = Field(default_factory=dict)
 
 
+class SessionPart(_Model):
+    """
+    One part of a session, as its `result` message reported it.
+
+    Claude Code wakes a stopped session when a background task it started finishes; each wake ends with its own
+    `result`. `cost_usd` is what that `result` reported: Claude Code's running total for the whole session so far.
+    """
+
+    stop_reason: str
+    num_turns: int
+    cost_usd: float | None = None
+
+
 class HarnessResult(_Model):
     session_id: str | None
     final_message: str
     is_error: bool
     exit_code: int
     stop_reason: str  # harness-specific, such as "success" or "error_max_turns" for Claude Code
-    num_turns: int = 0
+    num_turns: int = 0  # over the whole session: every part's turns
+    parts: list[SessionPart] = Field(default_factory=list)  # one per `result` message, in order
     usage: Usage = Field(default_factory=Usage)
     structured_output: dict[str, Any] | None = None  # the final answer matching `output_schema`, when one was asked
     permission_denials: list[PermissionDenial] = Field(default_factory=list)

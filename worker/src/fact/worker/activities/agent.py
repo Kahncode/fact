@@ -193,7 +193,14 @@ class AgentActivities:
 
     @staticmethod
     def _finish(step: StepContext, result: HarnessResult, session_id: str | None) -> None:
-        step.log(f"stop reason {result.stop_reason}, {result.num_turns} turns, exit code {result.exit_code}")
+        for i, part in enumerate(result.parts, 1):
+            cost = "unknown" if part.cost_usd is None else f"${part.cost_usd:.4f}"
+            step.log(f"result {i}/{len(result.parts)}: {part.stop_reason}, {part.num_turns} turns, session cost {cost}")
+        peak = result.usage.peak_context_tokens
+        step.log(
+            f"stop reason {result.stop_reason}, {result.num_turns} turns, peak context {peak} tokens,"
+            f" exit code {result.exit_code}"
+        )
         for denial in result.permission_denials:
             step.log(f"permission denied: {denial.tool_name} {json.dumps(denial.tool_input)[:500]}")
         if result.rate_limited:

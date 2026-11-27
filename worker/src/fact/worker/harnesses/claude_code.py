@@ -10,8 +10,15 @@ from typing import Any
 
 from fact.core.claude_usage import LIMIT_TEXT_RE, ClaudeUsage, parse_rate_limit_info
 from fact.core.types import Usage
-from fact.worker.harnesses.base import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
-from fact.worker.harnesses.claude_code_usage import StreamUsage, usage_from
+from fact.worker.harnesses.base import (
+    HarnessError,
+    HarnessRequest,
+    HarnessResult,
+    OnMessage,
+    PermissionDenial,
+    SessionPart,
+)
+from fact.worker.harnesses.claude_code_usage import StreamUsage, session_tokens, usage_from
 from fact.worker.runners.process import build_env, kill_tree, spawn
 
 _LINE_LIMIT = 1 << 26  # one stream-json line carries a whole tool result
@@ -28,13 +35,14 @@ class _Collector:
     """
     Keeps what the result needs from the message stream.
 
-    That is the session id, the last `result` message and the usage windows of every `rate_limit_event` (one with
-    `status: rejected` means the usage limit refused the run).
+    That is the session id, every `result` message (a session Claude Code woke again sends one per part; the outcome
+    comes from the last), the main session's peak context and the usage windows of every `rate_limit_event` (one
+    with `status: rejected` means the usage limit refused the run).
     """
 
     def __init__(self) -> None:
         self.session_id: str | None = None
-        self.result: dict[str, Any] | None = None
+        self.results: list[dict[str, Any]] = []
         self.windows = ClaudeUsage()
         self.rejected = False
         self.stream = StreamUsage()
@@ -44,7 +52,7 @@ class _Collector:
             self.session_id = sid
         self.stream.add(message)
         if message.get("type") == "result":
-            self.result = message
+            self.results.append(message)
         elif message.get("type") == "rate_limit_event" and isinstance(info := message.get("rate_limit_info"), dict):
             self.windows = self.windows.merge(parse_rate_limit_info(info))
             self.rejected = self.rejected or info.get("status") == "rejected"
@@ -56,8 +64,7 @@ class _Collector:
         return result.model_copy(update={"usage_windows": self.windows, "rate_limited": limited})
 
     def _build(self, exit_code: int, stderr: str) -> HarnessResult:
-        r = self.result
-        if r is None:
+        if not self.results:
             return HarnessResult(
                 session_id=self.session_id,
                 final_message=stderr.strip() or f"claude exited with code {exit_code} without a result message",
@@ -66,6 +73,9 @@ class _Collector:
                 stop_reason="no_result",
                 usage=self.stream.usage(),
             )
+        r = self.results[-1]
+        parts = [_part(m) for m in self.results]
+        turns = sum(p.num_turns for p in parts)
         text = r.get("result")
         final = text if isinstance(text, str) else "\n".join(str(e) for e in r.get("errors") or [])
         return HarnessResult(
@@ -74,18 +84,30 @@ class _Collector:
             is_error=bool(r.get("is_error")) or exit_code != 0,
             exit_code=exit_code,
             stop_reason=str(r.get("subtype") or "unknown"),
-            num_turns=int(r.get("num_turns") or 0),
-            usage=_usage(r),
+            num_turns=turns,
+            parts=parts,
+            usage=_usage(r, turns, self.stream.peak_context),
             structured_output=_structured(r),
             permission_denials=_denials(r),
         )
 
 
-def _usage(result: dict[str, Any]) -> Usage:
-    """Return the usage the `result` message reports; a cost it does not report stays None."""
-    u = result.get("usage")
+def _cost(result: dict[str, Any]) -> float | None:
     cost = result.get("total_cost_usd")
-    return usage_from(u if isinstance(u, dict) else {}, float(cost) if isinstance(cost, int | float) else None)
+    return float(cost) if isinstance(cost, int | float) else None
+
+
+def _part(result: dict[str, Any]) -> SessionPart:
+    return SessionPart(
+        stop_reason=str(result.get("subtype") or "unknown"),
+        num_turns=int(result.get("num_turns") or 0),
+        cost_usd=_cost(result),
+    )
+
+
+def _usage(result: dict[str, Any], turns: int, peak_context: int | None) -> Usage:
+    """Return the whole session's usage from the final `result` message; a cost it does not report stays None."""
+    return usage_from(session_tokens(result), _cost(result), turns=turns, peak_context=peak_context)
 
 
 def _structured(result: dict[str, Any]) -> dict[str, Any] | None:

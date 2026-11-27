@@ -43,6 +43,8 @@ RUN = {
             cache_read_tokens=100_000,
             cache_write_tokens=15_000,
             cost_usd="1.2345",
+            turns=40,
+            peak_context_tokens=90_000,
             **AGENT,
         ),
         _step("checks", 1, "2026-11-25T10:12:40Z", "2026-11-25T10:13:40Z", wait_seconds=30.0, name="lint"),
@@ -54,6 +56,8 @@ RUN = {
             tokens_in=20_000,
             tokens_out=1_000,
             cost_usd="0.25",
+            turns=9,
+            peak_context_tokens=110_000,
             **AGENT,
         ),
         _step("open_pr", 1, "2026-11-25T10:16:10Z", None),
@@ -68,6 +72,8 @@ CUT_SHORT = _step(
     tokens_out=200,
     cache_read_tokens=2_000,
     usage_partial=True,
+    turns=3,
+    peak_context_tokens=2_500,
     **AGENT,
 )
 
@@ -77,20 +83,20 @@ GOLDEN = """<!-- fact:cost -->
 
 **fact run cost:** $1.48 over 15m 34s (5 steps)
 
-| Stage | Attempt | Harness / model | Duration | Wait | Input | Cache read | Cache write | Output | Cost |
-| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| prepare | 1 | — | 4s | — | — | — | — | — | — |
-| implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | — | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |
-| checks:lint | 1 | — | 1m 00s | 30s | — | — | — | — | — |
-| implement | 2 | claude-code / claude-sonnet-5-5 | 2m 00s | — | 20,000 | — | — | 1,000 | $0.25 |
-| open_pr | 1 | — | running | — | — | — | — | — | — |
-| **Total** | 5 steps |  | 15m 34s | 30s | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
+| Stage | Attempt | Harness / model | Duration | Wait | Turns | Peak context | Uncached input | Cache read | Cache write | Output | Cost |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| prepare | 1 | — | 4s | — | — | — | — | — | — | — | — |
+| implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | — | 40 | 90,000 | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |
+| checks:lint | 1 | — | 1m 00s | 30s | — | — | — | — | — | — | — |
+| implement | 2 | claude-code / claude-sonnet-5-5 | 2m 00s | — | 9 | 110,000 | 20,000 | — | — | 1,000 | $0.25 |
+| open_pr | 1 | — | running | — | — | — | — | — | — | — | — |
+| **Total** | 5 steps |  | 15m 34s | 30s | 49 | 110,000 | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
 
 **Per harness and model**
 
-| Harness / model | Steps | Duration | Input | Cache read | Cache write | Output | Cost |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| claude-code / claude-sonnet-5-5 | 2 | 14m 30s | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
+| Harness / model | Steps | Duration | Turns | Peak context | Uncached input | Cache read | Cache write | Output | Cost |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| claude-code / claude-sonnet-5-5 | 2 | 14m 30s | 49 | 110,000 | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
 
 """
 
@@ -98,14 +104,20 @@ GOLDEN = """<!-- fact:cost -->
 def test_render_from_a_fixture_run() -> None:
     body = render_cost_comment(RUN)
     assert body.startswith(GOLDEN)
-    assert "run-1" in body.removeprefix(GOLDEN)
+    footnote = body.removeprefix(GOLDEN)
+    assert "run-1" in footnote
+    for column in ("Turns", "Peak context", "uncached input", "cache read", "cache write", "output"):
+        assert column.lower() in footnote.lower()
 
 
 def test_a_cut_short_session_shows_its_tokens_and_an_unknown_cost() -> None:
     body = render_cost_comment({"id": "run-1", "steps": [*RUN["steps"], CUT_SHORT]})
     lines = body.splitlines()
     assert any(line.startswith("| fix_ci (cut short)") and line.endswith("| unknown |") for line in lines)
-    assert "| **Total** | 6 steps |  | 16m 34s | 30s | 26,000 | 102,000 | 15,000 | 9,200 | $1.48 + 1 unknown |" in lines
+    assert (
+        "| **Total** | 6 steps |  | 16m 34s | 30s | 52 | 110,000 | 26,000 | 102,000 | 15,000 | 9,200 | $1.48 + 1 unknown |"
+        in lines
+    )
 
 
 def test_render_a_run_without_agents() -> None:
