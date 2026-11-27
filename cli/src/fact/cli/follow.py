@@ -8,6 +8,8 @@ until `GET /scheduler/active` counts no run (queued, running or waiting, human w
 The API comes back with its scheduler on; if it was off before the upgrade, the follower turns it off again.
 
 A failed check (git, `uv sync`, the API) is printed and retried at the next check.
+
+The follower also polls the `ShutdownWatch` (`fact shutdown`): while `shutdown` is set it never pins or upgrades.
 """
 
 import time
@@ -15,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import httpx
-from fact.cli import projects
+from fact.cli.shutdown import ShutdownWatch, call_scheduler
 from fact.cli.supervisor import ChildSpec
 from fact.cli.use import PinError, latest, pin
 from fact.core.settings import REPO_ROOT, Settings
@@ -26,7 +28,6 @@ CHECK_INTERVAL_S = 60.0
 RESTORE_INTERVAL_S = 1.0
 # what a check can raise: git or uv failing (PinError), the API down or answering oddly, a file lock while pinning
 CHECK_ERRORS = (PinError, httpx.HTTPError, KeyError, TypeError, ValueError, OSError)
-SCHEDULER = "/api/v1/scheduler"
 
 
 def short(sha: str) -> str:
@@ -47,9 +48,11 @@ class Follower:
         log: Callable[[str], None],
         repo: Path = REPO_ROOT,
         clock: Callable[[], float] = time.monotonic,
+        shutdown: ShutdownWatch | None = None,
     ) -> None:
         self._settings, self._ref, self._uv, self._repo = settings, ref, uv, repo
         self._commands, self._log, self._clock = commands, log, clock
+        self._shutdown = shutdown if shutdown is not None else ShutdownWatch(log, clock)
         self.pinned = pinned
         self.pending: str | None = None  # the SHA `ref` moved to, while the upgrade waits for runs to end
         self._resume_on = True
@@ -61,7 +64,8 @@ class Follower:
         now = self._clock()
         if self._restore_at is not None and now >= self._restore_at:
             self._restore_off(now)
-        if now < self._next:
+        self._shutdown()  # raises once a shutdown has no run left to wait for
+        if self._shutdown.shutdown or now < self._next:  # a shutdown never pins nor upgrades
             return None
         self._next = now + CHECK_INTERVAL_S
         try:
@@ -75,11 +79,11 @@ class Follower:
             sha = latest(self._ref, self._repo)
             if sha == self.pinned:
                 return None
-            self._resume_on = bool(_call("GET", "")["on"])
-            _call("POST", "/off")
+            self._resume_on = bool(call_scheduler("GET", "")["on"])
+            call_scheduler("POST", "/off")
             self.pending = sha
             self._log(f"{self._ref} moved {short(self.pinned)} -> {short(sha)}: upgrade pending, no new run starts")
-        active = int(_call("GET", "/active")["active"])
+        active = int(call_scheduler("GET", "/active")["active"])
         if active:
             if active != self._active:
                 self._log(f"upgrade waits for {active} active run(s) to end")
@@ -96,15 +100,8 @@ class Follower:
         """Turn the scheduler back off once the restarted API answers; it is not up yet on the first tries."""
         self._restore_at = now + RESTORE_INTERVAL_S
         try:
-            _call("POST", "/off")
+            call_scheduler("POST", "/off")
         except CHECK_ERRORS:  # not up yet
             return
         self._restore_at = None
         self._log("scheduler kept off, as it was before the upgrade")
-
-
-def _call(method: str, path: str) -> dict:
-    with projects.make_client() as client:
-        response = client.request(method, f"{SCHEDULER}{path}")
-    response.raise_for_status()
-    return response.json()

@@ -62,6 +62,7 @@ class SchedulerRuntime:
 
     gate: UsageGate
     on: bool = True  # dev only: whether the loop ticks (`fact scheduler on|off`); on at every API start
+    shutdown: bool = False  # dev only: `fact shutdown` asked `fact dev` to exit once no run is active; `on` clears it
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_tick_at: datetime | None = None
     last_tick: TickResult | None = None

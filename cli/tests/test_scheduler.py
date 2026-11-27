@@ -94,3 +94,23 @@ def test_no_switch_outside_dev_is_an_error(settings: Settings, monkeypatch: pyte
     result = CliRunner().invoke(app, ["scheduler", "off"])
     assert result.exit_code == 1
     assert "404" in result.output
+
+
+def test_shutdown_turns_the_scheduler_off_and_shows_the_active_runs(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("/active"):
+            return httpx.Response(200, json={"active": 2})
+        return httpx.Response(200, json={**STATE, "on": False, "shutdown": True})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(projects, "make_client", lambda: httpx.Client(base_url=settings.api_url, transport=transport))
+    result = CliRunner().invoke(app, ["shutdown"])
+
+    assert result.exit_code == 0, result.output
+    assert ("POST", "/api/v1/scheduler/shutdown") in calls
+    assert "2 run(s) active: `fact dev` exits once they end." in result.output

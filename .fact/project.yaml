@@ -33,3 +33,7 @@ routing:
       model: opus
 # Step limits (timeout_minutes, max_turns, permission_mode per step kind) keep the SDK's defaults
 # (fact.sdk.step_defaults); set `step_defaults.<kind>.<field>` here to override one.
+# Implement sessions on large refactors run past the default 100 turns; the 60-minute timeout stays the guard.
+step_defaults:
+  agent:
+    max_turns: 300

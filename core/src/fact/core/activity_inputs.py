@@ -35,7 +35,6 @@ TaskEvent = Literal[
     "needs_human",
     "pr_opened",
 ]
-PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 # how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
 # base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
 MergeResult = Literal["merged", "out_of_date", "refused"]
@@ -124,11 +123,6 @@ class WaitForCIInput(_Input):
     pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
     timeout_s: float = 3600.0  # give up waiting for checks still running after this long
     no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
-
-
-class WaitForPRClosedInput(_Input):
-    run_id: str
-    prs: list[PRRef]  # each is polled until it is merged or closed
 
 
 class MergeChangeSetInput(_Input):

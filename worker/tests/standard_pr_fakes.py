@@ -1,26 +1,34 @@
-"""The PR side of the `Standard` test fakes: push, CI, merge, base sync and review wait, scripted per test."""
+"""The PR side of the `Standard` test fakes: push, CI, merge, base sync, review wait and replies, scripted per test."""
 
 from dataclasses import dataclass, field
 
 from fact.core.activity_contract import (
     CLASSIFY_SIGNALS,
+    COLLECT_COMMENTS,
     LABEL_CHANGE_SET,
     MERGE_CHANGE_SET,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
+    POST_REPLIES,
+    REQUEST_REVIEW,
     SYNC_BASE,
     WAIT_FOR_CI,
-    WAIT_FOR_PR_CLOSED,
+    WAIT_FOR_REVIEW,
     ClassifySignalsInput,
+    CollectCommentsInput,
+    Comment,
     LabelChangeSetInput,
     MergeChangeSetInput,
     MergeResult,
     OpenChangeSetInput,
     PostCostCommentInput,
-    PRState,
+    PostRepliesInput,
+    RequestReviewInput,
+    ReviewEvent,
+    ReviewEventKind,
     SyncBaseInput,
     WaitForCIInput,
-    WaitForPRClosedInput,
+    WaitForReviewInput,
 )
 from fact.core.classification import ClassifySignal
 from fact.core.enums import StepOutcome
@@ -41,12 +49,16 @@ class FakePRSteps:
     ci_conflicts: int = 0  # `wait_for_ci` steps that find the PR conflicting with its base, before the rest
     ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
     fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
-    pr_state: PRState = "merged"  # how `wait_for_pr_closed` says each PR ended
+    pr_state: ReviewEventKind = "merged"  # what `wait_for_review` sees on each PR once `review_script` is empty
+    review_script: list[ReviewEventKind] = field(default_factory=list)  # first `wait_for_review` events, on the PR
+    comments: list[Comment] = field(default_factory=list)  # what `collect_comments` reads
+    ci_failures_after_approval: int = 0  # `wait_for_ci` failures once `wait_for_review` returned an approval
     merges: bool = True  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
     merge_script: list[MergeResult] = field(default_factory=list)  # first `merge_change_set` results, before `merges`
     sync_script: list[SyncScript] = field(default_factory=list)  # first `sync_base` results, then `up_to_date`
     signals: list[ClassifySignal] = field(default_factory=list)  # what `classify_signals` raises
     calls: list[tuple[str, object]] = field(default_factory=list)
+    merge_results: list[tuple[str, MergeResult]] = field(default_factory=list)
     queues: list[tuple[str, str]] = field(default_factory=list)  # (activity, the task queue it ran on)
 
     def _call(self, name: str, spec: object) -> None:
@@ -86,17 +98,39 @@ class FakePRSteps:
             return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 failed", outputs={"failures": [failure]})
         return StepResult(outcome=StepOutcome.PASSED, summary="CI passed")
 
-    @activity.defn(name=WAIT_FOR_PR_CLOSED)
-    async def wait_for_pr_closed(self, spec: WaitForPRClosedInput) -> list[PRState]:
-        self._call(WAIT_FOR_PR_CLOSED, spec)
-        return [self.pr_state for _ in spec.prs]
+    @activity.defn(name=WAIT_FOR_REVIEW)
+    async def wait_for_review(self, spec: WaitForReviewInput) -> list[ReviewEvent]:
+        """See a PR `merge_change_set` merged as merged; else the next scripted event, on the PR's current head."""
+        self._call(WAIT_FOR_REVIEW, spec)
+        merged = any(n == MERGE_CHANGE_SET and r == "merged" for n, r in self.merge_results)
+        kind: ReviewEventKind = (
+            "merged" if merged else self.review_script.pop(0) if self.review_script else self.pr_state
+        )
+        review_id = 100 + len(self.of(WAIT_FOR_REVIEW)) if kind in {"approved", "changes_requested"} else None
+        if kind == "approved":
+            self.ci_failures += self.ci_failures_after_approval
+        return [ReviewEvent(pr=pr, kind=kind, review_id=review_id, reviewer="octo") for pr in spec.prs]
+
+    @activity.defn(name=COLLECT_COMMENTS)
+    async def collect_comments(self, spec: CollectCommentsInput) -> list[Comment]:
+        self._call(COLLECT_COMMENTS, spec)
+        return self.comments
+
+    @activity.defn(name=POST_REPLIES)
+    async def post_replies(self, spec: PostRepliesInput) -> int:
+        self._call(POST_REPLIES, spec)
+        return len(spec.replies)
+
+    @activity.defn(name=REQUEST_REVIEW)
+    async def request_review(self, spec: RequestReviewInput) -> None:
+        self._call(REQUEST_REVIEW, spec)
 
     @activity.defn(name=MERGE_CHANGE_SET)
     async def merge_change_set(self, spec: MergeChangeSetInput) -> MergeResult:
         self._call(MERGE_CHANGE_SET, spec)
-        if self.merge_script:
-            return self.merge_script.pop(0)
-        return "merged" if self.merges else "refused"
+        result: MergeResult = self.merge_script.pop(0) if self.merge_script else "merged" if self.merges else "refused"
+        self.merge_results.append((MERGE_CHANGE_SET, result))
+        return result
 
     @activity.defn(name=SYNC_BASE)
     async def sync_base(self, spec: SyncBaseInput) -> StepResult:

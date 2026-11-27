@@ -1248,6 +1248,11 @@
               }
             ],
             "title": "On"
+          },
+          "shutdown": {
+            "default": false,
+            "title": "Shutdown",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2936,6 +2941,25 @@
           }
         },
         "summary": "Scheduler Preview"
+      }
+    },
+    "/api/v1/scheduler/shutdown": {
+      "post": {
+        "description": "Turn the loop off and ask `fact dev` to exit once no run is active; `POST /scheduler/on` cancels it.",
+        "operationId": "scheduler_shutdown_api_v1_scheduler_shutdown_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulerState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Scheduler Shutdown"
       }
     },
     "/api/v1/scheduler/tick": {

@@ -90,4 +90,4 @@ Style picked from the prototype (26 Nov 2026, board D of the style exploration):
 
 **Dark mode** comes with user accounts, as a user preference. **TypeScript** is strict everywhere; API types are generated from FastAPI's OpenAPI schema.
 
-**Auth:** none in M4. The API binds to localhost; exposing it further needs auth first.
+**Auth:** none in M4. The API binds to localhost; exposing it further needs auth first. From M5 every route is authenticated: people sign in with Supabase Auth (GitHub or an email link; accounts are created only on the Supabase dashboard), and local dev uses a local token (`19-cloud.md`).

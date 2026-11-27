@@ -6,7 +6,16 @@ import pytest
 from fact.core.github import GitHubApp, GitHubAppConfigError
 from fact.core.project_config import ProjectConfig
 from fact.core.settings import Settings
-from fact.core.tasks import GitHubIssuesSource, TaskKey, TaskSource, branch_name, dependency_key, parse_key, source_for
+from fact.core.tasks import (
+    GitHubIssuesSource,
+    TaskKey,
+    TaskSource,
+    TaskStatus,
+    branch_name,
+    dependency_key,
+    parse_key,
+    source_for,
+)
 from fact.core.types import PRRef, Task
 
 TASK = """---
@@ -139,5 +148,7 @@ async def test_file_source_write_back_only_logs(tmp_path: Path) -> None:
     await source.set_labels(key, ["fact:running"], [])
     await source.write_context(key, "context")
     await source.link_prs(key, [pr])
+    before = (tmp_path / "tasks" / "M1" / "01-x.md").read_bytes()
+    await source.advance_status(key, TaskStatus.in_progress)
     await source.close(key)
-    assert (tmp_path / "tasks" / "M1" / "01-x.md").exists()
+    assert (tmp_path / "tasks" / "M1" / "01-x.md").read_bytes() == before

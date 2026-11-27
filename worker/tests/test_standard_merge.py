@@ -12,7 +12,7 @@ from fact.core.activity_contract import (
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
     TEARDOWN_WORKSPACE,
-    WAIT_FOR_PR_CLOSED,
+    WAIT_FOR_REVIEW,
     GateAnsweredInput,
     GateOpenedInput,
     NotifyInput,
@@ -21,7 +21,7 @@ from fact.core.classification import ChangedPath, ClassifySignal
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import StepResult
-from fact.sdk.pull_requests import REVIEW_STAGE
+from fact.sdk.review_wait import REVIEW_STAGE
 from standard_env import load_standard
 from standard_harness import FakeActivities, finished, run_standard
 from standard_inputs import PR, REPO, run_input
@@ -46,7 +46,7 @@ async def test_run_ends_as_its_pr_did_and_tears_down(
     assert (result.outcome, result.prs, result.summary) == (outcome, [PR], PR.url)
     assert finished(fakes) == outcome
     assert len(fakes.of(TEARDOWN_WORKSPACE)) == 1
-    (waited,) = fakes.of(WAIT_FOR_PR_CLOSED)
+    (waited,) = fakes.of(WAIT_FOR_REVIEW)
     assert waited.prs == [PR]
 
     opened: GateOpenedInput = fakes.of(RECORD_GATE_OPENED)[-1]
@@ -67,7 +67,7 @@ async def test_prs_ready_comes_before_the_wait_and_the_cost_comment_once_at_the_
     await run_standard(fakes, "run-pr-order")
 
     names = [n for n, _ in fakes.calls]
-    wait = names.index(WAIT_FOR_PR_CLOSED)
+    wait = names.index(WAIT_FOR_REVIEW)
     ready = next(
         i for i, (n, spec) in enumerate(fakes.calls) if n == NOTIFY and spec.kind == NotificationKind.PRS_READY
     )
@@ -78,7 +78,7 @@ async def test_prs_ready_comes_before_the_wait_and_the_cost_comment_once_at_the_
 
 
 async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
-    fakes = FakeActivities(broken=WAIT_FOR_PR_CLOSED, merges=False)
+    fakes = FakeActivities(broken=WAIT_FOR_REVIEW, merges=False)
     with pytest.raises(WorkflowFailureError):
         await run_standard(fakes, "run-pr-wait-broken")
 
@@ -88,7 +88,7 @@ async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
         GateDecision.REJECT,
         StepOutcome.NEEDS_HUMAN,
     )
-    assert "wait_for_pr_closed is broken" in answered.note
+    assert "wait_for_review is broken" in answered.note
     assert finished(fakes) == RunOutcome.FAILED
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # the workspace stays for a person
     (comment,) = fakes.of(POST_COST_COMMENT)  # a failed run with a PR still gets its cost, after the end is recorded
@@ -110,7 +110,7 @@ async def test_an_auto_merge_change_set_is_merged_with_the_project_method_and_no
     assert finished(fakes) == RunOutcome.MERGED
     (merged,) = fakes.of(MERGE_CHANGE_SET)
     assert (merged.prs, merged.method) == ([PR], "rebase")
-    assert not fakes.of(WAIT_FOR_PR_CLOSED)
+    assert not fakes.of(WAIT_FOR_REVIEW)
     assert not fakes.of(NOTIFY)  # neither `prs_ready` nor `run_finished`
     assert len(fakes.of(TEARDOWN_WORKSPACE)) == 1
 
@@ -126,7 +126,7 @@ async def test_a_human_review_change_set_is_not_merged_and_notifies_its_reasons(
     (ready,) = _prs_ready(fakes)
     assert "changes the database schema" in ready.body
     names = [n for n, _ in fakes.calls]
-    assert names.index(NOTIFY) < names.index(WAIT_FOR_PR_CLOSED)
+    assert names.index(NOTIFY) < names.index(WAIT_FOR_REVIEW)
     assert result.outcome == RunOutcome.MERGED  # the person merged it
 
 
@@ -152,7 +152,7 @@ async def test_a_refused_merge_falls_back_to_needs_review_and_notifies() -> None
     (ready,) = _prs_ready(fakes)
     assert MERGE_REFUSED in ready.body
     names = [n for n, _ in fakes.calls]
-    assert names.index(MERGE_CHANGE_SET) < names.index(NOTIFY) < names.index(WAIT_FOR_PR_CLOSED)
+    assert names.index(MERGE_CHANGE_SET) < names.index(NOTIFY) < names.index(WAIT_FOR_REVIEW)
     assert result.outcome == RunOutcome.MERGED  # the person merged it
 
 
