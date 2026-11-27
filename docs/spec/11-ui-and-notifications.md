@@ -39,7 +39,7 @@ A run that touches three repositories shows three PRs on its Open PRs node and t
 - Events: gate waiting, PRs ready for review, run failed or needs help, budget exceeded, run finished.
 - **What notifies (decided 26 Nov 2026, not built yet).** Only what needs a person or is worth checking; a factory processes many tasks, so routine progress never notifies:
   - `gate_waiting`: always (warning).
-  - `prs_ready`: only when the change set needs a human review, as decided by the classify step (`06-workflow-authoring.md`); until classify exists, every change set needs one.
+  - `prs_ready`: only when the change set needs a human review, as decided by the classify step (`06-workflow-authoring.md`); a change set fact merges itself sends none.
   - `run_failed`: ended `failed` or `needs_human` (error).
   - `run_finished`: only for a run a person started by hand (UI, API or CLI), never for scheduler runs (info); a run ending `no_changes` always notifies, as a warning.
   - `task_held` (decided 27 Nov 2026): a run end left its task held with `fact:needs-human`, so nothing will start it until a person acts; says why (stopped, needs a person, PR open or closed, failure cap) and how to release it: remove the label or `fact run` (warning).
