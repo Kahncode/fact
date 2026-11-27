@@ -116,7 +116,7 @@ The example is the target shape. What exists today (M1, plus M2-01 gates) is the
   **Learn**: after the review and before classifying, an agent session runs the `learn` skill to update the repository's context files (`CLAUDE.md` or `AGENTS.md`, `docs/`) to match what the change did, as part of the same branch. Context lives entirely in the repositories for now. The same session writes the PR title and summary (its `title` and `summary` answer), which open the PR description; without them the PR keeps the implement session's text.
 - **Classify**: rules first (project policy, paths touched, diff size), then an LLM classifier for what the rules leave open. The result is a label on every PR of the change set.
 
-  **Classify, first version (decided 26 Nov 2026, M3, not built yet).** Once classify exists, a human review is no longer the default: a change set needs one only when a signal says so. The signals:
+  **Classify, first version (decided 26 Nov 2026, M3; built in #13 except merging by the route).** Once classify exists, a human review is no longer the default: a change set needs one only when a signal says so. The signals:
   - **Ambiguous spec and assumptions**: the implementation session says whether it found the spec ambiguous and lists the assumptions it made; both go in the PR description so a person can review them.
   - **Security**: a security check of the change.
   - **Database schema changes.**
