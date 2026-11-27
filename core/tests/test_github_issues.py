@@ -35,7 +35,8 @@ def test_parsing_helpers() -> None:
     assert depends_on_lines("- **Depends on:** #7\nnot depends on #8", REPO) == ["gh:acme/app#7"]
     assert task_type(["type:chore"]) == "chore"
     assert task_type(["Type:Incident"]) == "bug"
-    assert task_type(["type:weird"]) == task_type([]) == "feature"
+    assert task_type(["type:weird"]) == task_type([]) == task_type(["type:epic"]) == "feature"
+    assert task_type(["type:epic", "type:bug"]) == task_type(["type:weird", "type:bug"]) == "bug"
     assert complexity(["complexity:complex"]) == "complex"
     assert complexity([]) == "standard"
     assert priority(["priority:low", "Priority:High"]) == "high"

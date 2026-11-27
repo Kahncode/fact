@@ -34,8 +34,9 @@ class FakeGitHub:
     """
     Serves issues by (repo, number), blocked-by links by number, and the `fact:ready` listing in two pages.
 
-    `parents` maps a child's (repo, number) to its parent's; `/parent` and `/sub_issues` are read from it. Comments are
-    recorded in `comments`, and a PATCH of an issue updates it.
+    `parents` maps a child's (repo, number) to its parent's; `/parent` and `/sub_issues` are read from it. Adding a
+    child counts it in its parent's `sub_issues_summary` unless the parent was added with one. Comments are recorded in
+    `comments`, and a PATCH of an issue updates it.
     """
 
     issues: dict[tuple[str, int], dict] = field(default_factory=dict)
@@ -43,11 +44,19 @@ class FakeGitHub:
     parents: dict[tuple[str, int], tuple[str, int]] = field(default_factory=dict)
     comments: list[tuple[int, str]] = field(default_factory=list)
     requests: list[httpx.Request] = field(default_factory=list)
+    _counted: set[tuple[str, int]] = field(default_factory=set)  # parents whose summary `add` keeps
 
     def add(self, issue: dict, repo: str = REPO, parent: int | None = None) -> None:
         self.issues[repo, issue["number"]] = issue
         if parent is not None:
             self.parents[repo, issue["number"]] = (REPO, parent)
+            parent_issue = self.issues.get((REPO, parent))
+            if parent_issue is not None and (
+                "sub_issues_summary" not in parent_issue or (REPO, parent) in self._counted
+            ):
+                self._counted.add((REPO, parent))
+                summary = parent_issue.setdefault("sub_issues_summary", {"total": 0, "completed": 0})
+                summary["total"] += 1
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)

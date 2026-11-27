@@ -9,8 +9,8 @@ label, so an issue's run history holds nothing else. A file task, which has no l
 `Hold.FAILURE_CAP` (`run_history_hold`); the tick then labels the issue (`fact.api.failure_cap`). A start that never
 reached Temporal (`finished` and never started) does not count. Tasks under an ancestor not marked ready are listed
 held with `Hold.PARENT`, and tasks whose dependencies are not done with `Hold.DEPENDENCY`, for the preview. Only the
-tick's read (`close_epics`) closes the ready epics with nothing left to wait on and labels failure-capped issues; the
-preview never writes. A failure-capped issue whose label a person removed is released (`failure_cap.released`).
+tick's read (`close_parents`) closes the ready parents without a work type with nothing left to wait on and labels
+failure-capped issues; the preview never writes. A failure-capped issue whose label a person removed is released (`failure_cap.released`).
 
 `run_tick` is the scheduler's tick, in this process: `find_ready`, `plan_starts`, the usage gate only when something
 is chosen, then each start through `start_task` (`POST /runs/start` with `scheduled: true`, called directly). It
@@ -82,7 +82,7 @@ def _hold(item: ReadyItem) -> Hold | None:
     return Hold.DEPENDENCY if item.waiting_on else None
 
 
-async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = False) -> tuple[list[ReadyTask], int]:
+async def _ready_in(settings: Settings, ref: ProjectRef, *, close_parents: bool = False) -> tuple[list[ReadyTask], int]:
     """
     Read the project's ready tasks from its task source (`files`: on `origin/<default>`), and its `max_runs`.
 
@@ -95,7 +95,7 @@ async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = 
             if tasks is None:
                 return [], max_runs
             max_runs = tasks.config.max_runs
-            found = await tasks.source.list_ready(include_waiting=True, close_epics=close_epics)
+            found = await tasks.source.list_ready(include_waiting=True, close_parents=close_parents)
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
         return [], max_runs
@@ -124,14 +124,15 @@ def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) ->
     return task.model_copy(update={"failed_runs": failed, "last_run_id": last, "hold": task.hold or hold})
 
 
-async def find_ready(settings: Settings, session: AsyncSession, *, close_epics: bool = False) -> ReadyTasks:
+async def find_ready(settings: Settings, session: AsyncSession, *, close_parents: bool = False) -> ReadyTasks:
     """
     Every project's offered tasks, and the active runs against `concurrency.max_runs` and each project's cap.
 
-    `close_epics`: the scheduler's tick, which also closes the ready epics with nothing left to wait on.
+    `close_parents`: the scheduler's tick, which also closes the ready parents without a work type with nothing left
+    to wait on.
     """
     # one slow remote delays no other
-    found = await asyncio.gather(*(_ready_in(settings, ref, close_epics=close_epics) for ref in settings.projects))
+    found = await asyncio.gather(*(_ready_in(settings, ref, close_parents=close_parents) for ref in settings.projects))
     histories = await run_histories(session)
     max_failed = settings.concurrency.max_failed_runs
     offered = (apply_history(t, histories.get((t.project, t.task_key), []), max_failed) for ts, _ in found for t in ts)
@@ -172,7 +173,8 @@ async def run_tick(state: State) -> TickResult:
 
 async def _tick(state: State, gate: UsageGate) -> TickResult:
     async with state.sessions() as session:
-        ready = await find_ready(state.settings, session, close_epics=True)  # the tick: closes finished epics
+        # the tick: closes finished parents without a work type
+        ready = await find_ready(state.settings, session, close_parents=True)
         await hold_failure_capped(state.settings, session, ready.tasks)
     chosen = plan_starts(ready)
     if not chosen:

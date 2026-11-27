@@ -11,7 +11,6 @@ from fact.core.tasks.base import GITHUB_PREFIX
 from fact.core.types import PRIORITIES, Complexity, Priority, TaskType
 
 READY_LABEL = "fact:ready"
-EPIC_TYPE = "epic"
 TYPE_ALIASES: dict[str, TaskType] = {"incident": "bug"}  # an incident runs the bug workflow
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
 _CRITERION_RE = re.compile(r"^\s*[-*+]\s*\[[ xX]\]\s*(.+?)\s*$")
@@ -53,15 +52,34 @@ def has_label(issue: dict[str, Any], name: str) -> bool:
     return name.lower() in (n.lower() for n in label_names(issue))
 
 
-def is_epic(issue: dict[str, Any]) -> bool:
-    """Tell whether the issue is an epic (`type:epic`): a parent with no work of its own, never run."""
-    return _label_value(label_names(issue), "type") == EPIC_TYPE
+def _work_type(labels: list[str]) -> TaskType | None:
+    """Return the first valid `type:*` label (alias resolved), whatever the order; None without. `type:epic` is none."""
+    prefix = "type:"
+    for name in labels:
+        if not name.lower().startswith(prefix):
+            continue
+        value = name[len(prefix) :].strip().lower()
+        value = TYPE_ALIASES.get(value, value)
+        if value in get_args(TaskType):
+            return value  # type: ignore[return-value]
+    return None
+
+
+def is_parent_without_work(issue: dict[str, Any]) -> bool:
+    """
+    Tell whether the issue is a parent without a work type, which never runs.
+
+    A parent has ever had sub-issues (GitHub's `sub_issues_summary.total` counts closed ones); `type:epic` is not a work
+    type. A leaf without a work type is not one: it runs as `feature`.
+    """
+    summary = issue.get("sub_issues_summary")
+    has_had_sub_issues = isinstance(summary, dict) and bool(summary.get("total"))
+    return has_had_sub_issues and _work_type(label_names(issue)) is None
 
 
 def task_type(labels: list[str]) -> TaskType:
-    value = _label_value(labels, "type") or "feature"
-    value = TYPE_ALIASES.get(value, value)
-    return value if value in get_args(TaskType) else "feature"  # type: ignore[return-value]
+    """Return the work type: the first valid `type:*` label other than `type:epic`; `feature` without one."""
+    return _work_type(labels) or "feature"
 
 
 def complexity(labels: list[str]) -> Complexity:

@@ -1,6 +1,6 @@
 """Parent issues and sub-issues in the GitHub source: the parent's label gates, open sub-issues are dependencies."""
 
-from fact.core.tasks.github_issues import EPIC_CLOSED
+from fact.core.tasks.github_issues import PARENT_CLOSED
 from fake_github_issues import FakeGitHub, closed, issue, source
 
 READY = "fact:ready"
@@ -39,7 +39,7 @@ async def test_a_grandchild_waits_on_its_grandparent() -> None:
 
 async def test_open_sub_issues_hold_their_parent() -> None:
     github = FakeGitHub()
-    github.add(issue(1, labels=(READY,)))
+    github.add(issue(1, labels=(READY, "type:feature")))
     github.add(issue(2), parent=1)  # open, not even ready: it still holds the parent
     github.add(closed(3, reason="not_planned"), parent=1)
     items = await source(github).list_ready(include_waiting=True)
@@ -52,30 +52,50 @@ async def test_open_sub_issues_hold_their_parent() -> None:
     assert ready[0].task.depends_on == []
 
 
-async def test_a_finished_epic_is_closed_never_listed() -> None:
+async def test_a_finished_parent_without_a_work_type_is_closed_never_listed() -> None:
     github = FakeGitHub()
     github.add(issue(1, labels=(READY, "type:epic")))
     github.add(closed(2), parent=1)
+    github.add(issue(3, labels=(READY,)))  # no type label at all: a parent without a work type too
+    github.add(closed(4), parent=3)
     github.add(issue(5, labels=(READY, "type:epic")))  # open sub-issue: stays open
     github.add(issue(6), parent=5)
     assert await source(github).list_ready(include_waiting=True) == []
-    assert github.comments == []  # a read without close_epics (the preview) writes nothing
+    assert github.comments == []  # a read without close_parents (the preview) writes nothing
     assert github.issues["acme/app", 1]["state"] == "open"
 
-    assert await source(github).list_ready(close_epics=True) == []
-    assert github.comments == [(1, EPIC_CLOSED)]
-    assert (github.issues["acme/app", 1]["state"], github.issues["acme/app", 1]["state_reason"]) == (
-        "closed",
-        "completed",
-    )
+    assert await source(github).list_ready(close_parents=True) == []
+    assert github.comments == [(1, PARENT_CLOSED), (3, PARENT_CLOSED)]
+    for n in (1, 3):
+        assert (github.issues["acme/app", n]["state"], github.issues["acme/app", n]["state_reason"]) == (
+            "closed",
+            "completed",
+        )
     assert github.issues["acme/app", 5]["state"] == "open"
 
 
-async def test_an_epic_under_a_planned_parent_stays_open() -> None:
+async def test_a_parent_runs_by_its_work_type_whatever_the_label_order() -> None:
+    github = FakeGitHub()
+    github.add(issue(1, labels=(READY, "type:epic", "type:chore")))
+    github.add(closed(2), parent=1)
+    github.add(issue(3, labels=(READY, "type:chore", "type:epic")))
+    github.add(closed(4), parent=3)
+    github.add(issue(5, labels=(READY,)))  # a leaf without a type label runs as a feature
+    ready = await source(github).list_ready(close_parents=True)
+    assert [(i.task.key, i.task.type) for i in ready] == [
+        ("gh:acme/app#1", "chore"),
+        ("gh:acme/app#3", "chore"),
+        ("gh:acme/app#5", "feature"),
+    ]
+    assert github.comments == []
+
+
+async def test_a_parent_under_a_planned_parent_stays_open() -> None:
     github = FakeGitHub()
     github.add(issue(1, labels=(PLANNED,)))
     github.add(issue(2, labels=(READY, "type:epic")), parent=1)
-    assert await source(github).list_ready(close_epics=True) == []
+    github.add(closed(3), parent=2)
+    assert await source(github).list_ready(close_parents=True) == []
     assert github.comments == []
     assert github.issues["acme/app", 2]["state"] == "open"
 
