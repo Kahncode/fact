@@ -9,17 +9,16 @@ api:
   host: 127.0.0.1
   port: 8000
 # max_runs caps runs queued, running or waiting, all projects together; each project also has its own max_runs.
-# The scheduler starts ready tasks every scheduler_interval_seconds; scheduler_enabled only sets whether the
-# fact-scheduler Schedule is created on or paused; after that, `fact scheduler on|off` decides.
+# In dev (env local, test, dev) the API ticks the scheduler every scheduler_interval_seconds, on at every API start
+# (`fact scheduler on|off`); elsewhere only POST /api/v1/scheduler/tick (an outside cron or webhook) runs a tick.
 concurrency:
   sandboxes: 2
   planners: 1
   max_runs: 2
-  scheduler_enabled: false
   scheduler_interval_seconds: 30
   max_failed_runs: 3 # the scheduler stops restarting a task after this many failed runs in a row; `fact run` resets
 # The scheduler starts no run while a Claude usage window is inside its reserve (the share left to you). The gate
-# is off with usage_gate: false, or when ANTHROPIC_API_KEY is set for the worker (API billing, no windows).
+# is off with usage_gate: false, or when ANTHROPIC_API_KEY is set for the API (API billing, no windows).
 claude:
   usage_gate: true
   reserve:

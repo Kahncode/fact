@@ -79,12 +79,12 @@ uv run fact inbox read 3
 
 ## Letting fact pick up work
 
-Instead of starting each task by hand, keep `fact dev` running and turn the scheduler on; this is how to run every ready task:
+Instead of starting each task by hand, keep `fact dev` running: the scheduler is on at every API start and runs every ready task. Check it, or stop and resume it:
 
 ```
-uv run fact scheduler on
 uv run fact scheduler status
 uv run fact scheduler off
+uv run fact scheduler on
 ```
 
 Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`).
@@ -95,7 +95,7 @@ Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a proj
 - `fact scheduler status` shows what the next tick would start, why the others wait, and the usage it last read with each window's reset time.
 - On Windows, the worker keeps the PC from sleeping while a run is active (`worker.keep_awake`).
 
-The scheduler is created off on a fresh install (`concurrency.scheduler_enabled`); after that, only `fact scheduler on|off` or the Temporal UI change it. After upgrading from a version before the failure cap, check `fact scheduler status` before turning it on: tasks whose past runs failed are retried. See `docs/ARCHITECTURE.md`.
+The scheduler ticks inside the API. In dev (`env` `local`, `test` or `dev`) it ticks every `concurrency.scheduler_interval_seconds` (30) and is on at every API start; `fact scheduler off` stops it until `fact scheduler on` or the next API start. Elsewhere there is no loop and no switch: an outside cron or webhook calls `POST /api/v1/scheduler/tick`. Check `fact scheduler status` before leaving it on: tasks whose past runs failed are retried. See `docs/ARCHITECTURE.md`.
 
 ## Workspaces
 
@@ -115,7 +115,7 @@ To set up a task repository, `uv run fact github labels sync <owner/repo>` creat
 
 ## The API
 
-Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run stopped with `POST /api/v1/runs/{id}/stop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler is described with `GET /api/v1/scheduler` and turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/ready` lists what it may start and `GET /api/v1/scheduler/preview` what its next tick would do. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
+Run it alone with `uv run python -m fact.api`. It serves on the host and port from `fact.yaml`, applies DB migrations on startup and registers the projects listed there. Check it with `GET /health`; list projects with `GET /api/v1/projects`. Runs are started with `POST /api/v1/runs/start`; runs, steps and events are recorded through `/api/v1/runs`, `/api/v1/steps/{id}` and `/api/v1/runs/{id}/events`. Gates are answered with `POST /api/v1/runs/{id}/gates/{gate_id}`, instructions sent with `POST /api/v1/runs/{id}/instructions`, a run's live state read with `GET /api/v1/runs/{id}/status`, and a run stopped with `POST /api/v1/runs/{id}/stop`. Notifications are created with `POST /api/v1/notifications` (one per `dedupe_key`), listed with `GET /api/v1/notifications?unread=true` and marked read with `POST /api/v1/notifications/{id}/read`. The scheduler ticks once with `POST /api/v1/scheduler/tick`, is described with `GET /api/v1/scheduler` and, in dev only, turned on and off with `POST /api/v1/scheduler/on` and `/off`; `GET /api/v1/scheduler/preview` shows what its next tick would do. Agent steps record the Claude usage windows they see with `PUT /api/v1/usage/claude`; `GET /api/v1/usage` lists them.
 
 A published route or field never changes: `api/openapi.json` is the committed OpenAPI schema, and a test fails when the live API removes or changes anything in it, or adds something until you regenerate it with `uv run python scripts/openapi_snapshot.py`.
 

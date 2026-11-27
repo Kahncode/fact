@@ -1,9 +1,9 @@
 """
-The scheduler's Claude usage gate: what the `check_claude_usage` activity answers, and the per-window thresholds.
+The scheduler's Claude usage gate: what `fact.api.usage_gate.UsageGate` answers, and the per-window thresholds.
 
 A window is full when its utilization is at or above `1 - reserve` (`claude.reserve.five_hour` for `five_hour`,
-`claude.reserve.weekly` for the three weekly windows), or when it is rejecting. The worker keeps the last answer
-(`fact.worker.usage_gate`) and reports it to the API, where `fact scheduler status` reads it.
+`claude.reserve.weekly` for the three weekly windows), or when it is rejecting. The API keeps the last answer
+(`fact.api.usage_gate`), which `fact scheduler status` reads.
 """
 
 from datetime import UTC, datetime
@@ -25,10 +25,6 @@ class GateState(StrEnum):
 
 class _Model(BaseModel):
     model_config = ConfigDict(frozen=True)
-
-
-class UsageCheckInput(_Model):
-    now: datetime  # the tick's `workflow.now()`, so the gate follows workflow time
 
 
 class GateWindow(_Model):

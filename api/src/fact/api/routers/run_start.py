@@ -1,8 +1,9 @@
-"""`POST /api/v1/runs/start`: start the project's workflow for a task."""
+"""`POST /api/v1/runs/start`: start the project's workflow for a task; `start_task` is also the scheduler's tick."""
 
 from typing import Annotated
 
-from fact.api.deps import get_artifacts, get_session
+from fact.api.deps import get_session
+from fact.api.run_counts import active_by_project, run_histories
 from fact.api.run_start import (
     FoundTask,
     StartError,
@@ -15,9 +16,8 @@ from fact.api.run_start import (
     workflow_id,
     workflow_type,
 )
-from fact.api.scheduler import run_histories
 from fact.api.task_ref import TaskReadError
-from fact.api.temporal import temporal_client
+from fact.api.temporal import connect_temporal
 from fact.core.activity_contract import workflow_queue
 from fact.core.artifacts import LocalArtifactStore
 from fact.core.enums import RunOutcome, RunStatus, RunTrigger
@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import State
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError
 
@@ -38,7 +39,6 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/api/v1")
 
 Session = Annotated[AsyncSession, Depends(get_session)]
-Store = Annotated[LocalArtifactStore, Depends(get_artifacts)]
 RESERVE_ATTEMPTS = 3
 
 
@@ -78,13 +78,25 @@ async def _find(settings: Settings, body: RunStart) -> FoundTask:
 
 
 async def scheduler_refusal(session: AsyncSession, settings: Settings, found: FoundTask) -> str:
-    """Why the scheduler may no longer start this task (a run in progress or ended, or the failure cap); "" if it may."""
+    """
+    Why the scheduler may no longer start this task; "" if it may.
+
+    A run in progress or ended, the failure cap, or `concurrency.max_runs` or the project's `max_runs` reached: the API
+    stays the authority even when the tick's snapshot is stale.
+    """
     key = found.check.task.key
     history = (await run_histories(session, found.ref.name, key)).get((found.ref.name, key), [])
     offered, failed, hold = run_history_hold(history, settings.concurrency.max_failed_runs)
     if not offered:
         return f"{key} already has a run"
-    return f"{key} failed {failed} runs in a row: start it with `fact run`" if hold else ""
+    if hold:
+        return f"{key} failed {failed} runs in a row: start it with `fact run`"
+    active = await active_by_project(session)
+    if sum(active.values()) >= settings.concurrency.max_runs:
+        return f"max_runs {settings.concurrency.max_runs} reached"
+    if active.get(found.ref.name, 0) >= found.ref.max_runs:
+        return f"project {found.ref.name} max_runs {found.ref.max_runs} reached"
+    return ""
 
 
 async def _reserve(session: AsyncSession, found: FoundTask, wf_type: str, trigger: RunTrigger) -> Run:
@@ -127,11 +139,17 @@ async def _mark_start_failed(session: AsyncSession, run: Run) -> None:
 
 
 @router.post("/runs/start", status_code=status.HTTP_201_CREATED)
-async def start_run(body: RunStart, request: Request, session: Session, store: Store) -> RunStarted:
+async def start_run(body: RunStart, request: Request, session: Session) -> RunStarted:
     """Start the task's workflow; after a stopped run, the new run gets its handoff note (`RunInput.handoff_ref`)."""
-    settings: Settings = request.app.state.settings
+    return await start_task(request.app.state, body, session)
+
+
+async def start_task(state: State, body: RunStart, session: AsyncSession) -> RunStarted:
+    """`POST /runs/start` without HTTP (the scheduler's tick calls it directly); refusals raise `HTTPException`."""
+    settings: Settings = state.settings
+    store: LocalArtifactStore = state.artifacts
     found = await _find(settings, body)
-    client = await temporal_client(request)  # after the checks: a refusal needs no Temporal
+    client = await connect_temporal(state.temporal)  # after the checks: a refusal needs no Temporal
     wf_type = workflow_type(found)
     if body.scheduled and (refusal := await scheduler_refusal(session, settings, found)):
         raise HTTPException(status.HTTP_409_CONFLICT, refusal)

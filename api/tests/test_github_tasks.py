@@ -127,10 +127,10 @@ async def test_start_refuses_an_issue_under_a_parent_not_ready(
     assert detail["not_ready_ancestor"] == "gh:acme/app#20"
     assert "gh:acme/app#20" in detail["message"]
 
-    async def no_temporal(_request: object) -> None:
+    async def no_temporal(_connection: object) -> None:
         raise HTTPException(HTTPStatus.SERVICE_UNAVAILABLE, "no Temporal in this test")
 
-    monkeypatch.setattr(run_start_router, "temporal_client", no_temporal)
+    monkeypatch.setattr(run_start_router, "connect_temporal", no_temporal)
     # forced, the gate no longer refuses: the start goes on to Temporal
     body = {"task_key": "gh:acme/app#21", "override_deps": True}
     response = await client.post("/api/v1/runs/start", json=body)

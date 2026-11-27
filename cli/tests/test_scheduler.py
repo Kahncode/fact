@@ -8,12 +8,11 @@ from fact.core.settings import Settings
 from typer.testing import CliRunner
 
 STATE = {
-    "schedule_id": "fact-scheduler",
-    "paused": False,
-    "note": None,
+    "in_process": True,
+    "on": True,
     "interval_seconds": 30.0,
-    "next_ticks": ["2026-11-26T10:00:30Z"],
-    "recent_ticks": ["2026-11-26T10:00:00Z"],
+    "last_tick_at": "2026-11-26T10:00:00Z",
+    "last_tick": {"started": ["run-task-M1-01-1"], "failed": [], "usage_full": "", "skipped": False},
 }
 
 
@@ -43,11 +42,10 @@ PREVIEW = {
 def _use(monkeypatch: pytest.MonkeyPatch, settings: Settings, status: int = 200) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if status != 200:  # noqa: PLR2004
-            return httpx.Response(status, json={"detail": "No Temporal schedule fact-scheduler"})
+            return httpx.Response(status, json={"detail": "Not Found"})
         if request.url.path.endswith("/preview"):
             return httpx.Response(200, json=PREVIEW)
-        paused = request.url.path.endswith("/off")
-        return httpx.Response(200, json={**STATE, "paused": paused, "note": "paused" if paused else None})
+        return httpx.Response(200, json={**STATE, "on": not request.url.path.endswith("/off")})
 
     transport = httpx.MockTransport(handler)
     monkeypatch.setattr(projects, "make_client", lambda: httpx.Client(base_url=settings.api_url, transport=transport))
@@ -55,10 +53,10 @@ def _use(monkeypatch: pytest.MonkeyPatch, settings: Settings, status: int = 200)
 
 @pytest.mark.parametrize(
     ("command", "shown"),
-    [("on", "fact-scheduler: on"), ("off", "fact-scheduler: off (paused)"), ("status", "30 s")],
+    [("on", "Scheduler: on"), ("off", "Scheduler: off"), ("status", "1 started")],
 )
 def test_scheduler_commands(settings: Settings, monkeypatch: pytest.MonkeyPatch, command: str, shown: str) -> None:
-    _use(monkeypatch, settings)  # `on` and `off` only show the state the API answers with: off is the paused one
+    _use(monkeypatch, settings)  # `on` and `off` only show the state the API answers with
     result = CliRunner().invoke(app, ["scheduler", command])
     assert result.exit_code == 0, result.output
     assert shown in result.output
@@ -78,8 +76,8 @@ def test_status_previews_the_next_tick(settings: Settings, monkeypatch: pytest.M
     assert "failure_cap" in lines[1]
 
 
-def test_missing_schedule_is_an_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_switch_outside_dev_is_an_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     _use(monkeypatch, settings, status=404)
-    result = CliRunner().invoke(app, ["scheduler", "status"])
+    result = CliRunner().invoke(app, ["scheduler", "off"])
     assert result.exit_code == 1
     assert "404" in result.output

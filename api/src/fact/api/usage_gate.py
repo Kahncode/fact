@@ -1,14 +1,15 @@
 """
-The scheduler's usage gate in the worker process: calls the undocumented usage endpoint only when it must.
+The scheduler's usage gate in the API process: calls the undocumented usage endpoint only when it must.
 
 `UsageGate.check(now)` is called by a tick that has a task to start and a free slot:
 
-- gate off (`claude.usage_gate: false`, or ANTHROPIC_API_KEY set in the worker's environment): no call;
+- gate off (`claude.usage_gate: false`, or ANTHROPIC_API_KEY set in the API's environment): no call;
 - last answer had a full window and its `next_call_at` is ahead: no call, still full;
 - else one call. A full window sets `next_call_at` to its reset plus `RESET_MARGIN`; a window still full once that
   has passed backs off `MIN_WAIT * stalls` (as the retired task loop's `wait_for_quota` did).
 
-A worker restart drops the cached answer, which costs one call. `now` is the tick's workflow time.
+It reads the local Claude Code login: the API runs on the machine whose subscription the runs use. An API restart
+drops the cached answer, which costs one call. `last` is what `GET /scheduler/preview` shows.
 """
 
 import asyncio
