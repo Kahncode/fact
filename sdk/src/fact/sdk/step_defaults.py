@@ -10,7 +10,7 @@ SECONDS_PER_MINUTE = 60
 
 # permission_mode "auto": Claude Code keeps its checks on and a classifier decides, without prompting anyone.
 SDK_STEP_DEFAULTS = StepDefaultsConfig(
-    agent=AgentStepDefaults(timeout_minutes=60.0, max_turns=100, permission_mode="auto"),
+    agent=AgentStepDefaults(timeout_minutes=60.0, max_turns=300, permission_mode="auto"),
     shell=ShellStepDefaults(timeout_minutes=15.0),
 )
 

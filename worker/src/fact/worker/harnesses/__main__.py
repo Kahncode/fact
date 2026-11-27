@@ -27,6 +27,7 @@ async def _main(prompt: str, model: str | None, max_turns: int) -> int:
     cache = f"cache read {u.cache_read_tokens}, write {u.cache_write_tokens}"
     print(f"tokens in/out: {u.tokens_in}/{u.tokens_out} ({cache})")  # noqa: T201
     print(f"stop_reason:   {result.stop_reason} (exit {result.exit_code}, turns {result.num_turns})")  # noqa: T201
+    print(f"peak context:  {u.peak_context_tokens}")  # noqa: T201
     print(f"transcript:    {lines} lines")  # noqa: T201
     print(f"final_message: {result.final_message}")  # noqa: T201
     return 1 if result.is_error else 0

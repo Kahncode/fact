@@ -135,6 +135,10 @@ def _find_run(ref: str) -> dict[str, Any]:
     return call_api("GET", f"{API}/runs/{quote(ref, safe='')}")
 
 
+def _count(value: int | None) -> str:
+    return "-" if value is None else f"{value:,}"
+
+
 def _links(step: dict[str, Any], base: str) -> str:
     refs = [(name, step[key]) for name, key in (("log", "log_ref"), ("transcript", "transcript_ref")) if step[key]]
     return " ".join(f"{name}: {base}{API}/artifacts/{ref}" for name, ref in refs) or "-"
@@ -169,13 +173,16 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
             s["status"],
             s["outcome"] or "-",
             _duration(s["started_at"], s["ended_at"]),
+            _count(s["turns"]),
+            _count(s["peak_context_tokens"]),
             _cost(s["cost_usd"], agent=s["harness"] is not None) + (" (cut short)" if s["usage_partial"] else ""),
             _links(s, base),
         )
         for s in r["steps"]
     ]
     typer.echo("")
-    typer.echo(format_table(("STAGE", "NAME", "#", "KIND", "STATUS", "OUTCOME", "TIME", "COST", "LINKS"), rows))
+    headers = ("STAGE", "NAME", "#", "KIND", "STATUS", "OUTCOME", "TIME", "TURNS", "PEAK CTX", "COST", "LINKS")
+    typer.echo(format_table(headers, rows))
 
 
 def _live(run_id: str) -> dict[str, Any]:

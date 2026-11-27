@@ -14,7 +14,14 @@ from fact.core.types import Route, RouteOverride, RoutingConfig, StepResult, Tas
 from fact.sdk.sessions import interrupted_session
 from fact.worker.activities import agent as agent_module
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
-from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
+from fact.worker.harnesses import (
+    HarnessError,
+    HarnessRequest,
+    HarnessResult,
+    OnMessage,
+    PermissionDenial,
+    SessionPart,
+)
 from fact.worker.heartbeats import heartbeating
 from fact.worker.prompts import BASE_OUTPUT_SCHEMA
 from fact.worker.reporting import StepContext, StepReporter
@@ -25,7 +32,7 @@ from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.testing import ActivityEnvironment
 
 HOME = "acme/widget"
-USAGE = Usage(tokens_in=1200, tokens_out=340, cost_usd=0.25)
+USAGE = Usage(tokens_in=1200, tokens_out=340, cost_usd=0.25, turns=110, peak_context_tokens=900)
 MAX_TURNS = 7
 TASK = Task(key="task:T-1", id="T-1", title="Add a thing", body="Do it", acceptance_criteria=["works"])
 MESSAGES = [
@@ -50,7 +57,14 @@ MESSAGES = [
 ]
 # what the messages above reported, for a session cut short before its result: no cost was reported
 STREAMED = Usage(
-    tokens_in=715, tokens_out=50, cache_read_tokens=600, cache_write_tokens=100, cost_usd=None, partial=True
+    tokens_in=715,
+    tokens_out=50,
+    cache_read_tokens=600,
+    cache_write_tokens=100,
+    cost_usd=None,
+    partial=True,
+    turns=2,
+    peak_context_tokens=705,
 )
 
 
@@ -103,7 +117,11 @@ def _result(
         is_error=is_error,
         exit_code=1 if is_error else 0,
         stop_reason=stop_reason,
-        num_turns=2,
+        num_turns=110,
+        parts=[
+            SessionPart(stop_reason="error_max_turns", num_turns=101, cost_usd=0.2),
+            SessionPart(stop_reason=stop_reason, num_turns=9, cost_usd=0.25),
+        ],
         usage=USAGE,
         structured_output=answer,
         permission_denials=list(denials),
@@ -190,11 +208,15 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     assert step["tokens_out"] == USAGE.tokens_out
     assert float(step["cost_usd"]) == USAGE.cost_usd
     assert step["usage_partial"] is False
+    assert (step["turns"], step["peak_context_tokens"]) == (110, 900)
     assert step["outputs"] == DONE
     assert step["transcript_ref"] == f"runs/{env.handle.run_id}/implement/1/transcript.jsonl"
     assert result.transcript_ref == step["transcript_ref"]
     transcript = (await env.client.get(f"/api/v1/artifacts/{step['transcript_ref']}")).text
     assert [json.loads(line) for line in transcript.splitlines()] == MESSAGES
+    log = (await env.client.get(f"/api/v1/artifacts/{result.log_ref}")).text
+    assert "result 1/2: error_max_turns, 101 turns, session cost $0.2000" in log  # each part of the woken session
+    assert "result 2/2: success, 9 turns, session cost $0.2500" in log
 
 
 async def test_the_projects_routing_picks_the_model(env: Env) -> None:
@@ -362,6 +384,7 @@ async def test_cancel_keeps_the_transcript(env: Env) -> None:
     # the tokens the messages reported are kept; the cost was never reported, so it is NULL, not 0
     assert (step["tokens_in"], step["tokens_out"]) == (STREAMED.tokens_in, STREAMED.tokens_out)
     assert (step["cache_read_tokens"], step["cache_write_tokens"]) == (600, 100)
+    assert (step["turns"], step["peak_context_tokens"]) == (STREAMED.turns, STREAMED.peak_context_tokens)
     assert step["cost_usd"] is None
     assert step["usage_partial"] is True
 

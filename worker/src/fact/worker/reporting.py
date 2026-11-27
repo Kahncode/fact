@@ -126,6 +126,8 @@ def _usage_fields(usage: Usage) -> dict[str, Any]:
         "cache_write_tokens": usage.cache_write_tokens,
         "cost_usd": None if usage.cost_usd is None else str(usage.cost_usd),
         "usage_partial": usage.partial,
+        "turns": usage.turns,
+        "peak_context_tokens": usage.peak_context_tokens,
     }
 
 

@@ -77,6 +77,8 @@ class Usage(_Model):
 
     `tokens_in` is every prompt token (fresh input plus cache writes and cache reads); the cache counts are part of
     it. `partial` marks a session cut short before its final report: its tokens are those of the messages received.
+    `turns` (model calls over the whole session) and `peak_context_tokens` (the input of its largest turn) are None
+    for steps that ran no agent session.
     """
 
     tokens_in: int = 0
@@ -85,6 +87,8 @@ class Usage(_Model):
     cache_write_tokens: int = 0
     cost_usd: float | None = None
     partial: bool = False
+    turns: int | None = None
+    peak_context_tokens: int | None = None
 
 
 class StepResult(_Model):

@@ -67,7 +67,9 @@ async def test_raising_step_is_failed_error_and_reraised(client: AsyncClient, ru
 async def test_no_finish_is_failed_error(client: AsyncClient, run_id: str, tmp_path: Path) -> None:
     async with _reporter(client, tmp_path).step(run_id, "x", StepKind.SHELL, 1):
         pass
-    assert (await _steps(client, run_id))[0]["outcome"] == "failed_error"
+    (step,) = await _steps(client, run_id)
+    assert step["outcome"] == "failed_error"
+    assert (step["turns"], step["peak_context_tokens"]) == (None, None)  # no agent session
 
 
 async def test_attach_uploads_artifact(client: AsyncClient, run_id: str, tmp_path: Path) -> None:

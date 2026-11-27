@@ -1,5 +1,5 @@
 """
-The cost comment on a run's PR: time, tokens and cost per step and per harness and model.
+The cost comment on a run's PR: time, turns, peak context, tokens and cost per step and per harness and model.
 
 `render_cost_comment` turns a run as the runs API returns it (`GET /runs/{id}`, with its steps) into markdown;
 `upsert_comment` creates fact's comment on the PR, or updates the one carrying `COST_MARKER`. Only reported usage is
@@ -36,6 +36,8 @@ class StepCost:
     cache_write: int
     cost: Decimal | None  # None: the harness reported no cost
     partial: bool = False  # the session was cut short: tokens of the messages received
+    turns: int | None = None  # agent steps: model calls over the whole session
+    peak_context: int | None = None  # agent steps: the input of the session's largest turn
     unknown_costs: int = 0  # for totals: agent steps whose cost is None
     name: str | None = None  # the step's name within its stage, such as `lint`; None for totals
 
@@ -75,6 +77,8 @@ def _step_cost(s: dict[str, Any]) -> StepCost:
         cache_write=int(s.get("cache_write_tokens") or 0),
         cost=None if cost is None else Decimal(str(cost)),
         partial=bool(s.get("usage_partial")),
+        turns=s.get("turns"),
+        peak_context=s.get("peak_context_tokens"),
         name=s.get("name"),
     )
 
@@ -95,12 +99,13 @@ def format_duration(seconds: float | None) -> str:
     return f"{total // SECONDS_PER_HOUR}h {minutes:02d}m"
 
 
-def _count(n: int) -> str:
+def _count(n: int | None) -> str:
     return f"{n:,}" if n else NONE
 
 
-def _token_cells(s: StepCost) -> list[str]:
-    return [_count(s.fresh_in), _count(s.cache_read), _count(s.cache_write), _count(s.tokens_out)]
+def _usage_cells(s: StepCost) -> list[str]:
+    tokens = [_count(s.fresh_in), _count(s.cache_read), _count(s.cache_write), _count(s.tokens_out)]
+    return [_count(s.turns), _count(s.peak_context), *tokens]
 
 
 def _cost(s: StepCost) -> str:
@@ -126,6 +131,8 @@ def _total(steps: list[StepCost], stage: str = TOTAL) -> StepCost:
         cache_write=sum(s.cache_write for s in steps),
         cost=sum((s.cost for s in steps if s.cost is not None), Decimal(0)),
         partial=any(s.partial for s in steps),
+        turns=sum(s.turns or 0 for s in steps),
+        peak_context=max((s.peak_context or 0 for s in steps), default=0),  # the largest step's, never a sum
         unknown_costs=sum(1 for s in steps if s.cost is None and s.route != NONE),
     )
 
@@ -134,19 +141,20 @@ def _row(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |"
 
 
-TOKEN_HEADERS = ["Input", "Cache read", "Cache write", "Output"]
+USAGE_HEADERS = ["Turns", "Peak context", "Uncached input", "Cache read", "Cache write", "Output"]
+_RIGHT = "---:"
 
 
 def _steps_table(steps: list[StepCost]) -> list[str]:
     lines = [
-        _row(["Stage", "Attempt", "Harness / model", "Duration", "Wait", *TOKEN_HEADERS, "Cost"]),
-        _row(["---", "---:", "---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]),
+        _row(["Stage", "Attempt", "Harness / model", "Duration", "Wait", *USAGE_HEADERS, "Cost"]),
+        _row(["---", _RIGHT, "---", _RIGHT, _RIGHT, *[_RIGHT] * len(USAGE_HEADERS), _RIGHT]),
     ]
     for s in [*steps, _total(steps)]:
         attempt = f"{s.attempt} steps" if s.stage == TOTAL else str(s.attempt)
         stage = f"{s.label} (cut short)" if s.partial and s.stage != TOTAL else s.label
         timing = [format_duration(s.duration_s), format_duration(s.wait_s) if s.wait_s else NONE]
-        lines.append(_row([stage, attempt, s.route, *timing, *_token_cells(s), _cost(s)]))
+        lines.append(_row([stage, attempt, s.route, *timing, *_usage_cells(s), _cost(s)]))
     return lines
 
 
@@ -158,12 +166,12 @@ def _routes_table(steps: list[StepCost]) -> list[str]:
     if not by_route:
         return []
     lines = [
-        _row(["Harness / model", "Steps", "Duration", *TOKEN_HEADERS, "Cost"]),
-        _row(["---", "---:", "---:", "---:", "---:", "---:", "---:", "---:"]),
+        _row(["Harness / model", "Steps", "Duration", *USAGE_HEADERS, "Cost"]),
+        _row(["---", _RIGHT, _RIGHT, *[_RIGHT] * len(USAGE_HEADERS), _RIGHT]),
     ]
     for route, group in by_route.items():
         t = _total(group)
-        lines.append(_row([route, str(len(group)), format_duration(t.duration_s), *_token_cells(t), _cost(t)]))
+        lines.append(_row([route, str(len(group)), format_duration(t.duration_s), *_usage_cells(t), _cost(t)]))
     return ["", "**Per harness and model**", "", *lines]
 
 
@@ -175,8 +183,12 @@ def _headline(total: StepCost, steps: int) -> str:
 
 
 FOOTNOTE = (
-    "Durations are wall time; wait is time spent on a person. Input is fresh prompt tokens; cache read and cache write "
-    "are prompt tokens served from or written to the prompt cache. Cost is what Claude Code reported "
+    "Durations are wall time; wait is time spent on a person. Turns are the model calls of the whole session, "
+    "including the parts Claude Code woke again. Tokens are summed over every turn of the session, and the four parts "
+    "are billed at different rates: uncached input is only a few tokens per turn, because Claude Code caches each "
+    "prompt up to its end, so new input is billed as cache write; cache read counts the cached prompt again on every "
+    "turn; output is the tokens the model wrote. Peak context is the largest single turn's input (uncached input, "
+    "cache read and cache write); the totals show the largest step's, not a sum. Cost is what Claude Code reported "
     "(`total_cost_usd`, at API prices even on a subscription login). A session cut short reports the tokens of the "
     "messages received and no cost."
 )

@@ -1487,6 +1487,17 @@
             ],
             "title": "Outputs"
           },
+          "peak_context_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Context Tokens"
+          },
           "queued_at": {
             "anyOf": [
               {
@@ -1542,6 +1553,17 @@
             ],
             "title": "Transcript Ref"
           },
+          "turns": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns"
+          },
           "usage_partial": {
             "title": "Usage Partial",
             "type": "boolean"
@@ -1572,6 +1594,8 @@
           "cache_write_tokens",
           "cost_usd",
           "usage_partial",
+          "turns",
+          "peak_context_tokens",
           "log_ref",
           "transcript_ref",
           "outputs"
@@ -1689,6 +1713,18 @@
             ],
             "title": "Outputs"
           },
+          "peak_context_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peak Context Tokens"
+          },
           "started_at": {
             "anyOf": [
               {
@@ -1745,6 +1781,18 @@
               }
             ],
             "title": "Transcript Ref"
+          },
+          "turns": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turns"
           },
           "usage_partial": {
             "anyOf": [

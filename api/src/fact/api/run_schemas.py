@@ -52,6 +52,8 @@ class StepUpdate(BaseModel):
     cache_write_tokens: int | None = Field(default=None, ge=0)
     cost_usd: Decimal | None = Field(default=None, ge=0)  # an explicit null records a cost the harness never reported
     usage_partial: bool | None = None
+    turns: int | None = Field(default=None, ge=0)  # agent steps: model calls over the whole session
+    peak_context_tokens: int | None = Field(default=None, ge=0)  # agent steps: the input of the largest turn
     log_ref: str | None = None
     transcript_ref: str | None = None
     outputs: dict[str, Any] | None = None
@@ -87,6 +89,8 @@ class StepOut(BaseModel):
     cache_write_tokens: int
     cost_usd: Decimal | None
     usage_partial: bool
+    turns: int | None
+    peak_context_tokens: int | None
     log_ref: str | None
     transcript_ref: str | None
     outputs: dict[str, Any] | None
