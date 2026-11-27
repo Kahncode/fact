@@ -1,8 +1,13 @@
-"""Limits per step kind (`step_defaults` in `fact.yaml`); `fact.core.settings` re-exports these."""
+"""
+A project's step limits (`step_defaults` in `.fact/project.yaml`), overriding the SDK's defaults per value.
+
+Every field here is unset (None) unless the project sets it; `fact.sdk.step_defaults` holds the defaults in code
+and `resolve` fills in what the project leaves out. `fact.core.project_config` re-exports these.
+"""
 
 from pydantic import BaseModel, ConfigDict, Field
 
-__all__ = ["AgentStepDefaults", "ShellStepDefaults", "StepDefaults", "StepDefaultsSettings"]
+__all__ = ["AgentStepDefaults", "ShellStepDefaults", "StepDefaults", "StepDefaultsConfig"]
 
 
 class _Section(BaseModel):
@@ -10,28 +15,29 @@ class _Section(BaseModel):
 
 
 class StepDefaults(_Section):
-    timeout_minutes: float = Field(default=30.0, gt=0)
-    max_turns: int | None = Field(default=None, ge=1)  # agent steps only; None: the harness's own limit
+    timeout_minutes: float | None = Field(default=None, gt=0)  # the activity's start-to-close timeout
 
 
 class AgentStepDefaults(StepDefaults):
-    timeout_minutes: float = Field(default=60.0, gt=0)
-    max_turns: int | None = Field(default=100, ge=1)
+    max_turns: int | None = Field(default=None, ge=1)  # caps the agent's turns
     # Harness permission mode, such as Claude Code's "auto" (a classifier approves or denies, nobody is asked) or
-    # "bypassPermissions" (checks off: only in an isolated runner). None: the harness default.
-    permission_mode: str | None = "auto"
+    # "bypassPermissions" (checks off: only in an isolated runner).
+    permission_mode: str | None = None
 
 
 class ShellStepDefaults(StepDefaults):
-    timeout_minutes: float = Field(default=15.0, gt=0)
+    pass
 
 
-class StepDefaultsSettings(_Section):
-    """
-    Limits per step kind. Typed fields, not a dict, so setting one value in YAML keeps the others' defaults.
-
-    Kinds without a field get `StepDefaults()`.
-    """
+class StepDefaultsConfig(_Section):
+    """Limits per step kind. Typed fields, not a dict, so setting one value keeps the others' defaults."""
 
     agent: AgentStepDefaults = Field(default_factory=AgentStepDefaults)
     shell: ShellStepDefaults = Field(default_factory=ShellStepDefaults)
+
+    def over(self, defaults: StepDefaultsConfig) -> StepDefaultsConfig:
+        """Return `defaults` with every value this config sets replaced by it."""
+        return StepDefaultsConfig(
+            agent=defaults.agent.model_copy(update=self.agent.model_dump(exclude_none=True)),
+            shell=defaults.shell.model_copy(update=self.shell.model_dump(exclude_none=True)),
+        )

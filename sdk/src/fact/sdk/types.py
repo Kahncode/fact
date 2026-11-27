@@ -4,6 +4,7 @@ from fact.core.activity_contract import Check, CheckResult, CriterionResult
 from fact.core.enums import NotificationKind, RunOutcome, StepKind, StepOutcome
 from fact.core.gates import GateAnswer, GateDecision, OpenGate, StageOutcome, WorkflowStatus
 from fact.core.types import (
+    DEFAULT_ROUTE,
     SUMMARY_MAX_BYTES,
     ArtifactRef,
     Complexity,
@@ -11,8 +12,8 @@ from fact.core.types import (
     RepoCheckout,
     Route,
     RouteOverride,
+    RoutingConfig,
     RunInput,
-    RunLimits,
     RunResult,
     StepResult,
     Task,
@@ -24,6 +25,7 @@ from fact.core.types import (
 )
 
 __all__ = [
+    "DEFAULT_ROUTE",
     "SUMMARY_MAX_BYTES",
     "ArtifactRef",
     "Check",
@@ -38,8 +40,8 @@ __all__ = [
     "RepoCheckout",
     "Route",
     "RouteOverride",
+    "RoutingConfig",
     "RunInput",
-    "RunLimits",
     "RunOutcome",
     "RunResult",
     "StageOutcome",

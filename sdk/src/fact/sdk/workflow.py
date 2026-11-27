@@ -41,6 +41,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.sdk.human import HumanSteps
     from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.stages import Stage, stages
+    from fact.sdk.step_defaults import resolve, timeout_s
     from fact.sdk.stop import StopSteps
     from fact.sdk.task_status import TaskStatusSteps
 
@@ -193,6 +194,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
 
     async def _shell(self, stage_id: str, repo: str, check: Check) -> StepResult:
         run = self.input
+        limit_s = timeout_s(resolve(run.step_defaults).shell)
         spec = ShellStepInput(
             run_id=run.run_id,
             stage_id=stage_id,
@@ -200,9 +202,9 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
             handle=self.handle,
             repo=repo,
             check=check,
-            timeout_s=run.limits.shell_timeout_s,
+            timeout_s=limit_s,
         )
-        duration = timedelta(seconds=run.limits.shell_timeout_s + SHELL_SLACK_S)
+        duration = timedelta(seconds=limit_s + SHELL_SLACK_S)
         result = await self._activity(SHELL_STEP, spec, StepResult, max_duration=duration)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result

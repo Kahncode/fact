@@ -10,7 +10,16 @@ from typing import Any, Literal
 from fact.core.classification import Classification
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
-from fact.core.types import Complexity, MergeMethod, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
+from fact.core.types import (
+    Complexity,
+    MergeMethod,
+    PRRef,
+    RepoCheckout,
+    RouteOverride,
+    RoutingConfig,
+    Task,
+    WorkspaceHandle,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 Check = Literal["lint", "test", "build", "setup"]
@@ -46,6 +55,9 @@ class AgentStepInput(_Input):
     context: str = ""  # `$context` in the prompt, such as failing check output
     complexity: Complexity = "standard"
     override: RouteOverride | None = None
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)  # the run's project `routing`
+    max_turns: int | None = None  # None: the harness's own limit
+    permission_mode: str | None = None  # None: the harness's default
     home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
     resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
     handoff_ref: str | None = None  # artifact key of a stopped run's handoff note, `$handoff` in the prompt

@@ -61,7 +61,7 @@ async def test_find_an_issue_and_build_its_run_input(settings: Settings) -> None
     found = await find_task(settings, "gh:acme/app#12", None)
     assert found.check.missing_deps == []
     assert found.check.task.type == "bug"
-    spec = run_input(settings, found, "run-1")
+    spec = run_input(found, "run-1")
     assert [(r.full_name, r.branch) for r in spec.repos] == [("acme/app", "fact/gh-12")]
     assert spec.task.key == "gh:acme/app#12"
 
@@ -108,7 +108,7 @@ async def test_start_without_a_github_app_is_a_bad_gateway(
 
 
 async def test_scheduler_reads_ready_issues(settings: Settings) -> None:
-    ready = await _ready_in(settings, settings.projects[0])
+    ready, _ = await _ready_in(settings, settings.projects[0])
     # #13 waits on the open #12: listed, held for the preview
     assert [(t.task_key, t.task_id, t.hold) for t in ready] == [
         ("gh:acme/app#12", "12", None),

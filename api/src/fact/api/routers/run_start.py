@@ -100,8 +100,8 @@ async def scheduler_refusal(session: AsyncSession, settings: Settings, found: Fo
     active = await active_by_project(session)
     if sum(active.values()) >= settings.concurrency.max_runs:
         return f"max_runs {settings.concurrency.max_runs} reached"
-    if active.get(found.ref.name, 0) >= found.ref.max_runs:
-        return f"project {found.ref.name} max_runs {found.ref.max_runs} reached"
+    if active.get(found.ref.name, 0) >= found.config.max_runs:
+        return f"project {found.ref.name} max_runs {found.config.max_runs} reached"
     return ""
 
 
@@ -183,7 +183,7 @@ async def start_task(state: State, body: RunStart, session: AsyncSession) -> Run
         try:
             await client.start_workflow(
                 wf_type,
-                run_input(settings, found, run.id, temporal_link(settings, run.workflow_id), handoff),
+                run_input(found, run.id, temporal_link(settings, run.workflow_id), handoff),
                 id=run.workflow_id,
                 task_queue=workflow_queue(found.ref.name),
             )

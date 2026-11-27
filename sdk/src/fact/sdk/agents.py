@@ -35,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
         limit_session,
         retry_reason,
     )
+    from fact.sdk.step_defaults import resolve, timeout_s
 
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
@@ -113,6 +114,7 @@ class AgentSteps:
         self: FactWorkflow, stage_id: str, prompt: str, context: str, resume: str | None
     ) -> StepResult:
         run = self.input
+        limits = resolve(run.step_defaults).agent
         spec = AgentStepInput(
             run_id=run.run_id,
             stage_id=stage_id,
@@ -122,11 +124,14 @@ class AgentSteps:
             prompt_name=prompt.removesuffix(".md"),
             context=self.with_steering(context),
             complexity=run.complexity,
+            routing=run.routing,
+            max_turns=limits.max_turns,
+            permission_mode=limits.permission_mode,
             home_repo=run.home_repo,
             resume_session_id=resume,
             handoff_ref=run.handoff_ref,
         )
-        duration = timedelta(seconds=run.limits.agent_timeout_s)
+        duration = timedelta(seconds=timeout_s(limits))
         result = await self._activity(AGENT_STEP, spec, StepResult, max_duration=duration)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         self.note_agent_step(stage_id, spec.attempt, result)

@@ -10,7 +10,6 @@ from typing import Any
 from fact.core.activity_contract import AGENT_INTERRUPTED, AGENT_STEP, AgentStepInput
 from fact.core.claude_usage import LIMIT_FALLBACK
 from fact.core.enums import StepKind, StepOutcome
-from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
 from fact.worker.harnesses import Harness, HarnessError, HarnessRequest, HarnessResult
 from fact.worker.harnesses.claude_code_usage import StreamUsage
@@ -124,16 +123,13 @@ def _non_retryable(exc: Exception) -> ApplicationError:
 
 
 class AgentActivities:
-    def __init__(
-        self, harnesses: Mapping[str, Harness], reporter: StepReporter, settings: Settings | None = None
-    ) -> None:
+    def __init__(self, harnesses: Mapping[str, Harness], reporter: StepReporter) -> None:
         self._harnesses = dict(harnesses)
         self._reporter = reporter
-        self._settings = settings or get_settings()
 
     @activity.defn(name=AGENT_STEP)
     async def agent_step(self, spec: AgentStepInput) -> StepResult:
-        route = choose(spec.complexity, spec.stage_id, spec.override, self._settings.routing)
+        route = choose(spec.complexity, spec.stage_id, spec.routing, spec.override)
         reporter = self._reporter.step(
             spec.run_id,
             spec.stage_id,
@@ -165,13 +161,12 @@ class AgentActivities:
         root = Path(spec.handle.root)
         transcript = step.log_path.with_name(TRANSCRIPT_NAME)
         transcript.unlink(missing_ok=True)
-        defaults = self._settings.step_defaults.agent
         request = HarnessRequest(
             prompt=prompt,
             cwd=root,
             model=route.model,
-            max_turns=defaults.max_turns,
-            permission_mode=defaults.permission_mode,
+            max_turns=spec.max_turns,
+            permission_mode=spec.permission_mode,
             output_schema=schema,
             resume_session_id=spec.resume_session_id,
         )

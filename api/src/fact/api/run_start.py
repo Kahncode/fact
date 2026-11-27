@@ -12,13 +12,12 @@ from fact.core.models import Project, Run
 from fact.core.project_config import ConfigError, ProjectConfig
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks import branch_name
-from fact.core.types import RepoCheckout, RunInput, RunLimits
+from fact.core.types import RepoCheckout, RunInput
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = get_logger(__name__)
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
-SECONDS_PER_MINUTE = 60
 
 
 class StartError(Exception):
@@ -155,19 +154,12 @@ async def find_task(settings: Settings, task_key: str, project: str | None) -> F
     return found[0]
 
 
-def run_input(
-    settings: Settings, found: FoundTask, run_id: str, run_url: str = "", handoff_ref: str | None = None
-) -> RunInput:
+def run_input(found: FoundTask, run_id: str, run_url: str = "", handoff_ref: str | None = None) -> RunInput:
     task = found.check.task
     repos = [
         RepoCheckout(full_name=r.full_name, default_branch=r.default_branch, branch=branch_name(task.key), role=r.role)
         for r in sorted(found.config.repositories, key=lambda r: r.merge_order)
     ]
-    defaults = settings.step_defaults
-    limits = RunLimits(
-        agent_timeout_s=defaults.agent.timeout_minutes * SECONDS_PER_MINUTE,
-        shell_timeout_s=defaults.shell.timeout_minutes * SECONDS_PER_MINUTE,
-    )
     home = next((r.full_name for r in repos if r.full_name.lower() == found.ref.home.lower()), None)
     approval = task.require_plan_approval
     return RunInput(
@@ -177,7 +169,8 @@ def run_input(
         repos=repos,
         complexity=task.complexity,
         home_repo=home,
-        limits=limits,
+        routing=found.config.routing,
+        step_defaults=found.config.step_defaults,
         run_url=run_url,
         require_plan_approval=found.config.require_plan_approval if approval is None else approval,
         handoff_ref=handoff_ref,

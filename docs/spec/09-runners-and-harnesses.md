@@ -44,7 +44,7 @@ Every agent step runs on a harness and model chosen at run time, never hard-code
 - **Overrides**, highest first: a step-level choice the planner wrote for this task, then the task's level through the routing table, then the workflow's default for that step, then the project's default.
 - **Availability**: if the chosen harness is over its cap, out of budget or outside its usage window, the step waits; it falls back to the next entry in its routing list only where the table allows it.
 - Every step records the harness and model it actually used, so cost and success can be compared across them later.
-- **Built (M1-09)**: `fact.worker.routing.choose` resolves harness and model separately: each comes from the first entry that sets it among the step override, `<level>.<stage>`, `<level>.*`, `*.<stage>`, else `routing.default` in `fact.yaml`. Workflow and project defaults are not wired in yet.
+- **Built (M1-09)**: `fact.worker.routing.choose` resolves harness and model separately: each comes from the first entry that sets it among the step override, `<level>.<stage>`, `<level>.*`, `*.<stage>`, else `routing.default`, all read from the run's project `routing` in `.fact/project.yaml` (carried on `RunInput.routing` since #86; a project without one gets `claude-code`/`sonnet`). Workflow defaults are not wired in yet.
 
 v0 ships the Claude Code adapter and the routing table with Claude models only; the Codex, OpenCode and Pi adapters follow the same contract.
 
