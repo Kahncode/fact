@@ -188,17 +188,19 @@ class LocalWorktreeRunner:
         A held branch is never reset, so a workspace left behind keeps its unpushed commits.
         """
         mirror = self._mirror_path(repo.full_name)
+        name, email = await self._commit_identity()
         async with mirror_lock(mirror):  # runs on one mirror, in any process, must not pick the same free branch
             await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(repo.full_name))
             remote_branch = f"refs/remotes/origin/{repo.branch}"
             resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
             start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
             branch = await Mirror(self._git, self._git_ok, mirror).add_on_free_branch(repo.branch, worktree, start)
+            # git config reads the mirror's shared config, which another worker's sync may be rewriting: on Windows
+            # that read fails with "Permission denied" unless it too holds the mirror lock
+            await self._git("config", "--worktree", "user.name", name, cwd=worktree)
+            await self._git("config", "--worktree", "user.email", email, cwd=worktree)
         if branch != repo.branch:
             log.warning("branch_taken", repo=repo.full_name, wanted=repo.branch, branch=branch)
-        name, email = await self._commit_identity()
-        await self._git("config", "--worktree", "user.name", name, cwd=worktree)
-        await self._git("config", "--worktree", "user.email", email, cwd=worktree)
         log.info("worktree_added", repo=repo.full_name, branch=branch, resumed=resumed)
         return branch
 
