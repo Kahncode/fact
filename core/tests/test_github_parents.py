@@ -118,3 +118,49 @@ async def test_one_parent_request_per_issue_per_read() -> None:
 
 async def test_file_keys_have_no_ancestor() -> None:
     assert await source(FakeGitHub()).not_ready_ancestor("task:M1-01") is None
+
+
+async def test_a_blocker_on_the_parent_holds_its_sub_issue() -> None:
+    github = FakeGitHub()
+    github.add(issue(1, labels=(READY,)))
+    github.add(issue(2, labels=(READY,)), parent=1)
+    github.add(issue(9))
+    github.blocked_by[1] = [github.issues["acme/app", 9]]
+    items = await source(github).list_ready(include_waiting=True)
+    # the parent #1 has no work type, so it is never listed
+    assert [(i.task.key, i.waiting_on) for i in items] == [("gh:acme/app#2", ("gh:acme/app#9",))]
+    assert await source(github).list_ready() == []
+
+    github.issues["acme/app", 9].update(state="closed", state_reason="completed")
+    assert _keys(await source(github).list_ready()) == ["gh:acme/app#2"]
+
+
+async def test_a_grandparent_blocker_and_a_parent_depends_on_line_hold_the_grandchild() -> None:
+    github = FakeGitHub()
+    github.add(issue(1, labels=(READY,)))
+    github.add(issue(2, labels=(READY,), body="Depends on #8\n"), parent=1)
+    github.add(issue(3, labels=(READY,)), parent=2)
+    github.add(issue(8))
+    github.add(issue(9))
+    github.blocked_by[1] = [github.issues["acme/app", 9]]
+    src = source(github)
+    items = {i.task.key: i.waiting_on for i in await src.list_ready(include_waiting=True)}
+    assert items["gh:acme/app#3"] == ("gh:acme/app#8", "gh:acme/app#9")
+    assert sorted(github.paths("/blocked_by")) == [
+        f"/repos/acme/app/issues/{n}/dependencies/blocked_by" for n in (1, 2, 3)
+    ]
+
+    github.issues["acme/app", 9].update(state="closed", state_reason="completed")
+    assert await source(github).list_ready() == []  # #8 still holds it through #2's line
+    github.issues["acme/app", 8].update(state="closed", state_reason="completed")
+    assert _keys(await source(github).list_ready()) == ["gh:acme/app#3"]
+
+
+async def test_a_parents_open_sub_issues_do_not_hold_their_siblings() -> None:
+    github = FakeGitHub()
+    github.add(issue(1, labels=(READY,)))
+    github.add(issue(2, labels=(READY,)), parent=1)
+    github.add(issue(3), parent=1)  # open, not ready
+    ready = await source(github).list_ready()
+    assert _keys(ready) == ["gh:acme/app#2"]
+    assert ready[0].task.depends_on == []
