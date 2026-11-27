@@ -42,6 +42,7 @@ A run that touches three repositories shows three PRs on its Open PRs node and t
   - `prs_ready`: only when the change set needs a human review, as decided by the classify step (`06-workflow-authoring.md`); until classify exists, every change set needs one.
   - `run_failed`: ended `failed` or `needs_human` (error).
   - `run_finished`: only for a run a person started by hand (UI, API or CLI), never for scheduler runs (info); a run ending `no_changes` always notifies, as a warning.
+  - `task_held` (decided 27 Nov 2026): a run end left its task held with `fact:needs-human`, so nothing will start it until a person acts; says why (stopped, needs a person, PR open or closed, failure cap) and how to release it: remove the label or `fact run` (warning).
   - `usage_wait`: a run paused on the Claude usage limit, "waiting for Claude usage limit until <time>" (info, for now).
 - **Inbox:** one page, the unresolved notifications (`05-domain-model.md`), with a history filter for all of them; read and resolved are separate.
 - Every time a run enters a state that waits for a human, a notification is created. v0 channel: a Notifications page in the web app listing all of your notifications, read and unread, plus desktop notifications while the app is open (in M4 every notification fires one; filtering by severity or rules comes later). Later: reminders based on each user's preferences, then Slack and Discord.
