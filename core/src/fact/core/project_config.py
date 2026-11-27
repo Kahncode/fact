@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 FACT_DIR = ".fact"
 PROJECT_FILE = "project.yaml"
 REPO_FILE = "repo.yaml"
-DEFAULT_MAX_RUNS = 2  # a project's runs queued, running or waiting at once, unless its config says otherwise
+DEFAULT_MAX_CONCURRENT_RUNS = 2  # a runner pool's runs queued, running or waiting at once, unless configured
 
 Command = list[str]  # an argv list, never a shell string
 
@@ -73,11 +73,18 @@ class ClassifyConfig(_Model):
     review_spec_ambiguous: bool = True  # a change whose implementation found the spec ambiguous needs a person
 
 
+class RunnerPoolConfig(_Model):
+    """Where the project's runs execute, and how many at once: its only concurrency cap."""
+
+    kind: Literal["local"] = "local"  # this machine; containers and hosted pools come later
+    max_concurrent_runs: int = Field(default=DEFAULT_MAX_CONCURRENT_RUNS, ge=1)  # queued, running or waiting
+
+
 class ProjectConfig(_Model):
     name: str
     repositories: list[RepositoryConfig] = Field(min_length=1)
     task_source: TaskSourceConfig = TaskSourceConfig()
-    runner_pool: str = "local"
+    runner_pool: RunnerPoolConfig = RunnerPoolConfig()
     budget_usd_per_day: float | None = Field(default=None, ge=0)
     merge_policy: Literal["human"] = "human"
     require_plan_approval: bool = True
@@ -85,9 +92,6 @@ class ProjectConfig(_Model):
     classify: ClassifyConfig = ClassifyConfig()
     auto_merge: bool = True  # merge a change set classified `auto_merge` once CI is green
     merge_method: Literal["squash", "merge", "rebase"] = "squash"
-    max_runs: int = Field(
-        default=DEFAULT_MAX_RUNS, ge=1
-    )  # scheduler cap: this project's runs queued, running or waiting
     routing: RoutingConfig = RoutingConfig()  # harness and model per agent step
     step_defaults: StepDefaultsConfig = StepDefaultsConfig()  # overrides of the SDK's step limits
 

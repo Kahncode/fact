@@ -45,8 +45,7 @@ PREVIEW = {
         {"task": _task("14"), "hold": "dependency", "detail": "waits on gh:Kahncode/fact#12"},
     ],
     "usage": {"state": "full", "windows": [WINDOW], "reason": "five_hour 93%", "next_call_at": "2026-11-26T18:01:30Z"},
-    "active": 1,
-    "max_runs": 2,
+    "projects": [{"project": "fact", "active": 1, "max_concurrent_runs": 2}],
 }
 
 
@@ -78,7 +77,7 @@ def test_status_previews_the_next_tick(settings: Settings, monkeypatch: pytest.M
     result = CliRunner().invoke(app, ["scheduler", "status"])
     assert result.exit_code == 0, result.output
     out = result.output
-    assert "1 active of max 2" in out
+    assert "fact: 1 active of max 2" in out
     usage_line = next(line for line in out.splitlines() if "five_hour" in line)
     assert all(shown in usage_line for shown in ("93%", "10%", "18:00", "FULL"))
     assert "18:01" in out  # next usage check

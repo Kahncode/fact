@@ -1,8 +1,5 @@
 """Every registered activity has a spec, and runs on the queue of its zone: workspace steps on the handle's queue."""
 
-import asyncio
-from typing import Any, cast
-
 import httpx
 import pytest
 from fact.core.activity_contract import (
@@ -15,7 +12,7 @@ from fact.core.activity_contract import (
 )
 from fact.core.settings import Settings
 from fact.worker.__main__ import factory_activities
-from fact.worker.activity_workers import PoolSlots, activity_name, by_zone
+from fact.worker.activity_workers import activity_name, by_zone
 from fact.worker.runners import LocalRunner
 from standard_env import RUNNER_QUEUE
 from standard_harness import FakeActivities, run_standard
@@ -48,14 +45,3 @@ async def test_workspace_steps_run_on_the_queue_the_handle_names() -> None:
         name: RUNNER_QUEUE if spec_for(name).zone == "workspace" else CONTROL_QUEUE for name in ran
     }  # the fake handle names `RUNNER_QUEUE`, not the runner's default `sandbox`
     assert {(name, queue) for name, queue in fakes.queues} == set(expected.items())
-
-
-async def test_a_full_pool_holds_every_version_until_a_slot_frees() -> None:
-    slots = PoolSlots(1)  # one pool, shared by the workspace workers of two project versions
-    ctx = cast("Any", None)  # the slot supplier never reads its contexts
-    await slots.reserve_slot(ctx)  # version A's worker takes the only slot
-    waiting = asyncio.create_task(slots.reserve_slot(ctx))  # version B's worker asks for one
-    await asyncio.sleep(0)
-    assert not waiting.done()
-    slots.release_slot(ctx)
-    await asyncio.wait_for(waiting, timeout=1)

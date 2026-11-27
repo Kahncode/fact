@@ -1,8 +1,8 @@
-# The `fact dev` config: factory settings (this machine, its processes, the factory's caps and scheduler policy,
-# agent accounts) and the registry of projects. How a project's tasks run (routing, step limits, its own max_runs)
-# is project config, in its home repository's .fact/project.yaml; fact's own is .fact/project.yaml here.
+# The `fact dev` config: factory settings (this machine, its processes, scheduler policy, agent accounts) and the
+# registry of projects. How a project's tasks run (routing, step limits, its runner pool and how many runs it takes at
+# once) is project config, in its home repository's .fact/project.yaml; fact's own is .fact/project.yaml here.
 # Override chain, lowest to highest: code defaults, this file, fact.<env>.yaml, .env, FACT_* environment variables
-# (nesting with "__", e.g. FACT_CONCURRENCY__MAX_RUNS). env comes from FACT_ENV (local, test, dev, prod); default
+# (nesting with "__", e.g. FACT_CONCURRENCY__MAX_FAILED_RUNS). env comes from FACT_ENV (local, test, dev, prod); default
 # local. FACT_CONFIG points at another fact.yaml.
 data_dir: ~/.fact
 temporal:
@@ -11,13 +11,9 @@ temporal:
 api:
   host: 127.0.0.1
   port: 8000
-# max_runs caps runs queued, running or waiting, all projects together; each project's .fact/project.yaml has its own.
 # In dev (env local, test, dev) the API ticks the scheduler every scheduler_interval_seconds, on at every API start
 # (`fact scheduler on|off`); elsewhere only POST /api/v1/scheduler/tick (an outside cron or webhook) runs a tick.
 concurrency:
-  sandboxes: 2
-  planners: 1
-  max_runs: 2
   scheduler_interval_seconds: 30
   max_failed_runs: 3 # the scheduler stops restarting a task after this many failed runs in a row; `fact run` resets
 # The scheduler starts no run while a Claude usage window is inside its reserve (the share left to you). The gate

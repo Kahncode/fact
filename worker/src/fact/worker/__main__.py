@@ -3,8 +3,8 @@
 
 One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), and for
 each the `control` and workspace activity workers of the same version (`activity_workers.py`): every activity on the
-queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`), at most `concurrency.sandboxes` at once
-across every project version (one shared `PoolSlots`). Every activity heartbeats through `heartbeats.HeartbeatInterceptor`.
+queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). Every activity heartbeats through
+`heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
 are active the worker keeps Windows awake (`keep_awake.py`).
 """
@@ -33,7 +33,7 @@ from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
-from fact.worker.activity_workers import Activity, PoolSlots, activity_workers
+from fact.worker.activity_workers import Activity, activity_workers
 from fact.worker.client import connect
 from fact.worker.deployments import deployment_config, set_current_version
 from fact.worker.harnesses import ClaudeCodeHarness
@@ -148,11 +148,8 @@ def _project_workers(
     project: ProjectWorkflows,
     activities: list[Activity],
     runner: LocalRunner,
-    sandboxes: PoolSlots,
 ) -> list[Worker]:
-    workers = activity_workers(
-        client, project, activities, workspace_queue=runner.task_queue, workspace_slots=sandboxes
-    )
+    workers = activity_workers(client, project, activities, workspace_queue=runner.task_queue)
     return [*workers, workflow_worker(client, project)]
 
 
@@ -167,8 +164,7 @@ async def run() -> None:
     projects = await load_projects(settings, runner)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)
-        sandboxes = PoolSlots(settings.concurrency.sandboxes)  # the runner pool's cap, shared by every version
-        workers = [w for p in projects for w in _project_workers(client, p, activities, runner, sandboxes)]
+        workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
         for worker in workers:
             await stack.enter_async_context(worker)
         for project in projects:

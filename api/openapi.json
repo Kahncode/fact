@@ -392,6 +392,29 @@
         "title": "PlannedTask",
         "type": "object"
       },
+      "ProjectLoad": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "integer"
+          },
+          "max_concurrent_runs": {
+            "title": "Max Concurrent Runs",
+            "type": "integer"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "active",
+          "max_concurrent_runs"
+        ],
+        "title": "ProjectLoad",
+        "type": "object"
+      },
       "ProjectOut": {
         "properties": {
           "home_repo": {
@@ -1148,15 +1171,12 @@
       },
       "SchedulerPreview": {
         "properties": {
-          "active": {
-            "default": 0,
-            "title": "Active",
-            "type": "integer"
-          },
-          "max_runs": {
-            "default": 0,
-            "title": "Max Runs",
-            "type": "integer"
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectLoad"
+            },
+            "title": "Projects",
+            "type": "array"
           },
           "tasks": {
             "items": {

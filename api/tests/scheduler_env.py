@@ -8,14 +8,15 @@ from httpx import AsyncClient
 from task_repo import PROJECT, PROJECT_YAML, git, task_file, write
 
 
-def write_config(tmp_path: Path, checkout: Path, *, max_runs: int = 4, project_max_runs: int = 3) -> Path:
+def write_config(tmp_path: Path, checkout: Path, *, project_cap: int = 3) -> Path:
     """
     `acme` on origin/main: M1-02 (depth 1), M1-03 (waits on M1-02), M2-01 and M2-02 (depth 0); `broken` is skipped.
 
     `remote` has no checkout: its task source cannot be read without GitHub, so it offers nothing. `acme`'s cap is
-    its `.fact/project.yaml` `max_runs` (read from the working tree, like its config); the factory's is `fact.yaml`.
+    its runner pool's `max_concurrent_runs` in `.fact/project.yaml` (read from the working tree, like its config).
     """
-    write(checkout, {".fact/project.yaml": f"{PROJECT_YAML}max_runs: {project_max_runs}\n"})
+    pool = PROJECT_YAML.replace("max_concurrent_runs: 1", f"max_concurrent_runs: {project_cap}")
+    write(checkout, {".fact/project.yaml": pool})
     write(checkout, {"tasks/M2/01-next.md": task_file("M2-01", []), "tasks/M2/02-later.md": task_file("M2-02", [])})
     git(checkout, "add", "tasks/M2")  # M1-04 stays in the working tree only
     git(checkout, "commit", "-m", "more tasks")
@@ -24,7 +25,7 @@ def write_config(tmp_path: Path, checkout: Path, *, max_runs: int = 4, project_m
     write(broken, {".fact/project.yaml": PROJECT_YAML})
     config = tmp_path / "fact.yaml"
     config.write_text(
-        f"data_dir: {(tmp_path / 'data').as_posix()}\nconcurrency:\n  max_runs: {max_runs}\n"
+        f"data_dir: {(tmp_path / 'data').as_posix()}\n"
         f"projects:\n  - name: {PROJECT}\n    home: acme/home\n    path: {checkout.as_posix()}\n"
         f"  - name: remote\n    home: acme/remote\n  - name: broken\n    home: acme/b\n    path: {broken.as_posix()}\n",
         encoding="utf-8",

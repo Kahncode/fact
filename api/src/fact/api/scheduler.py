@@ -31,7 +31,7 @@ from fact.api.run_counts import active_by_project, run_histories
 from fact.api.task_ref import TaskReadError, project_tasks
 from fact.api.usage_gate import UsageGate
 from fact.core.logging import get_logger
-from fact.core.project_config import DEFAULT_MAX_RUNS, ConfigError
+from fact.core.project_config import DEFAULT_MAX_CONCURRENT_RUNS, ConfigError
 from fact.core.scheduler import (
     Hold,
     PlannedTask,
@@ -70,8 +70,7 @@ class SchedulerRuntime:
 class SchedulerPreview(BaseModel):
     tasks: list[PlannedTask] = Field(default_factory=list)  # in the order the next tick would start them
     usage: UsageCheck | None = None  # the usage gate's last answer; None before the first since the API started
-    active: int = 0
-    max_runs: int = 0
+    projects: list[ProjectLoad] = Field(default_factory=list)  # each project's active runs against its pool's cap
 
 
 def _hold(item: ReadyItem) -> Hold | None:
@@ -84,21 +83,21 @@ def _hold(item: ReadyItem) -> Hold | None:
 
 async def _ready_in(settings: Settings, ref: ProjectRef, *, close_parents: bool = False) -> tuple[list[ReadyTask], int]:
     """
-    Read the project's ready tasks from its task source (`files`: on `origin/<default>`), and its `max_runs`.
+    Read the project's ready tasks from its task source (`files`: on `origin/<default>`), and its pool's cap.
 
     A project without a checkout or with a broken config or task source offers no task (and keeps the default cap).
     A task's effective priority is raised by the project's listed tasks that wait on it (`effective_priorities`).
     """
-    max_runs = DEFAULT_MAX_RUNS
+    cap = DEFAULT_MAX_CONCURRENT_RUNS
     try:
         async with project_tasks(settings, ref) as tasks:
             if tasks is None:
-                return [], max_runs
-            max_runs = tasks.config.max_runs
+                return [], cap
+            cap = tasks.config.runner_pool.max_concurrent_runs
             found = await tasks.source.list_ready(include_waiting=True, close_parents=close_parents)
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
-        return [], max_runs
+        return [], cap
     ready = [
         ReadyTask(
             project=ref.name,
@@ -112,7 +111,7 @@ async def _ready_in(settings: Settings, ref: ProjectRef, *, close_parents: bool 
         )
         for r in found
     ]
-    return effective_priorities(ready), max_runs
+    return effective_priorities(ready), cap
 
 
 def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) -> ReadyTask | None:
@@ -126,7 +125,7 @@ def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) ->
 
 async def find_ready(settings: Settings, session: AsyncSession, *, close_parents: bool = False) -> ReadyTasks:
     """
-    Every project's offered tasks, and the active runs against `concurrency.max_runs` and each project's cap.
+    Every project's offered tasks, and its active runs against its runner pool's `max_concurrent_runs`.
 
     `close_parents`: the scheduler's tick, which also closes the ready parents without a work type with nothing left
     to wait on.
@@ -141,11 +140,9 @@ async def find_ready(settings: Settings, session: AsyncSession, *, close_parents
     return ReadyTasks(
         tasks=tasks,
         projects=[
-            ProjectLoad(project=r.name, active=active.get(r.name, 0), max_runs=cap)
+            ProjectLoad(project=r.name, active=active.get(r.name, 0), max_concurrent_runs=cap)
             for r, (_, cap) in zip(settings.projects, found, strict=True)
         ],
-        active=sum(active.values()),
-        max_runs=settings.concurrency.max_runs,
     )
 
 
@@ -155,8 +152,7 @@ def preview(ready: ReadyTasks, usage: UsageCheck | None, now: datetime | None = 
     return SchedulerPreview(
         tasks=plan(ready, usage.reason if held and usage else ""),
         usage=usage,
-        active=ready.active,
-        max_runs=ready.max_runs,
+        projects=ready.projects,
     )
 
 

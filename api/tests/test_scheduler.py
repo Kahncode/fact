@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from fact.api.scheduler import find_ready
-from fact.core.project_config import DEFAULT_MAX_RUNS
+from fact.core.project_config import DEFAULT_MAX_CONCURRENT_RUNS
 from fact.core.scheduler import ReadyTasks
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
 from fact.core.usage_gate import GateState, GateWindow, UsageCheck
@@ -41,11 +41,10 @@ async def test_ready_tasks_with_deps_done_and_never_run(app: FastAPI) -> None:
         ("M2-01", 0, None),
         ("M2-02", 0, None),
     ]
-    assert (got.active, got.max_runs) == (0, 4)
-    assert {p.project: (p.active, p.max_runs) for p in got.projects} == {
+    assert {p.project: (p.active, p.max_concurrent_runs) for p in got.projects} == {
         PROJECT: (0, 3),
-        "remote": (0, DEFAULT_MAX_RUNS),  # a config fact cannot read takes the default
-        "broken": (0, DEFAULT_MAX_RUNS),
+        "remote": (0, DEFAULT_MAX_CONCURRENT_RUNS),  # a config fact cannot read takes the default
+        "broken": (0, DEFAULT_MAX_CONCURRENT_RUNS),
     }
 
 
@@ -59,7 +58,6 @@ async def test_which_tasks_with_runs_are_offered_again(app: FastAPI, client: Asy
         ("M2-01", 1, None),
         ("M2-02", 0, None),
     ]
-    assert got.active == 1
     assert next(p.active for p in got.projects if p.project == PROJECT) == 1
     await add_run(client, 4, "task:M2-02", **{**FAILED, "outcome": "needs_human"})  # a person restarts it
     assert "M2-02" not in [t.task_id for t in (await _ready(app)).tasks]

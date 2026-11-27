@@ -293,13 +293,13 @@ async def test_scheduler_start_refused_once_the_task_has_a_run(app: FastAPI, cli
 
 @pytest.mark.parametrize(
     ("busy", "reason"),
-    [(["remote", "remote"], "max_runs 2 reached"), ([PROJECT], f"project {PROJECT} max_runs 1 reached")],
+    [([PROJECT], f"project {PROJECT} max_concurrent_runs 1 reached"), (["remote", "remote"], None)],
 )
-async def test_scheduled_start_refused_at_a_cap(
-    app: FastAPI, client: AsyncClient, busy: list[str], reason: str
+async def test_scheduled_start_refused_only_when_its_pool_is_full(
+    app: FastAPI, client: AsyncClient, busy: list[str], reason: str | None
 ) -> None:
     app.state.temporal = _Connection(_FailingClient())  # type: ignore[arg-type]
-    for n, project in enumerate(busy):  # active runs of other tasks fill concurrency.max_runs or acme's max_runs
+    for n, project in enumerate(busy):  # active runs of other tasks: acme's own fill its pool, remote's do not
         body = {
             "workflow_id": f"busy-{n}",
             "project": project,
@@ -307,7 +307,10 @@ async def test_scheduled_start_refused_at_a_cap(
             "workflow_type": "standard",
         }
         assert (await client.post("/api/v1/runs", json=body)).status_code == HTTPStatus.CREATED
-    refused = await _start(client, task_key="task:M1-02", scheduled=True)
-    assert refused.status_code == HTTPStatus.CONFLICT, refused.text
-    assert reason in refused.json()["detail"]
+    scheduled = await _start(client, task_key="task:M1-02", scheduled=True)
+    if reason is None:
+        assert scheduled.status_code == HTTPStatus.CREATED, scheduled.text
+        return
+    assert scheduled.status_code == HTTPStatus.CONFLICT, scheduled.text
+    assert reason in scheduled.json()["detail"]
     assert (await _start(client, task_key="task:M1-02")).status_code == HTTPStatus.CREATED  # `fact run` ignores caps
