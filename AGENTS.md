@@ -128,7 +128,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 - Logging goes through `fact.core.logging` (structlog): call `configure_logging(env, level)` once at process start, get loggers with `get_logger(name)`, and wrap run/step work in `bind_run(run_id, step_id)` so every line carries `run_id`.
 - Settings come only from `fact.core.settings.get_settings()`, which loads `fact.yaml`:
   - Priority, low to high: defaults, `fact.yaml`, `fact.<env>.yaml`, `.env`, `FACT_*` env vars with `__` nesting.
-  - `FACT_CONFIG` points at another `fact.yaml`; `.env` is read from the same folder.
+  - `FACT_CONFIG` points at another `fact.yaml`; `.env` is read from the same folder. Tests ignore it: the root `conftest.py` unsets it, so they always read this checkout's `fact.yaml`.
   - `${VAR}` in YAML expands from the environment or a file path.
   - Settings are frozen; an app may subclass `Settings` via `override_settings_class`.
   - Clients (worker, CLI) reach the API at `settings.api_url`; don't build the URL from `api.host`/`api.port` yourself.
