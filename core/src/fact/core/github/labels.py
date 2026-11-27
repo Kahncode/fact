@@ -19,11 +19,16 @@ class Label:
     description: str
 
 
+AUTO_MERGE_LABEL = "fact:auto-merge"  # on a PR classify routed `auto_merge`
+NEEDS_REVIEW_LABEL = "fact:needs-review"  # on a PR classify routed `human_review`
+
 FACT_LABELS: tuple[Label, ...] = (
     Label("fact:ready", "0E8A16", "The factory may pick this issue up"),
     Label("fact:planned", "C5DEF5", "Planned; becomes fact:ready when the parent plan is approved"),
     Label("fact:running", "1D76DB", "A fact run is in progress"),
     Label("fact:needs-human", "D93F0B", "A fact run is waiting on you"),
+    Label(AUTO_MERGE_LABEL, "0E8A16", "fact classified this PR safe to merge without a review"),
+    Label(NEEDS_REVIEW_LABEL, "D93F0B", "fact classified this PR as needing a person's review"),
     Label("type:incident", "B60205", "Incident: something is broken in production"),
     Label("type:bug", "D73A4A", "Something is not working"),
     Label("type:feature", "A2EEEF", "New behaviour"),

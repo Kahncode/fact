@@ -35,6 +35,7 @@ The issue tracker is where work starts and where its status is reported; GitHub 
 | fact | `fact:planned` | The planner | Planned, not approved; a parent stays `fact:planned` until you approve its plan by setting it `fact:ready` (see `08-planning.md`) |
 | fact | `fact:needs-human` | The factory; removed by you | Waiting on a person; the factory will not touch the issue until a person answers |
 | fact | `fact:running` | The factory (retired, see Status) | A run is in progress |
+| fact | `fact:auto-merge`, `fact:needs-review` | The factory, on PRs | How classify routed the PR's change set; a PR carries exactly one (see Classify in `06-workflow-authoring.md`) |
 | Type | `type:incident`, `type:bug`, `type:feature`, `type:chore`, `type:epic` | You or the planner | Picks the workflow in triage; one per issue. `type:epic` is a parent with no work of its own, closed when its sub-issues are |
 | Complexity | `complexity:trivial`, `complexity:standard`, `complexity:complex` | You or the planner | How large or risky the change is; the default is standard |
 | Priority | `priority:urgent`, `priority:high`, `priority:medium`, `priority:low` | You or the planner | Orders ready tasks within a project (see `08-planning.md`); the default is medium |

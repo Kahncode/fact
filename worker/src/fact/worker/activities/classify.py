@@ -15,13 +15,8 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from fact.core.activity_contract import (
-    CLASSIFY_SIGNALS,
-    ChangedPath,
-    ClassifySignal,
-    ClassifySignalsInput,
-    SignalName,
-)
+from fact.core.activity_contract import CLASSIFY_SIGNALS, ClassifySignalsInput
+from fact.core.classification import ChangedPath, ClassifySignal, SignalName
 from fact.core.github import GitHubAppConfigError
 from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, ProjectConfig, load_project_config

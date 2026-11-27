@@ -37,6 +37,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
     from fact.sdk.agents import AgentSteps
     from fact.sdk.base_sync import BaseSyncSteps
+    from fact.sdk.classify import ClassifySteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, WAIT_CANCELLED
@@ -51,8 +52,8 @@ __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "sta
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(AgentSteps, PullRequestSteps, BaseSyncSteps, HumanSteps, StopSteps, TaskStatusSteps):
-    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, gates, stopping, the task in mixins."""
+class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, HumanSteps, StopSteps, TaskStatusSteps):
+    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, classify, gates, stop in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 

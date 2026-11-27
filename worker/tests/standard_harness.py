@@ -39,7 +39,7 @@ from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
 from standard_env import OPTIONS, WORKFLOW_QUEUE, load_standard
-from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, run_input
+from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, LOW_RISK, run_input
 from standard_pr_fakes import FakePRSteps
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporal_env import terminate_if_running, time_skipping_env
@@ -64,6 +64,7 @@ class FakeActivities(FakePRSteps):
     learn: StepResult | Exception = field(
         default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, outputs=LEARNED)
     )
+    classify: StepResult = field(default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, outputs=LOW_RISK))
     test_failures_after_address: int = 0  # `test` failures once `address_review` has run
     checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
@@ -136,8 +137,8 @@ class FakeActivities(FakePRSteps):
             if isinstance(scripted, Exception):
                 raise scripted
             return scripted
-        if spec.prompt_name == "review":
-            return self.review
+        if spec.prompt_name in {"review", "classify"}:
+            return self.review if spec.prompt_name == "review" else self.classify
         if spec.prompt_name == "learn":
             if isinstance(self.learn, Exception):
                 raise self.learn
@@ -190,6 +191,8 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.wait_for_ci,
         fakes.wait_for_pr_closed,
         fakes.merge_change_set,
+        fakes.classify_signals,
+        fakes.label_change_set,
         fakes.sync_base,
         fakes.record_gate_opened,
         fakes.record_gate_answered,

@@ -1,10 +1,13 @@
 """Find, create and update a branch's pull request through the GitHub REST API, and read whether it can merge."""
 
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
+from fact.core.github import GitHubNotFoundError
 
 BODY_MAX_CHARS = 65_000  # GitHub rejects PR bodies over 65,536 characters
 MERGE_STATE_TRIES = 5
@@ -60,6 +63,17 @@ async def open_or_update_pr(
     payload = {"title": title, "head": branch, "base": repo.default_branch, "body": body}
     pr = (await client.post(f"/repos/{repo.full_name}/pulls", json=payload)).json()
     return PullRequest(number=pr["number"], url=pr["html_url"], created=True)
+
+
+async def update_pr_body(client: httpx.AsyncClient, full_name: str, number: int, body: str) -> None:
+    await client.patch(f"/repos/{full_name}/pulls/{number}", json={"body": _limit(body)})
+
+
+async def swap_label(client: httpx.AsyncClient, full_name: str, number: int, add: str, remove: str) -> None:
+    """Put `add` on the PR and take `remove` off, so it carries exactly one of the two; a missing `remove` is fine."""
+    await client.post(f"/repos/{full_name}/issues/{number}/labels", json={"labels": [add]})
+    with suppress(GitHubNotFoundError):
+        await client.delete(f"/repos/{full_name}/issues/{number}/labels/{quote(remove, safe='')}")
 
 
 async def merge_state(  # noqa: PLR0913 - the PR, the commit it must be about, and the retry

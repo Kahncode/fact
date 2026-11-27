@@ -121,6 +121,7 @@ def _activity_workers(
             workspace.teardown_workspace,
             workspace.sync_base,
             change_set.open_change_set,
+            change_set.label_change_set,
             cost.post_cost_comment,
             ci.wait_for_ci,
             pr_state.wait_for_pr_closed,

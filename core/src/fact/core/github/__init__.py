@@ -17,10 +17,20 @@ from fact.core.github.client import (
     GitHubNotFoundError,
     github_client,
 )
-from fact.core.github.labels import FACT_LABELS, Label, LabelAction, LabelChange, sync_labels
+from fact.core.github.labels import (
+    AUTO_MERGE_LABEL,
+    FACT_LABELS,
+    NEEDS_REVIEW_LABEL,
+    Label,
+    LabelAction,
+    LabelChange,
+    sync_labels,
+)
 
 __all__ = [
+    "AUTO_MERGE_LABEL",
     "FACT_LABELS",
+    "NEEDS_REVIEW_LABEL",
     "AppInfo",
     "BotIdentity",
     "GitHubApp",

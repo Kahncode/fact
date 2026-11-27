@@ -31,6 +31,7 @@ async def test_review_findings_are_addressed_then_checked(criteria: list, findin
         ("review", 1, "review"),
         ("address_review", 1, "address_review"),
         ("learn", 1, "learn"),
+        ("classify", 1, "classify"),
     ]
     address = fakes.of(AGENT_STEP)[2]
     assert all(f["message"] in address.context for f in findings)
@@ -46,7 +47,14 @@ async def test_checks_failing_after_address_review_go_to_fix_sessions() -> None:
     result, _ = await run_standard(fakes, "run-address-then-fix")
 
     assert result.outcome == RunOutcome.MERGED
-    assert [p for _, _, p in agent_sessions(fakes)] == ["implement", "review", "address_review", "fix_checks", "learn"]
+    assert [p for _, _, p in agent_sessions(fakes)] == [
+        "implement",
+        "review",
+        "address_review",
+        "fix_checks",
+        "learn",
+        "classify",
+    ]
 
 
 async def test_blocked_address_review_needs_a_human() -> None:

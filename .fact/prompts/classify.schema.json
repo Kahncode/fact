@@ -1,0 +1,30 @@
+{
+  "properties": {
+    "risk": {
+      "type": "string",
+      "enum": ["high", "low"],
+      "description": "high: a mistake would be costly or hard to notice; low: contained, tested, easy to verify."
+    },
+    "risk_reason": { "type": "string", "description": "Why, in one or two sentences, naming files or behaviour." },
+    "door": {
+      "type": "string",
+      "enum": ["one_way", "two_way"],
+      "description": "one_way: hard to undo once merged and released; two_way: reverting the commit undoes it."
+    },
+    "door_reason": { "type": "string", "description": "Why, in one or two sentences, naming files or behaviour." },
+    "security_findings": {
+      "type": "array",
+      "description": "Security problems the change introduces or exposes; empty when there are none.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": { "type": "string", "description": "Path relative to the repository root; empty if none." },
+          "line": { "type": ["integer", "null"], "description": "Line in the file, or null." },
+          "message": { "type": "string", "description": "What is wrong and why it matters." }
+        },
+        "required": ["file", "line", "message"]
+      }
+    }
+  },
+  "required": ["risk", "risk_reason", "door", "door_reason", "security_findings"]
+}

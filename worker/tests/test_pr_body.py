@@ -1,6 +1,7 @@
 """The scripted PR description."""
 
 import pytest
+from fact.core.classification import ChangedPath, Classification, ClassifySignal, SecurityFinding
 from fact.core.enums import StepOutcome
 from fact.core.types import Task
 from fact.worker.pr_body import CheckResult, CriterionResult, render_pr_body
@@ -116,3 +117,31 @@ def test_without_assumptions_there_is_no_section() -> None:
     body = _body(assumptions=[])
     assert "Assumptions" not in body
     assert body.startswith("s\n\n## Task\n")
+
+
+def test_review_section_lists_reasons_signals_judgments_and_findings() -> None:
+    classification = Classification(
+        route="human_review",
+        reasons=["changes the API surface: `api/openapi.json`", "high risk: touches auth"],
+        signals=[ClassifySignal(name="api_change", paths=[ChangedPath(repo="acme/widget", path="api/openapi.json")])],
+        risk="high",
+        risk_reason="touches auth",
+        door="one_way",
+        door_reason="drops a column",
+        security_findings=[SecurityFinding(file="auth.py", line=4, message="token logged")],
+    )
+    body = _body(assumptions=["Retries default to 3."], classification=classification)
+    assert (
+        "- Retries default to 3.\n\n## Review\n\n**Needs review** (`fact:needs-review`):\n\n"
+        "- changes the API surface: `api/openapi.json`\n- high risk: touches auth\n\n"
+        "### Signals\n\n- `api_change`: `api/openapi.json`\n\n"
+        "### Risk and reversibility\n\n- **Risk**: high: touches auth\n- **Door**: one-way: drops a column\n\n"
+        "### Security findings\n\n- `auth.py:4` token logged\n\n## Task\n"
+    ) in body
+
+
+def test_auto_merge_review_section() -> None:
+    body = _body(classification=Classification(route="auto_merge", risk="low", door="two_way"))
+    assert "## Review\n\n**Auto-merge** (`fact:auto-merge`)" in body
+    assert "fact:needs-review" not in body
+    assert "### Signals\n\nNone." in body

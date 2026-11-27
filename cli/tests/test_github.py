@@ -127,6 +127,7 @@ def test_labels_sync_creates_then_changes_nothing(monkeypatch: pytest.MonkeyPatc
 
     assert first.exit_code == 0, first.output
     assert "created    fact:ready" in first.output.splitlines()
+    assert {"created    fact:auto-merge", "created    fact:needs-review"} <= set(first.output.splitlines())
     assert first.output.splitlines()[-1] == f"{len(FACT_LABELS)} of {len(FACT_LABELS)} labels changed on Kahncode/fact"
     assert second.exit_code == 0, second.output
     assert second.output.splitlines()[-1] == f"0 of {len(FACT_LABELS)} labels changed on Kahncode/fact"
