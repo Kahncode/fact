@@ -4,7 +4,7 @@
 One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), and for
 each the `control` and workspace activity workers of the same version (`activity_workers.py`): every activity on the
 queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`), at most `concurrency.sandboxes` at once
-per project version. Every activity heartbeats through `heartbeats.HeartbeatInterceptor`.
+across every project version (one shared `PoolSlots`). Every activity heartbeats through `heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
 are active the worker keeps Windows awake (`keep_awake.py`).
 """
@@ -33,7 +33,7 @@ from fact.worker.activities.pr_state import PRStateActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
-from fact.worker.activity_workers import Activity, activity_workers
+from fact.worker.activity_workers import Activity, PoolSlots, activity_workers
 from fact.worker.client import connect
 from fact.worker.deployments import deployment_config, set_current_version
 from fact.worker.harnesses import ClaudeCodeHarness
@@ -46,6 +46,10 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 HTTP_TIMEOUT_S = 30.0
+
+
+class DuplicateVersionError(RuntimeError):
+    """Two registered projects share a build id: the process polls for one, so the other's runs would stall."""
 
 
 def _cancel_on_ctrl_break() -> None:
@@ -68,7 +72,11 @@ def _github_app(settings: Settings) -> GitHubApp | None:
 
 
 async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list[ProjectWorkflows]:
-    """Load every registered project's workflows; a project that fails to load is logged and skipped."""
+    """
+    Load every registered project's workflows; a project that fails to load is logged and skipped.
+
+    Raise `DuplicateVersionError` when two projects share a build id (one home repository at one SHA).
+    """
     log = get_logger("fact.worker")
     factory = await factory_sha()
     loaded: list[ProjectWorkflows] = []
@@ -81,9 +89,10 @@ async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list
         if not project.workflows:
             log.warning("no_workflows", project=ref.name, checkout=str(project.checkout))
             continue
-        if any(p.version == project.version for p in loaded):  # one process polls a queue once per build id
-            log.error("duplicate_version", project=ref.name, version=project.version)
-            continue
+        clash = next((p for p in loaded if p.version == project.version), None)
+        if clash is not None:  # one process polls a queue once per build id
+            msg = f"projects {clash.project!r} and {ref.name!r} share build id {project.version}: register their home once"
+            raise DuplicateVersionError(msg)
         loaded.append(project)
     return loaded
 
@@ -136,17 +145,13 @@ def factory_activities(
 
 def _project_workers(
     client: Client,
-    settings: Settings,
     project: ProjectWorkflows,
     activities: list[Activity],
     runner: LocalWorktreeRunner,
+    sandboxes: PoolSlots,
 ) -> list[Worker]:
     workers = activity_workers(
-        client,
-        project,
-        activities,
-        workspace_queue=runner.task_queue,
-        max_workspace_activities=settings.concurrency.sandboxes,
+        client, project, activities, workspace_queue=runner.task_queue, workspace_slots=sandboxes
     )
     return [*workers, workflow_worker(client, project)]
 
@@ -162,7 +167,8 @@ async def run() -> None:
     projects = await load_projects(settings, runner)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)
-        workers = [w for p in projects for w in _project_workers(client, settings, p, activities, runner)]
+        sandboxes = PoolSlots(settings.concurrency.sandboxes)  # the runner pool's cap, shared by every version
+        workers = [w for p in projects for w in _project_workers(client, p, activities, runner, sandboxes)]
         for worker in workers:
             await stack.enter_async_context(worker)
         for project in projects:

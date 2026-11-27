@@ -21,7 +21,7 @@ QUEUE = "heartbeats-test"
 @activity.defn(name="quiet")
 async def quiet() -> str:
     """No heartbeat code of its own: without the framework's beats it outlives its heartbeat timeout."""
-    await asyncio.sleep(1.0)
+    await asyncio.sleep(0.75)  # 1.5 heartbeat timeouts
     return "done"
 
 
