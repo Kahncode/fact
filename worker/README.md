@@ -109,7 +109,7 @@ It runs only when GitHub says the PR must take the base (it conflicts, or a merg
 
 ## Wait for merge or close
 
-`wait_for_pr_closed(WaitForPRClosedInput) -> list[PRState]` (`fact.worker.activities.pr_state.PRStateActivities(github, poll_interval_s=60)`, `control` queue; M2-05). `WaitForPRClosedInput`: `run_id`, `prs`. It polls `GET /repos/{repo}/pulls/{number}` for each PR still open every 60 s and heartbeats between polls; once none is open it returns `merged` or `closed` per PR, in order. A transient GitHub or network error only skips a poll; 401, 404 and 422, and a missing GitHub App, are non-retryable. It reports no step: `FactWorkflow.wait_for_pr_closed` (in `fact.sdk.pull_requests`) records the wait as a gate-like step (stage `wait_for_review`, kind `gate`) through the gate activities, and runs this activity for up to 30 days with `LONG_WAIT_RETRY`, so worker restarts do not use up its attempts.
+`wait_for_pr_closed(WaitForPRClosedInput) -> list[PRState]` (`fact.worker.activities.pr_state.PRStateActivities(github, poll_interval_s=60)`, `control` queue; M2-05). `WaitForPRClosedInput`: `run_id`, `prs`. It polls `GET /repos/{repo}/pulls/{number}` for each PR still open every 60 s (the worker's `HeartbeatInterceptor` heartbeats meanwhile); once none is open it returns `merged` or `closed` per PR, in order. A transient GitHub or network error only skips a poll; 401, 404 and 422, and a missing GitHub App, are non-retryable. It reports no step: `FactWorkflow.wait_for_pr_closed` (in `fact.sdk.pull_requests`) records the wait as a gate-like step (stage `wait_for_review`, kind `gate`) through the gate activities, and runs this activity for up to 30 days with `LONG_WAIT_RETRY`, so worker restarts do not use up its attempts.
 
 ## Control activities
 
