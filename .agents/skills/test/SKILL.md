@@ -1,15 +1,11 @@
 ---
 name: test
-description: Generate tests for the specified file, function, or recently changed code by delegating to the test-writer agent.
+description: Write or trim tests for a file, function or the recent changes by the project's testing rules, through the test-writer agent.
 scope: project
 ---
 
-# Generate Tests
+# Tests
 
-Delegate this task to the `test-writer` agent via the Agent tool.
+Delegate to the `test-writer` agent via the Agent tool. Pass it the target from `$ARGUMENTS` (a file, a function, a diff range; the uncommitted changes when none is given) and any instruction that came with it, such as "trim" or "regression for #42".
 
-Pass the following as context:
-- The target from `$ARGUMENTS` (file path, function name, or "recently changed files" if no argument given)
-- Any flags: `--unit`, `--integration`, `--edge`, `--coverage`
-
-The agent will detect the test framework from the codebase, write tests following the AAA pattern with explicit assertions, and cover happy path, error cases, and edge cases.
+The agent applies the `testing` skill's rules: it adds only tests that earn their place and removes the ones that don't. Relay its report: tests added, changed and deleted, each with its reason.

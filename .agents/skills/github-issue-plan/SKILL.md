@@ -146,7 +146,7 @@ Use `ISSUE_TEMPLATE` as the skeleton.
 
 **Title:** clear, imperative, max 80 chars (e.g. "Add dark mode toggle").
 
-**Body:** fill the template. Acceptance criteria must be testable checkboxes. Reference related issues as `#N`.
+**Body:** fill the template. Acceptance criteria must be checkable checkboxes, each an observable behavior; a criterion is not a demand for a test. Reference related issues as `#N`.
 
 **Metadata:**
 
@@ -194,6 +194,6 @@ Display:
 
 - **Self-edit on first run** — update the configuration block, set `CONFIGURE_ME: false`
 - **Use the stored template** — all issues follow the same structure
-- **Acceptance criteria must be testable** — not vague
+- **Acceptance criteria must be checkable** — not vague
 - **Keep bodies concise** — use template slots, don't ramble
 - **Never create labels or milestones without asking**

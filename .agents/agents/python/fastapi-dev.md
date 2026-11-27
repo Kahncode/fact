@@ -76,14 +76,13 @@ When reviewing recently changed files (triggered proactively):
 
 ### Testing
 
-Write tests for all non-trivial code:
+Write the tests that earn their place by `.agents/skills/testing/SKILL.md`:
 
 - Use `httpx.AsyncClient` with `ASGITransport` (modern pattern) or `TestClient` for sync tests
 - Use `pytest` with `pytest-asyncio` for async tests
-- Test happy paths, validation errors (422), auth failures (401/403), and not-found (404)
+- Test the golden path and the error paths the route handles on purpose (auth failures 401/403, not-found 404); leave 422s on typed fields to FastAPI
 - Mock external dependencies using `pytest-mock` or `app.dependency_overrides`
 - Mirror source structure in `tests/` — `tests/routers/`, `tests/services/`, etc.
-- Do not write tests for trivial boilerplate; focus on logic with branches
 
 ## Version Awareness
 

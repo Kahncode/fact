@@ -20,7 +20,7 @@ $acceptance_criteria
 
 1. Read the failures above. Find the job's definition (such as `.github/workflows/`) to see the exact commands and environment it runs.
 2. Reproduce the failure locally when you can, by running the same commands in the repository it came from.
-3. Fix the cause in the code, the tests or the CI configuration. Don't weaken, skip or delete a check, a test or a CI job to make it pass unless it is itself wrong, and say so if you do.
+3. Fix the cause in the code, the tests or the CI configuration. Don't weaken, skip or delete a check, a test or a CI job to make it pass unless it is itself wrong, and say so if you do. A test you write or change follows the `testing` skill (without it, `.agents/skills/testing/SKILL.md`).
 4. Run the repository's lint and tests again, and check they pass.
 5. Commit the fix locally on the branch you are on, with a clear message such as `fix($task_id): <what was wrong in CI>`. fact pushes it and waits for CI again.
 

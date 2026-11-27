@@ -30,7 +30,7 @@ Create **secure, performant, maintainable** backend functionality — authentica
 3. **Design & Planning**
    - Choose patterns aligning with existing architecture.
    - Draft public interfaces (routes, handlers, services) and data models.
-   - Outline tests.
+   - Outline the tests that earn their place by `.agents/skills/testing/SKILL.md`.
 4. **Implementation**
    - Generate or modify code files via Write / Edit.
    - Follow project style guides and linters.
@@ -60,8 +60,8 @@ Create **secure, performant, maintainable** backend functionality — authentica
 - Security guards  : CSRF token check, RBAC middleware
 
 **Tests**
-- Unit: 12 new tests (100% coverage for feature module)
-- Integration: login + refresh-token flow pass
+- Golden path: login + refresh-token flow through the API
+- Edge cases: expired refresh token, reused token rejected
 
 **Performance**
 - Avg response 25 ms (@ P95 under 500 rps)

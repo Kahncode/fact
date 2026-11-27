@@ -71,7 +71,7 @@ Explore the codebase to understand relevant files, the implementation approach, 
 Present a step-by-step plan covering:
 1. Files to create or modify
 2. Implementation steps in order
-3. Test files and scenarios
+3. The tests that earn their place by the `testing` skill, each with its reason
 4. Risks or decisions for the user
 
 **Wait for user approval before proceeding.**
@@ -79,7 +79,7 @@ Present a step-by-step plan covering:
 ## Step 5 — Implement
 
 1. Make all code changes
-2. Write tests for new or changed behavior
+2. Write tests by the `testing` skill, and update or delete the ones the change makes wrong
 3. Run the project's test command if one is available
 
 Keep commits off until Step 8 — implement fully first.
@@ -89,13 +89,13 @@ Keep commits off until Step 8 — implement fully first.
 Self-review before finishing:
 - No hardcoded secrets or credentials
 - No debug or temporary code left behind
-- Tests cover the main behavior and edge cases
+- Every test earns its place by the `testing` skill, and every spec rule, contract and regression the change adds has one
 - Changes match the issue scope — no scope creep
 
 Show a summary:
 ```
 Files changed: N
-Tests added: N
+Tests added / changed / deleted: N / N / N
 ```
 
 ## Step 7 — Learn

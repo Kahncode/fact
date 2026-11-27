@@ -17,7 +17,7 @@ $acceptance_criteria
 ## How to work
 
 1. Read the failures above and reproduce them by running the same commands in the repository they came from.
-2. Fix the cause in the code or the tests. Don't weaken, skip or delete a check or a test to make it pass unless the check itself is wrong, and say so if you do.
+2. Fix the cause in the code or the tests. Don't weaken, skip or delete a check or a test to make it pass unless the check itself is wrong, and say so if you do. A test you write or change follows the `testing` skill (without it, `.agents/skills/testing/SKILL.md`).
 3. Re-run the checks until they pass.
 4. Commit the fix locally on the branch you are on, with a clear message such as `fix($task_id): <what was wrong>`.
 

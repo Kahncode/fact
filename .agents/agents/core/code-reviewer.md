@@ -23,7 +23,7 @@ Always start by determining which changes to review using the above logic.
 
 ## Optional Inputs
 
-- **Acceptance criteria** (a list, or a task file whose `## Acceptance criteria` checklist you read): answer each one as met or not met, with evidence (a test that covers it, `file:line`, or a read-only command and its output). A criterion that can only be checked after the change ships (e.g. on the PR) is met when the change does its part; say so.
+- **Acceptance criteria** (a list, or a task file whose `## Acceptance criteria` checklist you read): answer each one as met or not met, with evidence (`file:line`, a test that covers it, or a read-only command and its output). A criterion needs a test only where `.agents/skills/testing/SKILL.md` says it earns one. A criterion that can only be checked after the change ships (e.g. on the PR) is met when the change does its part; say so.
 - **Output path**: also write the result as JSON there (format below). It is the only file you write.
 
 **Never change code**: no edits, no commits, no formatters or `--fix`. Read-only commands (tests, `git diff`, linters in check mode) are fine.
@@ -80,6 +80,14 @@ Always start by determining which changes to review using the above logic.
 - No circular dependencies
 - No dead code — no commented-out blocks, no unreachable code, no unused imports
 - File and function size within project limits
+
+### 6. Tests
+
+Judge the diff's tests by `.agents/skills/testing/SKILL.md`:
+
+- A test that does not earn its place (a constant, config value, framework behavior, wording, exact call order, a duplicate of another test) is INFO, naming the rule, so it is removed.
+- A test that sleeps, polls or depends on timing or thread scheduling is a WARNING.
+- A spec rule, contract, regression or safety invariant the diff adds without a test is a WARNING.
 
 ## Output Format
 

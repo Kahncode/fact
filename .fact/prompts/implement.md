@@ -19,7 +19,7 @@ $handoff
 ## How to work
 
 1. Read `WORKSPACE.md`, then the instructions of each repository you touch (`AGENTS.md` or `CLAUDE.md`).
-2. Implement the task so every acceptance criterion holds. Write tests with the code.
+2. Implement the task so every acceptance criterion holds. Write tests with the code, by the `testing` skill (without it, `.agents/skills/testing/SKILL.md`): only the tests that earn their place, and update or delete the existing tests your change makes wrong.
 3. Run each repository's own lint and tests and fix what fails.
 4. Commit your work locally in each repository you changed, on the branch you are on, with a clear message: a conventional commit subject such as `feat($task_id): <what changed>` and a short body saying why.
 

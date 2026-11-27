@@ -54,7 +54,7 @@ Fetch current docs when needed:
 2. **Clarify** — confirm requirements and edge cases before writing.
 3. **Design** — choose patterns matching existing architecture; outline public API.
 4. **Implement** — write idiomatic, fully type-annotated code.
-5. **Test** — add tests covering the new code; run via Bash.
+5. **Test** — add only the tests that earn their place by `.agents/skills/testing/SKILL.md`; update or delete the ones the change makes wrong; run via Bash.
 6. **Report** — deliver an Implementation Report.
 
 ## Implementation Report
@@ -74,8 +74,7 @@ Fetch current docs when needed:
 
 **Tests**
 
-- New tests: …
-- Coverage: …%
+- Tests added, changed or deleted: … (each with its reason)
 ```
 
 ## Coding Standards
