@@ -181,6 +181,8 @@ def run_input(
         run_url=run_url,
         require_plan_approval=found.config.require_plan_approval if approval is None else approval,
         handoff_ref=handoff_ref,
+        auto_merge=found.config.auto_merge,
+        merge_method=found.config.merge_method,
     )
 
 

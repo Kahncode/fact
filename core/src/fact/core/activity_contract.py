@@ -11,7 +11,7 @@ from typing import Any, Literal
 from fact.core.classification import Classification
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
-from fact.core.types import Complexity, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
+from fact.core.types import Complexity, MergeMethod, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
 from pydantic import BaseModel, ConfigDict, Field
 
 CONTROL_QUEUE = "control"  # holds the GitHub App and the API; workspace, PR and bookkeeping steps
@@ -44,7 +44,6 @@ Check = Literal["lint", "test", "build", "setup"]
 # a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
 TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "stopped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
-MergeMethod = Literal["squash", "merge", "rebase"]
 # how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
 # base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
 MergeResult = Literal["merged", "out_of_date", "refused"]

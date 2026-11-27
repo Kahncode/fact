@@ -105,6 +105,23 @@ def test_plan_approval_from_task_else_project(project: bool, task: bool | None, 
     assert run_input(Settings(), found, "run-1").require_plan_approval is expected
 
 
+def test_merge_policy_comes_from_the_project() -> None:
+    config = ProjectConfig.model_validate(
+        {
+            "name": PROJECT,
+            "repositories": [{"full_name": "acme/home", "role": "backend"}],
+            "workflows": {"default": "standard"},
+            "auto_merge": False,
+            "merge_method": "rebase",
+        }
+    )
+    found = FoundTask(
+        ProjectRef(name=PROJECT, home="acme/home"), config, TaskCheck(Task(key="task:M1-01", id="M1-01", title="t"), [])
+    )
+    run = run_input(Settings(), found, "run-1")
+    assert (run.auto_merge, run.merge_method) == (False, "rebase")
+
+
 def test_workflow_id_safe_form() -> None:
     assert safe_key("task:M1-02") == "task-M1-02"
     assert safe_key("ENG/12 x") == "ENG-12-x"

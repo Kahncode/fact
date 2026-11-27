@@ -18,12 +18,14 @@ the merge, loop the checks (with their gate), push and wait for CI again, at mos
 person is asked. Once CI is green, `classify` routes the change set: the rules' signals (`classify_signals`) and a
 read-only `classify` session (risk, door, security findings) decide `auto_merge` or `human_review`, and a `label_prs`
 step labels each PR `fact:auto-merge` or `fact:needs-review` and adds a `## Review` section to its description; a
-base sync after that which moves a PR's head classifies again once CI is green, so the label describes what merges. Then,
-while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head
-commit CI passed on) and the run ends `merged`. If the switch is off or GitHub refuses the merge otherwise, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as
-human wait time) until every PR is merged or closed: it ends `merged` if all were merged, else `closed`, and its
-workspace is torn down. However the run ends, `FactWorkflow` comments its cost on the PRs last, once every step is
-recorded.
+base sync after that which moves a PR's head classifies again once CI is green, so the label describes what merges.
+A change set routed `auto_merge` in a project whose `auto_merge` is on is merged by fact (`merge_change_set`, with the
+project's `merge_method`, each PR only at the head commit CI passed on, in the recorded repository order) and the run
+ends `merged` with no `prs_ready`. Otherwise, when auto-merge is off or GitHub refuses the merge, the PRs are relabelled
+`fact:needs-review` with why, a person is told the PRs are ready (`prs_ready`, with the classification's reasons), and
+the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
+closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. However the run ends,
+`FactWorkflow` comments its cost on the PRs last, once every step is recorded.
 
 A failing setup ends the run `failed`. If the checks never go green, conflicts stay unresolved, or CI stays red or
 never finishes, a `needs_human` gate opens: approve runs that loop once more (instructions sent with `steer` reach
@@ -33,7 +35,7 @@ run `failed`. A `learn` session that does not pass, or whose activity fails, is 
 losing the change over, so the PR still opens with the implement session's title and summary (else the task's
 conventional title).
 
-A person is notified when a gate opens, when the PRs are ready for review (CI green, not merged by fact), and when the
+A person is notified when a gate opens, when the PRs need a review (CI green, not merged by fact), and when the
 run ends `failed` or `needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`).
 """
 
@@ -41,6 +43,7 @@ from temporalio import workflow
 from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
+    from fact.core.classification import Classification
     from fact.sdk.base_sync import RESOLVE_STAGE, SYNC_STAGE
     from fact.sdk.classify import CLASSIFY_STAGE, LABEL_STAGE
     from fact.sdk.pull_requests import REVIEW_STAGE
@@ -65,9 +68,10 @@ MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
 NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
 APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
-# Interim, until auto-merge follows the classification (issue #14): merge every change set whose CI is green, whatever
-# its route, so fact can work through its own tasks unattended. #14 replaces this switch with the classification.
-MERGE_WHEN_GREEN = True
+AUTO_MERGE_OFF = "auto-merge is off for this project"
+MERGE_REFUSED = (
+    "GitHub refused the merge (such as branch protection requiring an approval, or CI not green on the head)"
+)
 MAX_BASE_SYNCS = 2  # merges of the base per loop (a conflicting PR, a merge refused as out of date) before a person
 
 
@@ -193,8 +197,8 @@ class Standard(FactWorkflow):
         """Wait for CI with fix sessions, asking a person each time it stays red; classify, then merge or wait."""
         if (stuck := await self._ci_loop(prs)) is not None:
             return stuck
-        await self.classify(self.prs, review)
-        return await self._until_closed(self.prs, review)
+        classification = await self.classify(self.prs, review)
+        return await self._until_closed(self.prs, review, classification)
 
     async def _ci_loop(self, prs: list[PRRef]) -> RunResult | None:
         """
@@ -231,19 +235,23 @@ class Standard(FactWorkflow):
         await self.push_change_set()
         return None
 
-    async def _until_closed(self, prs: list[PRRef], review: Review) -> RunResult:
+    async def _until_closed(self, prs: list[PRRef], review: Review, classification: Classification) -> RunResult:
         """
-        CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed.
+        CI is green: merge a change set routed `auto_merge`, else relabel it, tell a person and wait for the PRs.
 
         A merge GitHub refuses as out of date takes the base (`_take_base`) and CI again, at most `MAX_BASE_SYNCS`
         times, and classifies again if that moved a PR's head; any other refusal goes to a person.
         """
         syncs = 0
-        while MERGE_WHEN_GREEN:
-            merged = await self.merge_change_set(prs)
+        if classification.route == "auto_merge" and not self.input.auto_merge:
+            classification = await self.route_to_review(prs, classification, AUTO_MERGE_OFF)
+        while classification.route == "auto_merge":
+            merged = await self.merge_change_set(prs, self.input.merge_method)
             if merged == "merged":
                 return RunResult(outcome=RunOutcome.MERGED, prs=prs, summary=", ".join(pr.url for pr in prs))
             if merged != "out_of_date" or syncs == MAX_BASE_SYNCS:
+                reason = MERGE_REFUSED if merged == "refused" else f"still out of date after {syncs} base merges"
+                classification = await self.route_to_review(prs, classification, reason)
                 break
             syncs += 1
             if (stuck := await self._take_base()) is not None:
@@ -251,9 +259,9 @@ class Standard(FactWorkflow):
             if (stuck := await self._ci_loop(self.prs)) is not None:
                 return stuck
             if _heads(self.prs) != _heads(prs):  # the merge, a resolution or a CI fix changed what would merge
-                await self.classify(self.prs, review)
+                classification = await self.classify(self.prs, review)
             prs = self.prs
-        await self.notify_prs_ready(prs)
+        await self.notify_prs_ready(prs, reasons=classification.reasons)
         outcome = await self.wait_for_pr_closed(prs)
         return RunResult(outcome=outcome, prs=prs, summary=", ".join(pr.url for pr in prs))
 

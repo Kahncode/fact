@@ -128,11 +128,16 @@ class HumanSteps:
             kind, title = NotificationKind.RUN_FINISHED, f"{key} ended {result.outcome}"
         await self.notify(kind, title, result.summary, link)
 
-    async def notify_prs_ready(self: FactWorkflow, prs: Sequence[PRRef], body: str = "") -> None:
-        """Tell a person the PRs are ready for review (`prs_ready`), once per run."""
+    async def notify_prs_ready(
+        self: FactWorkflow, prs: Sequence[PRRef], body: str = "", reasons: Sequence[str] = ()
+    ) -> None:
+        """Tell a person the PRs are ready for review (`prs_ready`), once per run, with why they need one."""
         title = f"{self.input.task.key}: {len(prs) or 'no'} PR(s) ready for review"
         link = prs[0].url if prs else None
-        await self.notify(NotificationKind.PRS_READY, title, body or ", ".join(pr.url for pr in prs), link)
+        body = body or ", ".join(pr.url for pr in prs)
+        if reasons:
+            body += "\n\nWhy a review:\n" + "\n".join(f"- {r}" for r in reasons)
+        await self.notify(NotificationKind.PRS_READY, title, body, link)
 
     def _gate_need(self: FactWorkflow, gate: OpenGate) -> str:
         """Say what the gate needs, for the task's comment: its summary, and how to answer."""

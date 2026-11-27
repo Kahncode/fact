@@ -135,6 +135,9 @@ class RunLimits(_Model):
     control_timeout_s: float = Field(default=600.0, gt=0)
 
 
+MergeMethod = Literal["squash", "merge", "rebase"]
+
+
 class RunInput(_Model):
     run_id: str
     project: str
@@ -146,6 +149,8 @@ class RunInput(_Model):
     run_url: str = ""  # where a person follows the run (the Temporal UI for now), linked from the PR
     require_plan_approval: bool = False  # open an `approve_plan` gate before any work (task, else project setting)
     handoff_ref: str | None = None  # artifact key of the handoff note a stopped run of this task left, if any
+    auto_merge: bool = True  # the project's `auto_merge`: fact merges a change set classified `auto_merge`
+    merge_method: MergeMethod = "squash"  # the project's `merge_method`
 
 
 class RunResult(_Model):

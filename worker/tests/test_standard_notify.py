@@ -16,8 +16,8 @@ def _sent(fakes: FakeActivities) -> list[tuple[NotificationKind, str]]:
     return [(n.kind, n.dedupe_key) for n in fakes.of(NOTIFY)]
 
 
-async def test_green_run_notifies_its_prs_are_ready_then_merged() -> None:
-    fakes = FakeActivities()
+async def test_a_change_set_fact_cannot_merge_notifies_its_prs_are_ready_then_merged() -> None:
+    fakes = FakeActivities(merges=False)
     await run_standard(fakes, "run-notify-green")
     ready, ended = fakes.of(NOTIFY)
     assert (ready.kind, ready.dedupe_key, ready.link) == (NotificationKind.PRS_READY, "run-1:prs_ready", PR.url)
