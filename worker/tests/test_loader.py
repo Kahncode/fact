@@ -125,6 +125,19 @@ async def test_reuses_the_checkout_and_follows_new_commits(
     assert first.checkout.exists()  # the old version's checkout stays for runs pinned to it
 
 
+async def test_a_clone_cut_short_is_never_loaded(settings: Settings, home: HomeRepo, runner: LocalRunner) -> None:
+    sha = home.push({".fact/workflows/hello.py": HELLO})
+    project = _project()
+    partial = settings.pinned_dir / "projects" / project / f".{sha}.clone"  # a worker killed mid-clone left this
+    partial.mkdir(parents=True)
+    (partial / "junk.txt").write_text("partial\n", encoding="utf-8")
+
+    loaded = await load_project(project, HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
+
+    assert [cls.__name__ for cls in loaded.workflows] == ["Hello"]
+    assert not partial.exists()
+
+
 async def test_module_that_fails_to_import_names_the_file(
     settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:

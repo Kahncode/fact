@@ -101,7 +101,7 @@ async def factory_sha(root: Path = REPO_ROOT) -> str:
 async def default_branch_sha(url: str, cwd: Path) -> str:
     """Return the SHA the remote's `HEAD` (its default branch) points at."""
     for line in (await _git(["ls-remote", url, "HEAD"], cwd)).splitlines():
-        sha, _, ref = line.partition("	")
+        sha, _, ref = line.partition("\t")
         if ref.strip() == "HEAD" and _SHA.match(sha):
             return sha
     msg = f"{url} has no default branch (empty repository?)"

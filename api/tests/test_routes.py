@@ -20,8 +20,8 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
         "test_run_start.test_start_runs_the_project_workflow",
         "test_run_start.test_start_refused_by_temporal_keeps_the_number",
         "test_run_start.test_id_taken_in_temporal_moves_to_the_next",
-        "test_run_start.test_scheduler_start_refused_once_the_task_has_a_run",
-        "test_run_start.test_scheduled_start_refused_only_when_its_pool_is_full",
+        "test_run_start_scheduled.test_scheduler_start_refused_once_the_task_has_a_run",
+        "test_run_start_scheduled.test_scheduled_start_refused_only_when_its_pool_is_full",
     ],
     ("/api/v1/scheduler/tick", "POST"): [
         "test_scheduler_tick.test_tick_starts_in_plan_order_within_the_caps",

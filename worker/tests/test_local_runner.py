@@ -230,11 +230,16 @@ async def test_two_runs_of_one_repository_share_no_git_state(runner: LocalRunner
         await runner.teardown(handle)
 
 
-async def test_retry_after_a_crash_mid_prepare_keeps_the_branch(runner: LocalRunner) -> None:
-    await runner.prepare(_spec(run_id="run-a"))  # the activity died before reporting: the retry prepares again
+async def test_a_half_made_workspace_is_cloned_again(runner: LocalRunner, settings: Settings) -> None:
+    half = settings.workspaces_dir / "run-a" / "widget"  # an attempt that crashed mid-clone, before WORKSPACE.md
+    half.mkdir(parents=True)
+    (half / "junk.txt").write_text("partial\n", encoding="utf-8")
+
     handle = await runner.prepare(_spec(run_id="run-a"))
 
-    assert handle.branches[FULL_NAME] == "fact/task-m1-06"
+    clone = Path(handle.repos[FULL_NAME])
+    assert not (clone / "junk.txt").exists()
+    assert (clone / "README.md").read_text(encoding="utf-8") == "hello\n"
     await runner.teardown(handle)
 
 

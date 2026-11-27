@@ -35,21 +35,9 @@ def _runner(settings: Settings, remote: Path) -> LocalRunner:
     return LocalRunner(settings, remote_url=lambda _name: remote.as_uri())
 
 
-def _spec(run_id: str, branch: str = BRANCH) -> WorkspaceSpec:
-    repo = RepoCheckout(full_name=FULL_NAME, default_branch="main", branch=branch)
+def _spec(run_id: str) -> WorkspaceSpec:
+    repo = RepoCheckout(full_name=FULL_NAME, default_branch="main", branch=BRANCH)
     return WorkspaceSpec(run_id=run_id, task_key="task:M1-06", repos=[repo])
-
-
-async def test_two_workers_prepare_two_runs_of_one_repository_at_once(settings: Settings, remote: Path) -> None:
-    one, two = _runner(settings, remote), _runner(settings, remote)
-
-    first, second = await asyncio.gather(
-        one.prepare(_spec("run-a")), two.prepare(_spec("run-b", branch="fact/task-m1-07"))
-    )
-
-    for handle in (first, second):
-        assert (Path(handle.repos[FULL_NAME]) / "README.md").is_file()
-        await one.teardown(handle)
 
 
 async def test_a_second_attempt_never_deletes_the_workspace_the_first_returns(

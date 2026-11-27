@@ -1,6 +1,6 @@
 # Implement $task_id: $task_title
 
-You are working in a fact run workspace at `$workspace`. `WORKSPACE.md` there lists each repository's folder, branch and role. Each repository is a git worktree already on the run's branch.
+You are working in a fact run workspace at `$workspace`. `WORKSPACE.md` there lists each repository's folder, branch and role. Each repository is a git clone already on the run's branch.
 
 ## Task
 
