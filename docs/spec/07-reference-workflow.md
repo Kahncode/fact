@@ -8,10 +8,37 @@ flowchart LR
     R -- findings --> AR[address_review] --> C2{lint + test}
     R -- clean --> U[learn]
     C2 --> U
-    U --> CL[classify] --> P[open PRs] --> CI{CI}
+    U --> P[open PRs] --> CI{CI}
     CI -- fail, max 2 --> FC[fix_ci] --> CI
-    CI -- green --> M[wait for merge]
-    M -- "@fact comment" --> AC[address_comment] --> CI
+    CI -- green --> CL[classify]
+    CL -- auto_merge --> MG[merge]
+    CL -- human_review --> W[wait for review]
+    W -- approved, CI green --> MG
+    W -- changes requested --> RR[review_reply]
+    RR -- reply only --> W
+    RR -- implement --> I
 ```
 
-The standard workflow is code, lint and test, agent review, classify, then PRs. Every failure before the PR, every CI failure and every `@fact` comment starts a new agent session in the run's sandbox. Merging needs no agent: it is automatic or yours, depending on the classification. It starts once the Planning phase has produced an approved plan; incident workflows can add a preview deploy on the same base.
+The standard workflow is code, lint and test, agent review, classify, then PRs. Every failure before the PR and every CI failure starts a new agent session in the run's sandbox. Merging needs no agent: it is automatic or yours, depending on the classification. It starts once the Planning phase has produced an approved plan; incident workflows can add a preview deploy on the same base.
+
+**Review follows GitHub's review flow (decided 27 Nov 2026).** A PR routed `human_review` waits for its reviewer, read from GitHub (polled every 60 s until webhooks):
+
+- **Approved**: an `APPROVED` review on the PR's head commit, by anyone for now. Once CI is green on that commit, fact merges the PR with the project's `merge_method`, whatever the project's `auto_merge` says: an approved PR is a *reviewed merge*, not an auto-merge. An approval on an older commit does not count; a push (a CI fix, a base sync, the reviewer's own) needs a new approval.
+- **Changes requested**: each new `CHANGES_REQUESTED` review is handled once, as a whole. One `review_reply` session reads that review's body and comments, and every other comment on the PR since fact last pushed, and replies to each one: it acknowledges, pushes back with reasons, or asks for more. fact posts the replies as `fact[bot]` in their threads (the session holds no GitHub token) and never resolves a thread; that is the reviewer's call. The session then answers `implement`, with instructions, or `reply`, when nothing needs to change. `implement` sends the run back through the whole chain with the review as its steering: implement, checks, agent review, learn, push, CI. `reply` changes nothing. Either way fact then re-requests a review from whoever requested changes, and the PR waits again. A reviewer who accepts the push-back simply approves.
+- `COMMENTED` reviews and plain comments start nothing on their own; the next `CHANGES_REQUESTED` review takes them in.
+- A PR that went through a review round stays `fact:needs-review` and is never classified again: only an approval merges it.
+- A person may also merge or close the PR themselves.
+
+Each PR of a change set lives its own life: it is merged as soon as it is approved and green, independently of the others. The run, and the task's closure, wait for every PR: the run ends once each one is merged or closed (`merged` if all were merged, else `closed`), within the 30-day review timeout.
+
+**Multi-repository review is not designed yet.** The review loop assumes one repository. Open: whether several PRs with changes requested share one `review_reply` session (the shared workspace suggests yes), and what a session does when the review of one PR needs a change in a repository whose PR is already merged (today it must not: it answers `blocked`; later it may open a new PR that joins the change set).
+
+**Asking on the task (decided 27 Nov 2026).** A person is asked on the task itself, never only in fact:
+
+- An agent that is `blocked` because it needs information gives a `question` in its structured answer. fact posts it on the issue, adds `fact:needs-human` and opens a gate. Every new comment on the issue from a person goes to an `answer` session, which reads the question and the thread since the gate opened and decides: `continue` resumes the blocked session with its instructions and removes `fact:needs-human`; `ask` replies on the issue and keeps waiting; `stop` ends the run `needs_human`. A `blocked` answer without a `question` ends the run `needs_human`.
+- A loop that runs out of attempts (checks, base sync, CI) ends the run `needs_human` and opens no gate; the run-end hold comments why on the issue.
+- `fact gate approve|reject` still answers any gate and wins over the conversation; it is the only way to answer for file tasks, which have no issue. The UI replaces it.
+- `review_reply` and `answer` are one library step, `converse`: collect the people's comments on an issue or PR since a point, run a read-only session with a prompt, post the replies it wrote and return its decision.
+- `approve_plan` is unchanged until the planner (M6) designs it.
+
+`@fact` comments that start a session outside a review (a mention on a PR or an issue at any time) come later, with webhooks.
