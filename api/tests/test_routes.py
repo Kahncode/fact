@@ -39,6 +39,10 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
     ],
     ("/api/v1/scheduler/on", "POST"): ["test_scheduler_switch.test_dev_loop_is_on_at_start_and_follows_the_switch"],
     ("/api/v1/scheduler/off", "POST"): ["test_scheduler_switch.test_dev_loop_is_on_at_start_and_follows_the_switch"],
+    ("/api/v1/scheduler/shutdown", "POST"): [
+        "test_scheduler_switch.test_shutdown_turns_off_until_on_cancels_it",
+        "test_scheduler_switch.test_prod_has_no_loop_and_no_switch",
+    ],
     ("/api/v1/runs/{run_id}", "GET"): ["test_runs.test_create_and_get_run"],
     ("/api/v1/runs/{run_id}", "PATCH"): ["test_runs.test_patch_run"],
     ("/api/v1/runs/{run_id}/steps", "POST"): ["test_runs.test_steps_lifecycle_and_order"],

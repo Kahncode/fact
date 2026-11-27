@@ -43,6 +43,10 @@ class PortTimeoutError(RuntimeError):
     pass
 
 
+class StopRequestedError(Exception):
+    """Raised by a restarter to stop every child and return 0; its message says why (`fact shutdown`)."""
+
+
 def emit(name: str, width: int, line: str) -> None:
     with _print_lock:
         sys.stdout.write(f"{name:<{width}} | {line.rstrip()}\n")
@@ -155,6 +159,7 @@ def first_exit(children: Sequence[Child]) -> tuple[str, int] | None:
 
 
 # Called on every poll; returns the specs of children to restart (matched by name), or None to keep them running.
+# It raises `StopRequestedError` to stop them all.
 Restarter = Callable[[], Sequence[ChildSpec] | None]
 
 
@@ -194,7 +199,8 @@ def run_all(specs: Sequence[ChildSpec], restarter: Restarter | None = None) -> i
     """
     Start `specs` in order and block until one exits or Ctrl-C; return the first exit code (130 on Ctrl-C).
 
-    `restarter`, polled while all run, may return specs to restart some children with (`fact dev --follow`).
+    `restarter`, polled while all run, may return specs to restart some children with (`fact dev --follow`), or raise
+    `StopRequestedError` to stop them all and return 0 (`fact shutdown`).
     """
     width = max(len(s.name) for s in [*specs, ChildSpec("fact", [])])
     children: list[Child] = []
@@ -205,6 +211,9 @@ def run_all(specs: Sequence[ChildSpec], restarter: Restarter | None = None) -> i
             code = _supervise(specs, width, children, pumps, restarter)
     except KeyboardInterrupt:
         code = INTERRUPTED
+    except StopRequestedError as e:
+        emit("fact", width, str(e))
+        code = 0
     except PortTimeoutError as e:
         emit("fact", width, f"error: {e}")
         code = 1
