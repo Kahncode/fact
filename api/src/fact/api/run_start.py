@@ -183,6 +183,7 @@ def run_input(
         handoff_ref=handoff_ref,
         auto_merge=found.config.auto_merge,
         merge_method=found.config.merge_method,
+        review_spec_ambiguous=found.config.classify.review_spec_ambiguous,
     )
 
 

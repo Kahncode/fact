@@ -20,6 +20,7 @@ from fact.core.activity_contract import (
 from fact.core.classification import ChangedPath, ClassifySignal
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
+from fact.core.types import StepResult
 from fact.sdk.pull_requests import REVIEW_STAGE
 from standard_env import load_standard
 from standard_harness import FakeActivities, finished, run_standard
@@ -127,6 +128,17 @@ async def test_a_human_review_change_set_is_not_merged_and_notifies_its_reasons(
     names = [n for n, _ in fakes.calls]
     assert names.index(NOTIFY) < names.index(WAIT_FOR_PR_CLOSED)
     assert result.outcome == RunOutcome.MERGED  # the person merged it
+
+
+@pytest.mark.parametrize(("forced", "route"), [(True, "human_review"), (False, "auto_merge")])
+async def test_an_ambiguous_spec_forces_a_review_only_when_the_project_asks(*, forced: bool, route: str) -> None:
+    ambiguous = {"title": "feat(widget): add the widget", "spec_ambiguous": True}
+    fakes = FakeActivities(implement_script=[StepResult(outcome=StepOutcome.PASSED, outputs=ambiguous)])
+    run = run_input().model_copy(update={"review_spec_ambiguous": forced})
+    await run_standard(fakes, f"run-ambiguous-{forced}", run)
+
+    (labelled,) = fakes.of(LABEL_CHANGE_SET)
+    assert labelled.change_set.classification.route == route
 
 
 async def test_a_refused_merge_falls_back_to_needs_review_and_notifies() -> None:

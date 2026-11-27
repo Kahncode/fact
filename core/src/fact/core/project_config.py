@@ -67,6 +67,7 @@ class ClassifyConfig(_Model):
     schema_paths: list[str] = []  # database schema: migrations, models
     api_paths: list[str] = []  # the published API surface, such as an OpenAPI snapshot
     always_review_paths: list[str] = []  # never merged without a person, such as `.fact/**` and `.github/**`
+    review_spec_ambiguous: bool = True  # a change whose implementation found the spec ambiguous needs a person
 
 
 class ProjectConfig(_Model):

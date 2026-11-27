@@ -152,6 +152,7 @@ class RunInput(_Model):
     handoff_ref: str | None = None  # artifact key of the handoff note a stopped run of this task left, if any
     auto_merge: bool = True  # the project's `auto_merge`: fact merges a change set classified `auto_merge`
     merge_method: MergeMethod = "squash"  # the project's `merge_method`
+    review_spec_ambiguous: bool = True  # the project's `classify.review_spec_ambiguous`
 
 
 class RunResult(_Model):
