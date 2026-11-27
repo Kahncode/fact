@@ -204,7 +204,7 @@ git checkout -b feat/<task-name>
 - `docs/<name>`: documentation
 - `refactor/<name>`: refactors
 
-Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`. Tests go in the same commit as the code they test.
+Commit messages and PR titles follow [Conventional Commits](https://www.conventionalcommits.org): `type(scope): subject`. The scope names the area of the code the change touches (a package, module or component, such as `feat(worker): ...`, `fix(sdk): ...`, `docs(spec): ...`), using the scopes `git log` already uses; leave it out when the change spans several areas, and never use the task or issue id: the PR body links the issue. Tests go in the same commit as the code they test.
 
 Before you commit:
 
