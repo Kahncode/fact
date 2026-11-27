@@ -2,7 +2,7 @@
 The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait for CI and fix it, merge, wait for one.
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
-`next_attempt`, `note_outcome`, `agent`, `report_task`, `_control`, `_record`, the gate recording
+`next_attempt`, `note_outcome`, `agent`, `report_task`, `_activity`, `_record`, the gate recording
 helpers of `HumanSteps`, and the `pr_title`, `pr_summary`, `assumptions`, `spec_ambiguous`, `prs` and `_change_set`
 its `__init__` sets.
 """
@@ -16,7 +16,6 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
-        CONTROL_QUEUE,
         MERGE_CHANGE_SET,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
@@ -45,7 +44,6 @@ with workflow.unsafe.imports_passed_through():
         text_output,
     )
     from fact.sdk.failures import ci_failure_context
-    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, LONG_WAIT_RETRY
 
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
@@ -53,12 +51,10 @@ if TYPE_CHECKING:
 OPEN_PR_STAGE = "open_pr"
 CI_STAGE = "wait_for_ci"
 FIX_CI_STAGE = "fix_ci"
-CI_TIMEOUT = timedelta(minutes=60)  # give up on checks still running after this long
-CI_ACTIVITY_SLACK = timedelta(minutes=5)  # on top of `CI_TIMEOUT` for the activity's own polling and log downloads
+CI_TIMEOUT = timedelta(minutes=60)  # give up on checks still running after this long; `wait_for_ci`'s spec adds 5 min
 REVIEW_STAGE = "wait_for_review"
 # how `until_ci_green` ended: green, a PR conflicting with its base (merge the base), or out of fixes
 CIOutcome = Literal["passed", "conflict", "needs_human"]
-REVIEW_TIMEOUT = timedelta(days=30)  # a PR still open after this long fails the run, leaving the workspace
 
 
 class PullRequestSteps:
@@ -114,7 +110,7 @@ class PullRequestSteps:
             "spec_ambiguous": self.spec_ambiguous,
         }
         spec = self._change_set.model_copy(update=update)
-        self.prs = await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
+        self.prs = await self._activity(OPEN_CHANGE_SET, spec, list[PRRef])
         self.note_outcome(OPEN_PR_STAGE, spec.attempt, StepOutcome.PASSED)
         return self.prs
 
@@ -132,15 +128,7 @@ class PullRequestSteps:
             pr=pr,
             timeout_s=CI_TIMEOUT.total_seconds(),
         )
-        result = await workflow.execute_activity(
-            WAIT_FOR_CI,
-            spec,
-            result_type=StepResult,
-            task_queue=CONTROL_QUEUE,
-            start_to_close_timeout=CI_TIMEOUT + CI_ACTIVITY_SLACK,
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=INFRA_RETRY,
-        )
+        result = await self._activity(WAIT_FOR_CI, spec, StepResult)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result
 
@@ -200,7 +188,7 @@ class PullRequestSteps:
         if not prs:
             return "refused"
         spec = MergeChangeSetInput(run_id=self.input.run_id, prs=list(prs), method=method)
-        merged: MergeResult = await self._control(MERGE_CHANGE_SET, spec, str)  # type: ignore[assignment]
+        merged: MergeResult = await self._activity(MERGE_CHANGE_SET, spec, str)  # type: ignore[assignment]
         self.merged_by_fact = self.merged_by_fact or merged == "merged"
         return merged
 
@@ -238,16 +226,8 @@ class PullRequestSteps:
         return RunOutcome.MERGED if merged else RunOutcome.CLOSED
 
     async def _pr_states(self: FactWorkflow, prs: Sequence[PRRef]) -> list[PRState]:
-        return await workflow.execute_activity(
-            WAIT_FOR_PR_CLOSED,
-            WaitForPRClosedInput(run_id=self.input.run_id, prs=list(prs)),
-            result_type=list[PRState],
-            task_queue=CONTROL_QUEUE,
-            start_to_close_timeout=REVIEW_TIMEOUT,
-            schedule_to_close_timeout=REVIEW_TIMEOUT,
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=LONG_WAIT_RETRY,
-        )
+        spec = WaitForPRClosedInput(run_id=self.input.run_id, prs=list(prs))
+        return await self._activity(WAIT_FOR_PR_CLOSED, spec, list[PRState])
 
     async def _end_review(
         self: FactWorkflow, gate: OpenGate, step_id: str | None, decision: GateDecision, note: str

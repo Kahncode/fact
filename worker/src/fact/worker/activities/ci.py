@@ -1,7 +1,7 @@
 """
 `wait_for_ci`: wait for CI on a PR's head commit, as a `github` step, and report whether it passed.
 
-Polls the commit's check runs and commit statuses every `poll_interval_s`, heartbeating, until all are complete on two
+Polls the commit's check runs and commit statuses every `poll_interval_s` until all are complete on two
 polls in a row or `timeout_s` passes; a transient GitHub error only skips a poll. On a timeout, checks that already
 failed are reported as failures, else the step says `timed_out`. A failed GitHub Actions job's log goes to the artifact store; its last `TAIL_BYTES` go in the
 step's `outputs["failures"]` (and as much as fits in its summary), for the fix session. While no check has
@@ -20,6 +20,7 @@ from fact.core.enums import StepKind, StepOutcome
 from fact.core.github import GitHubApp, GitHubError
 from fact.core.types import SUMMARY_MAX_BYTES, PRRef, StepResult, limit_text
 from fact.worker.ci_checks import CICheck, job_log, list_checks
+from fact.worker.heartbeats import previous_details, report
 from fact.worker.pull_requests import merge_state
 from fact.worker.reporting import StepContext, StepReporter
 from temporalio import activity
@@ -40,17 +41,11 @@ def _tail(text: str) -> str:
 
 
 def _started_at() -> float:
-    """Wall-clock start of the wait, kept in the heartbeat so a retried attempt keeps the same deadline."""
-    if activity.in_activity():
-        details = activity.info().heartbeat_details
-        if details and isinstance(details[0], int | float):
-            return float(details[0])
-    return time.time()
-
-
-def _heartbeat(started: float) -> None:
-    if activity.in_activity():
-        activity.heartbeat(started)
+    """Wall-clock start of the wait, reported to the heartbeats so a retried attempt keeps the same deadline."""
+    details = previous_details()
+    started = float(details[0]) if details and isinstance(details[0], int | float) else time.time()
+    report(started)
+    return started
 
 
 def _summary(failures: list[dict[str, Any]], total: int, sha: str) -> str:
@@ -101,16 +96,15 @@ class CIActivities:
                 checks = polled
                 done = bool(checks) and all(c.done for c in checks)
                 if done and done_before:  # twice in a row: suites that start late (`needs:`, other workflows) had time
-                    await self._finish(github, spec, step, checks, started)
+                    await self._finish(github, spec, step, checks)
                     return
                 done_before = done
                 if not checks and await self._no_checks(github, spec, step, waited):
                     return
             if waited >= spec.timeout_s:
-                await self._finish(github, spec, step, checks, started, waited=waited)
+                await self._finish(github, spec, step, checks, waited=waited)
                 return
             step.log(f"{sum(not c.done for c in checks)} of {len(checks)} checks pending after {waited:.0f}s")
-            _heartbeat(started)
             await asyncio.sleep(self._poll_s)
 
     @staticmethod
@@ -163,13 +157,12 @@ class CIActivities:
             step.log(f"polling CI failed, trying again: {type(exc).__name__}: {exc}")
         return None
 
-    async def _finish(  # noqa: PLR0913 - the wait's state, passed down
+    async def _finish(
         self,
         github: GitHubApp,
         spec: WaitForCIInput,
         step: StepContext,
         checks: list[CICheck],
-        started: float,
         *,
         waited: float = 0,
     ) -> None:
@@ -190,7 +183,6 @@ class CIActivities:
         async with github.api_client(token.token) as client:
             failures = []
             for i, check in enumerate(failed):
-                _heartbeat(started)  # log downloads can take a while
                 failures.append(await self._failure(client, spec, step, check, fetch=i < MAX_LOGS))
         outputs = {"head_sha": spec.pr.head_sha, "checks": len(checks), "failures": failures, "pending": pending}
         step.finish(StepOutcome.FAILED_CHECKS, _summary(failures, len(checks), spec.pr.head_sha), outputs)

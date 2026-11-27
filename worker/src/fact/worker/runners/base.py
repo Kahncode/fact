@@ -39,6 +39,8 @@ class RunnerCapabilities:
 
 
 class Runner(Protocol):
+    task_queue: str  # the queue its handles name: the workers that reach its workspaces poll it
+
     async def prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
         """Create the run's workspace: one checkout per repository on its task branch."""
         ...

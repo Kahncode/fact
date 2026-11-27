@@ -128,7 +128,9 @@ def _input(run_id: str, worktree: Path, branch: str = BRANCH) -> OpenChangeSetIn
     return OpenChangeSetInput(
         run_id=run_id,
         task=task,
-        handle=WorkspaceHandle(run_id=run_id, root=str(worktree.parent), repos={FULL_NAME: str(worktree)}),
+        handle=WorkspaceHandle(
+            run_id=run_id, root=str(worktree.parent), task_queue="sandbox", repos={FULL_NAME: str(worktree)}
+        ),
         branch=branch,
         title="Open the PR",
         summary="Pushes and opens.",
@@ -259,7 +261,9 @@ async def test_restart_after_a_stop_reuses_the_branch_and_the_pr(  # noqa: PLR09
     _commit(stopped, "one.txt")
     (pr,) = await ActivityEnvironment().run(activities.open_change_set, _input(run_id, stopped))
     runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri())
-    await runner.teardown(WorkspaceHandle(run_id=run_id, root=str(stopped.parent), repos={FULL_NAME: str(stopped)}))
+    await runner.teardown(
+        WorkspaceHandle(run_id=run_id, root=str(stopped.parent), task_queue="sandbox", repos={FULL_NAME: str(stopped)})
+    )
 
     body = {"workflow_id": "wf-2", "project": "fact", "task_key": "task:M1-11", "workflow_type": "standard"}
     restart = (await client.post("/api/v1/runs", json=body)).json()["id"]

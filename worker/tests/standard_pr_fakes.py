@@ -47,9 +47,11 @@ class FakePRSteps:
     sync_script: list[SyncScript] = field(default_factory=list)  # first `sync_base` results, then `up_to_date`
     signals: list[ClassifySignal] = field(default_factory=list)  # what `classify_signals` raises
     calls: list[tuple[str, object]] = field(default_factory=list)
+    queues: list[tuple[str, str]] = field(default_factory=list)  # (activity, the task queue it ran on)
 
     def _call(self, name: str, spec: object) -> None:
         self.calls.append((name, spec))
+        self.queues.append((name, activity.info().task_queue))
         if name == self.broken:
             msg = f"{name} is broken"
             raise ApplicationError(msg, non_retryable=True)

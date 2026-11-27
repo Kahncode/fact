@@ -4,7 +4,7 @@ The run's task, as a mixin of `FactWorkflow`: tell its source what the run is do
 Each event goes through the `report_status` control activity, which applies it as `fact.core.tasks.events` says
 (labels, comments, PR links, closing the issue). Reporting is best effort: a tracker outage must not fail a run.
 
-`TaskStatusSteps` uses the workflow's `input`, `handle`, `raise_if_stopped`, `notify` and `_control`. A run end that
+`TaskStatusSteps` uses the workflow's `input`, `handle`, `raise_if_stopped`, `notify` and `_activity`. A run end that
 holds the task (`fact.core.holds.HELD_ENDS`) also sends a `task_held` notification, once per run (`<run id>:held`).
 """
 
@@ -54,7 +54,7 @@ class TaskStatusSteps:
             prs=list(prs),
         )
         try:
-            await self._control(REPORT_STATUS, spec, type(None))
+            await self._activity(REPORT_STATUS, spec, type(None))
         except ActivityError as exc:
             self.raise_if_stopped()  # a stop that cancelled the report must still stop the run
             workflow.logger.warning("report_status %s failed for run %s: %s", event, run.run_id, exc.cause or exc)
@@ -75,4 +75,4 @@ class TaskStatusSteps:
         """Record the task's completion in a commit on the branch (a file task's file); False when nothing to do."""
         run = self.input
         spec = MarkTaskDoneInput(run_id=run.run_id, task=run.task, handle=self.handle, home_repo=run.home_repo)
-        return await self._control(MARK_TASK_DONE, spec, bool)
+        return await self._activity(MARK_TASK_DONE, spec, bool)

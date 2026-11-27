@@ -1,16 +1,14 @@
 """
 Workspace activities.
 
-`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`. It
-heartbeats, so a retry starts only once Temporal has given up on (and cancelled) a stale attempt.
+`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`. Like every
+activity it heartbeats (the worker's wrapper), so a retry starts only once Temporal has given up on (and cancelled) a
+stale attempt.
 
 `sync_base`: merge each repository's default branch into the run's branch, reported as a `shell` step.
 
 `teardown_workspace`: remove it once the run's work is pushed; bookkeeping, not reported as a step.
 """
-
-import asyncio
-import contextlib
 
 from fact.core.activity_contract import PREPARE_WORKSPACE, SYNC_BASE, TEARDOWN_WORKSPACE, SyncBaseInput
 from fact.core.enums import StepKind, StepOutcome
@@ -23,14 +21,6 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 PREPARE_STAGE = "prepare"
-HEARTBEAT_S = 30.0
-
-
-async def _heartbeats(stage_id: str) -> None:
-    while True:
-        await asyncio.sleep(HEARTBEAT_S)
-        if activity.in_activity():
-            activity.heartbeat(f"{stage_id} running")
 
 
 class WorkspaceActivities:
@@ -43,13 +33,7 @@ class WorkspaceActivities:
         attempt = activity.info().attempt if activity.in_activity() else 1
         async with self._reporter.step(spec.run_id, PREPARE_STAGE, StepKind.SHELL, attempt) as step:
             step.log(f"preparing workspace for {spec.task_key}: {', '.join(r.full_name for r in spec.repos)}")
-            beat = asyncio.create_task(_heartbeats(PREPARE_STAGE))  # a stale attempt is cancelled at its next beat
-            try:
-                handle = await self._runner.prepare(spec)
-            finally:
-                beat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await beat
+            handle = await self._runner.prepare(spec)  # a stale attempt is cancelled at its next heartbeat
             for repo in spec.repos:
                 branch = handle.branches.get(repo.full_name, repo.branch)
                 taken = f" ({repo.branch} is checked out by another workspace)" if branch != repo.branch else ""
@@ -64,18 +48,13 @@ class WorkspaceActivities:
 
         `outputs.merged` lists the repositories that got a merge commit, `outputs.conflicts` the unmerged paths per
         repository; a conflicting merge stays in progress for an agent to resolve. A failed fetch is retried; the merge
-        failing another way (a dirty worktree, a missing branch) is not: it needs a person. It heartbeats, so an attempt
+        failing another way (a dirty worktree, a missing branch) is not: it needs a person. It heartbeats (the worker's
+        wrapper), so an attempt
         is only abandoned when its worker is gone or stuck, and Temporal then cancels it at its next heartbeat; no
         in-process lock, which a retry on another worker or after a restart would not see.
         """
         async with self._reporter.step(spec.run_id, spec.stage_id, StepKind.SHELL, spec.attempt) as step:
-            beat = asyncio.create_task(_heartbeats(spec.stage_id))
-            try:
-                await self._sync(spec, step)
-            finally:
-                beat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await beat
+            await self._sync(spec, step)
         if step.result is None:
             msg = "step ended without a result"
             raise RuntimeError(msg)

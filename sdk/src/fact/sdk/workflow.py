@@ -17,11 +17,9 @@ from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
-        CONTROL_QUEUE,
         PREPARE_WORKSPACE,
         RECORD_RUN_FINISHED,
         RECORD_RUN_STARTED,
-        SANDBOX_QUEUE,
         SHELL_STEP,
         TEARDOWN_WORKSPACE,
         Check,
@@ -35,12 +33,12 @@ with workflow.unsafe.imports_passed_through():
     )
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+    from fact.sdk.activities import call_activity
     from fact.sdk.agents import AgentSteps
     from fact.sdk.base_sync import BaseSyncSteps
     from fact.sdk.classify import ClassifySteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
-    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, WAIT_CANCELLED
     from fact.sdk.pull_requests import PullRequestSteps
     from fact.sdk.stages import Stage, stages
     from fact.sdk.stop import StopSteps
@@ -49,6 +47,7 @@ with workflow.unsafe.imports_passed_through():
 __all__ = ["CONTEXT_MAX_BYTES", "FactWorkflow", "Stage", "failure_context", "stages"]
 
 # the work is pushed (or no longer wanted), so the workspace goes; any other end leaves it on disk, holding its branch
+SHELL_SLACK_S = 60  # on top of the check's own timeout, for reporting the step
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
@@ -144,7 +143,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
             return self._handle
         run = self.input
         spec = WorkspaceSpec(run_id=run.run_id, task_key=run.task.key, repos=run.repos)
-        self._handle = await self._control(PREPARE_WORKSPACE, spec, WorkspaceHandle, heartbeats=True)
+        self._handle = await self._activity(PREPARE_WORKSPACE, spec, WorkspaceHandle)
         return self._handle
 
     async def setup(self, stage_id: str = "setup") -> StepResult | None:
@@ -203,44 +202,24 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
             check=check,
             timeout_s=run.limits.shell_timeout_s,
         )
-        result = await workflow.execute_activity(
-            SHELL_STEP,
-            spec,
-            result_type=StepResult,
-            task_queue=SANDBOX_QUEUE,
-            start_to_close_timeout=timedelta(seconds=run.limits.shell_timeout_s + 60),
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=INFRA_RETRY,
-            cancellation_type=WAIT_CANCELLED,
-        )
+        duration = timedelta(seconds=run.limits.shell_timeout_s + SHELL_SLACK_S)
+        result = await self._activity(SHELL_STEP, spec, StepResult, max_duration=duration)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result
 
-    async def _control[T](self, name: str, arg: object, result_type: type[T], *, heartbeats: bool = False) -> T:
-        """
-        Run a control activity on the control queue.
-
-        With `heartbeats`, an attempt whose worker is gone times out after `HEARTBEAT_TIMEOUT`,
-        and a cancelled one is awaited until it has stopped, so a retry never overlaps a stale attempt's work.
-        """
+    async def _activity[T](
+        self, name: str, arg: object, result_type: type[T], *, max_duration: timedelta | None = None
+    ) -> T:
+        """Run activity `name` as its spec says (`fact.sdk.activities`), unless the run was stopped."""
         self.raise_if_stopped()
-        return await workflow.execute_activity(
-            name,
-            arg,
-            result_type=result_type,
-            task_queue=CONTROL_QUEUE,
-            start_to_close_timeout=timedelta(seconds=self.input.limits.control_timeout_s),
-            heartbeat_timeout=HEARTBEAT_TIMEOUT if heartbeats else None,
-            retry_policy=INFRA_RETRY,
-            cancellation_type=WAIT_CANCELLED if heartbeats else workflow.ActivityCancellationType.TRY_CANCEL,
-        )
+        return await call_activity(name, arg, result_type, handle=self._handle, max_duration=max_duration)
 
     async def _teardown(self) -> None:
         """Best effort: a workspace left behind only takes disk space."""
         if self._handle is None:
             return
         try:
-            await self._control(TEARDOWN_WORKSPACE, self._handle, type(None))
+            await self._activity(TEARDOWN_WORKSPACE, self._handle, type(None))
         except ActivityError as exc:
             workflow.logger.warning("teardown failed for run %s: %s", self._handle.run_id, exc.cause or exc)
 
@@ -249,6 +228,6 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
     ) -> None:
         """Bookkeeping and evidence are best effort: an API or GitHub outage must not fail a run that did its work."""
         try:
-            await self._control(name, arg, type(None))
+            await self._activity(name, arg, type(None))
         except ActivityError as exc:
             workflow.logger.warning("%s failed for run %s: %s", name, arg.run_id, exc.cause or exc)

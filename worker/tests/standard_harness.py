@@ -16,7 +16,6 @@ from fact.core.activity_contract import (
     RECORD_RUN_STARTED,
     RECORD_RUN_WAITING,
     REPORT_STATUS,
-    SANDBOX_QUEUE,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
     WRITE_HANDOFF,
@@ -36,9 +35,10 @@ from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
 from fact.sdk.pull_requests import REVIEW_STAGE
+from fact.worker.activity_workers import by_zone
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
-from standard_env import OPTIONS, WORKFLOW_QUEUE, load_standard
+from standard_env import OPTIONS, RUNNER_QUEUE, WORKFLOW_QUEUE, load_standard
 from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, LOW_RISK, run_input
 from standard_pr_fakes import FakePRSteps
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
@@ -122,7 +122,7 @@ class FakeActivities(FakePRSteps):
         root = f"/ws/{spec.run_id}"
         repos = {r.full_name: f"{root}/widget" for r in spec.repos}
         branches = dict.fromkeys(repos, self.checked_out)
-        return WorkspaceHandle(run_id=spec.run_id, root=root, repos=repos, branches=branches)
+        return WorkspaceHandle(run_id=spec.run_id, root=root, task_queue=RUNNER_QUEUE, repos=repos, branches=branches)
 
     @activity.defn(name=TEARDOWN_WORKSPACE)
     async def teardown_workspace(self, handle: WorkspaceHandle) -> None:
@@ -179,7 +179,7 @@ class FakeActivities(FakePRSteps):
 
 @asynccontextmanager
 async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> AsyncIterator[None]:
-    control = [
+    activities = [
         fakes.record_run_started,
         fakes.record_run_finished,
         fakes.record_run_waiting,
@@ -199,15 +199,19 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.notify,
         fakes.write_handoff,
         fakes.report_status,
+        fakes.agent_step,
+        fakes.shell_step,
     ]
+    zones = by_zone(activities)  # each fake on the queue of its spec's zone, as the worker registers the real ones
     async with AsyncExitStack() as stack:
         workflows = Worker(
             client, task_queue=WORKFLOW_QUEUE, workflows=[workflow_cls], workflow_runner=sandbox_runner(), **OPTIONS
         )
         await stack.enter_async_context(workflows)
-        await stack.enter_async_context(Worker(client, task_queue=CONTROL_QUEUE, activities=control, **OPTIONS))
-        sandbox = [fakes.agent_step, fakes.shell_step]
-        await stack.enter_async_context(Worker(client, task_queue=SANDBOX_QUEUE, activities=sandbox, **OPTIONS))
+        control = Worker(client, task_queue=CONTROL_QUEUE, activities=zones["control"], **OPTIONS)
+        await stack.enter_async_context(control)
+        workspace = Worker(client, task_queue=RUNNER_QUEUE, activities=zones["workspace"], **OPTIONS)
+        await stack.enter_async_context(workspace)
         yield
 
 

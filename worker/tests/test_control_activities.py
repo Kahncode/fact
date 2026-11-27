@@ -66,7 +66,9 @@ def _spec(worktree: Path, key: str = "task:M1-99") -> MarkTaskDoneInput:
     task_id = key.removeprefix("task:")
     path = TASK_PATH if task_id == "M1-99" else None
     task = Task(key=key, id=task_id, title="Add a widget", path=path)
-    handle = WorkspaceHandle(run_id="run-1", root=str(worktree.parent), repos={REPO: str(worktree)})
+    handle = WorkspaceHandle(
+        run_id="run-1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)}
+    )
     return MarkTaskDoneInput(run_id="run-1", task=task, handle=handle)
 
 
@@ -89,7 +91,9 @@ async def test_mark_task_done_deletes_the_task_file(worktree: Path, client: Asyn
 async def test_mark_task_done_skips_an_issue(worktree: Path, client: AsyncClient) -> None:
     head = _git("rev-parse", "HEAD", cwd=worktree)
     task = Task(key="gh:acme/app#12", id="12", title="An issue")
-    handle = WorkspaceHandle(run_id="run-1", root=str(worktree.parent), repos={REPO: str(worktree)})
+    handle = WorkspaceHandle(
+        run_id="run-1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)}
+    )
     spec = MarkTaskDoneInput(run_id="run-1", task=task, handle=handle)
     assert await ControlActivities(BASE, client).mark_task_done(spec) is False
     assert _git("rev-parse", "HEAD", cwd=worktree) == head

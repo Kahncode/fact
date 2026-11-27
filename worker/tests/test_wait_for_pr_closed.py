@@ -56,23 +56,17 @@ def private_key() -> str:
     ).decode()
 
 
-async def _wait(
-    fake: FakeGitHub, private_key: str, prs: list[PRRef], env: ActivityEnvironment | None = None
-) -> list[str]:
+async def _wait(fake: FakeGitHub, private_key: str, prs: list[PRRef]) -> list[str]:
     github = GitHubApp(1, private_key, api_url="https://gh.test", transport=httpx.MockTransport(fake.handle))
     activities = PRStateActivities(github, poll_interval_s=0)
     spec = WaitForPRClosedInput(run_id="r", prs=prs)
-    return await (env or ActivityEnvironment()).run(activities.wait_for_pr_closed, spec)
+    return await ActivityEnvironment().run(activities.wait_for_pr_closed, spec)
 
 
-async def test_open_then_merged_heartbeating_while_open(private_key: str) -> None:
+async def test_open_then_merged(private_key: str) -> None:
     fake = FakeGitHub(polls={7: [OPEN, OPEN, MERGED]})
-    env = ActivityEnvironment()
-    beats: list[tuple] = []
-    env.on_heartbeat = lambda *details: beats.append(details)
-    assert await _wait(fake, private_key, [_pr(7)], env) == ["merged"]
+    assert await _wait(fake, private_key, [_pr(7)]) == ["merged"]
     assert fake.seen == [7, 7, 7]
-    assert len(beats) == len(fake.seen) - 1  # once per poll that found it open
 
 
 async def test_each_pr_is_polled_until_it_ends(private_key: str) -> None:

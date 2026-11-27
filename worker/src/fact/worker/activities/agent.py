@@ -1,7 +1,6 @@
 """`agent_step`: run a coding agent on a rendered project prompt in the run's workspace, as a reported step."""
 
 import asyncio
-import contextlib
 import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -15,13 +14,13 @@ from fact.core.settings import Settings, get_settings
 from fact.core.types import Route, StepResult
 from fact.worker.harnesses import Harness, HarnessError, HarnessRequest, HarnessResult
 from fact.worker.harnesses.claude_code_usage import StreamUsage
+from fact.worker.heartbeats import report
 from fact.worker.prompts import PromptError, output_schema, render_prompt, render_resume
 from fact.worker.reporting import TRANSCRIPT_NAME, StepContext, StepReporter
 from fact.worker.routing import choose
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-HEARTBEAT_S = 30.0
 OUTPUTS_MAX_BYTES = 64 * 1024  # outputs travel in the Temporal payload; anything bigger belongs in an artifact
 __all__ = ["AgentActivities", "AgentStepInput"]
 
@@ -31,15 +30,18 @@ USAGE_ACCOUNT = "claude"  # one subscription account until runner pools give eac
 
 class _Progress:
     """
-    Counts assistant turns from the harness's message stream, for heartbeats, and keeps the session id.
+    Counts assistant turns from the harness's message stream and keeps the session id, for the worker's heartbeats.
 
-    It also keeps the usage the messages reported, recorded if the session is cut short before its final report.
+    Both go to the heartbeats as `(progress, session_id)`: the session id lets the workflow resume the session if
+    this worker dies (see AGENT_INTERRUPTED). It also keeps the usage the messages reported, recorded if the session
+    is cut short before its final report.
 
     Claude Code can send one `assistant` message per content block, all with the same `message.id`, so a turn is a
     distinct id; a message without one counts on its own.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, stage_id: str) -> None:
+        self.stage_id = stage_id
         self.turns = 0
         self.session_id: str | None = None
         self.stream = StreamUsage()
@@ -49,21 +51,19 @@ class _Progress:
         if isinstance(sid := message.get("session_id"), str):
             self.session_id = sid
         self.stream.add(message)
-        if message.get("type") != "assistant":
-            return
+        if message.get("type") == "assistant":
+            self._count(message)
+        self.report()
+
+    def report(self) -> None:
+        report(f"{self.stage_id}: {self.turns} turns", self.session_id)
+
+    def _count(self, message: dict[str, Any]) -> None:
         inner = message.get("message")
         message_id = inner.get("id") if isinstance(inner, dict) else None
         if message_id is None or message_id != self._last_id:
             self.turns += 1
         self._last_id = message_id
-
-
-async def _heartbeats(stage_id: str, progress: _Progress) -> None:
-    while True:
-        await asyncio.sleep(HEARTBEAT_S)
-        if activity.in_activity():
-            # The session id lets the workflow resume the session if this worker dies (see AGENT_INTERRUPTED).
-            activity.heartbeat(f"{stage_id}: {progress.turns} turns", progress.session_id)
 
 
 def _denied(result: HarnessResult) -> str:
@@ -143,7 +143,8 @@ class AgentActivities:
             model=route.model,
             name=spec.prompt_name,
         )
-        progress = _Progress()
+        progress = _Progress(spec.stage_id)
+        progress.report()
         try:
             async with reporter as step:
                 await self._run(spec, route, step, progress)
@@ -177,7 +178,6 @@ class AgentActivities:
         step.log(f"{spec.stage_id}: {route.harness} / {route.model}, prompt {spec.prompt_name!r}, cwd {root}")
         if spec.resume_session_id:
             step.log(f"resuming session {spec.resume_session_id}: {spec.context}")
-        beat = asyncio.create_task(_heartbeats(spec.stage_id, progress))
         try:
             result = await harness.run(request, transcript, progress.on_message)
             step.reported_usage = result.usage  # kept if the step is cancelled before `_finish`
@@ -189,9 +189,6 @@ class AgentActivities:
             step.reported_usage = progress.stream.usage()  # cancelled or crashed: keep what the messages reported
             raise
         finally:
-            beat.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await beat
             if transcript.exists():
                 await step.attach_transcript(transcript)
         if result.usage_windows.windows:

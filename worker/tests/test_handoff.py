@@ -60,7 +60,9 @@ def workspace(tmp_path: Path, run_id: str) -> WorkspaceHandle:
     prompts = tmp_path / "ws" / "widget" / ".fact" / "prompts"
     prompts.mkdir(parents=True)
     (prompts / "implement.md").write_text("Implement $task_id.\n\n$handoff", encoding="utf-8")
-    return WorkspaceHandle(run_id=run_id, root=str(tmp_path / "ws"), repos={REPO: str(prompts.parents[1])})
+    return WorkspaceHandle(
+        run_id=run_id, root=str(tmp_path / "ws"), task_queue="sandbox", repos={REPO: str(prompts.parents[1])}
+    )
 
 
 def _agent(client: AsyncClient, tmp_path: Path, settings: Settings, harness: FakeHarness) -> AgentActivities:
