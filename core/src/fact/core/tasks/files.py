@@ -8,7 +8,7 @@ from typing import Any
 
 import yaml
 from fact.core.logging import get_logger
-from fact.core.tasks.base import FILE_PREFIX, ReadyItem
+from fact.core.tasks.base import FILE_PREFIX, ReadyItem, TaskStatus
 from fact.core.types import PRRef, Task
 from pydantic import ValidationError
 
@@ -286,6 +286,9 @@ class FileTaskSource:
     async def link_prs(self, key: str, prs: list[PRRef]) -> None:
         urls = [pr.url for pr in prs]
         log.info("task_write_back_skipped", source="files", action="link_prs", task_key=key, prs=urls)
+
+    async def advance_status(self, key: str, status: TaskStatus) -> None:
+        log.info("task_write_back_skipped", source="files", action="advance_status", task_key=key, status=status)
 
     async def close(self, key: str) -> None:
         log.info("task_write_back_skipped", source="files", action="close", task_key=key)

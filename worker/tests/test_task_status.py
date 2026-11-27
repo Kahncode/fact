@@ -7,6 +7,7 @@ import pytest
 from fact.core.activity_contract import ReportStatusInput, TaskEvent
 from fact.core.github import GitHubError
 from fact.core.settings import ProjectRef, Settings
+from fact.core.tasks import TaskStatus
 from fact.core.tasks.events import NEEDS_HUMAN, RUNNING, report
 from fact.core.types import PRRef
 from fact.worker.activities import task_status
@@ -41,6 +42,9 @@ class FakeSource:
     async def link_prs(self, key: str, prs: list[PRRef]) -> None:
         self.calls.append(("link_prs", (key, prs)))
 
+    async def advance_status(self, key: str, status: TaskStatus) -> None:
+        self.calls.append(("advance_status", (key, status)))
+
     async def close(self, key: str) -> None:
         self.calls.append(("close", key))
 
@@ -65,11 +69,15 @@ HELD = ("set_labels", (KEY, [NEEDS_HUMAN], [RUNNING]))
         (
             "run_started",
             {"run_url": "http://ui/runs/r1"},
-            [("set_labels", (KEY, [RUNNING], [])), ("comment", (KEY, "http://ui/runs/r1"))],
+            [
+                ("set_labels", (KEY, [RUNNING], [])),
+                ("comment", (KEY, "http://ui/runs/r1")),
+                ("advance_status", (KEY, TaskStatus.in_progress)),
+            ],
         ),
         ("gate_opened", {"detail": "approve the plan"}, [("set_labels", (KEY, [NEEDS_HUMAN], [])), ("comment", None)]),
         ("gate_answered", {}, [("set_labels", (KEY, [], [NEEDS_HUMAN]))]),
-        ("prs_opened", {"prs": [PR]}, [("link_prs", (KEY, [PR]))]),
+        ("prs_opened", {"prs": [PR]}, [("link_prs", (KEY, [PR])), ("advance_status", (KEY, TaskStatus.in_review))]),
         ("merged", {}, [("close", KEY), ENDED]),
         ("closed", {"detail": "superseded"}, [HELD, ("comment", None)]),
         ("stopped", {"detail": "superseded"}, [HELD, ("comment", None)]),

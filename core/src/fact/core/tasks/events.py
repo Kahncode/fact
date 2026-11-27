@@ -1,14 +1,15 @@
 """
-What each run event does to the task in its source: labels, comments, PR links and closing.
+What each run event does to the task in its source: labels, comments, PR links, status and closing.
 
 The `report_status` activity calls `report`; a source that keeps no state of its own (files) only logs each write.
 A run end the scheduler does not retry (`HELD_ENDS`) holds the task: `hold` adds `fact:needs-human`, keeps
 `fact:ready`, and comments why and how to release it. No event removes `fact:needs-human` but a gate's answer.
+Only `run_started` (to in progress) and `prs_opened` (to in review) move the status, after the event's other writes.
 """
 
 from fact.core.activity_contract import ReportStatusInput
 from fact.core.holds import HELD_ENDS, NEEDS_HUMAN, held_text
-from fact.core.tasks.base import TaskSource
+from fact.core.tasks.base import TaskSource, TaskStatus
 
 __all__ = ["NEEDS_HUMAN", "RUNNING", "hold", "report"]
 
@@ -32,6 +33,7 @@ async def report(source: TaskSource, spec: ReportStatusInput) -> None:
         case "run_started":
             await source.set_labels(key, add=[RUNNING], remove=[])
             await source.comment(key, f"fact started run {_run_link(spec)}.")
+            await source.advance_status(key, TaskStatus.in_progress)
         case "gate_opened":
             await source.set_labels(key, add=[NEEDS_HUMAN], remove=[])
             await source.comment(key, f"Run {_run_link(spec)} is waiting for you: {spec.detail or 'a gate is open'}.")
@@ -39,6 +41,7 @@ async def report(source: TaskSource, spec: ReportStatusInput) -> None:
             await source.set_labels(key, add=[], remove=[NEEDS_HUMAN])
         case "prs_opened":
             await source.link_prs(key, spec.prs)
+            await source.advance_status(key, TaskStatus.in_review)
         case "merged":
             await source.close(key)
             await source.set_labels(key, add=[], remove=[RUNNING, NEEDS_HUMAN])

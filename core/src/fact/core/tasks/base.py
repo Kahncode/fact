@@ -8,6 +8,7 @@ does not care whether a task is a file or an issue. Keys carry their source: `ta
 
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -24,6 +25,28 @@ _FILE_KEY_RE = re.compile(r"^task:([A-Za-z0-9][A-Za-z0-9._-]*)$")
 _GITHUB_KEY_RE = re.compile(r"^gh:([A-Za-z0-9-]+/(?!\.{1,2}#)[A-Za-z0-9._-]+)#([1-9]\d*)$")
 
 SourceKind = Literal["task", "gh"]
+
+
+class TaskStatus(StrEnum):
+    """
+    Where a task stands in its tracker's workflow, in order (`05-domain-model.md`); only shown to people.
+
+    fact moves a task forward to `in_progress` and `in_review` and never reads the status to decide anything. The
+    last three are where closing the task leaves it, all equally far on.
+    """
+
+    backlog = "backlog"
+    todo = "todo"
+    in_progress = "in_progress"
+    in_review = "in_review"
+    done = "done"
+    not_planned = "not_planned"
+    duplicate = "duplicate"
+
+    @property
+    def rank(self) -> int:
+        """Position in the workflow: a task only moves to a higher rank."""
+        return min(list(TaskStatus).index(self), list(TaskStatus).index(TaskStatus.done))
 
 
 @dataclass(frozen=True)
@@ -120,6 +143,14 @@ class TaskSource(Protocol):
 
     async def write_context(self, key: str, section: str) -> None:
         """Replace the factory's own section of the task (never the person's text) with `section`."""
+        ...
+
+    async def advance_status(self, key: str, status: TaskStatus) -> None:
+        """
+        Move the task's status forward to `status`, never back nor over one further on; best effort, never raises.
+
+        A source without statuses only logs it.
+        """
         ...
 
     async def link_prs(self, key: str, prs: list[PRRef]) -> None: ...

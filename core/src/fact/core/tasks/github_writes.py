@@ -1,5 +1,5 @@
 """
-The write-back half of the GitHub Issues task source: comments, labels, the factory's context section, closing.
+The write-back half of the GitHub Issues task source: comments, labels, status, the factory's context section, closing.
 
 `GitHubIssueWrites` is a mixin of `GitHubIssuesSource`, which provides `_client`. Each write goes to the repository
 the key names, with that repository's installation token; a key of another source is only logged.
@@ -11,9 +11,9 @@ from urllib.parse import quote
 
 import httpx
 from fact.core.github.app import split_full_name
-from fact.core.github.client import GitHubNotFoundError
+from fact.core.github.client import GitHubError, GitHubNotFoundError
 from fact.core.logging import get_logger
-from fact.core.tasks.base import parse_key
+from fact.core.tasks.base import TaskStatus, parse_key
 from fact.core.types import PRRef
 
 log = get_logger(__name__)
@@ -37,6 +37,56 @@ def with_context(body: str, section: str) -> str:
         return f"{body[: start + len(CONTEXT_START)]}\n{section}\n{body[end:]}"
     separator = "" if not body else "\n" if body.endswith("\n") else "\n\n"
     return f"{body}{separator}{CONTEXT_START}\n{section}\n{CONTEXT_END}\n"
+
+
+# GitHub's native issue statuses by name (`12-integrations.md`, "Issue status"), compared case-insensitively.
+NATIVE_STATUSES = {
+    "backlog": TaskStatus.backlog,
+    "todo": TaskStatus.todo,
+    "in progress": TaskStatus.in_progress,
+    "in review": TaskStatus.in_review,
+    "done": TaskStatus.done,
+    "not planned": TaskStatus.not_planned,
+    "duplicate": TaskStatus.duplicate,
+}
+_STATUSES_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) { planningStatuses(first: 20) { nodes { id name } } }
+}"""
+_SET_STATUS = """
+mutation($issueId: ID!, $statusId: ID!) {
+  setIssueStatus(input: {issueId: $issueId, statusId: $statusId}) { clientMutationId }
+}"""
+
+
+class NoNativeStatusesError(Exception):
+    """The repository has no native issue statuses, or not the one asked for."""
+
+
+async def _graphql(client: httpx.AsyncClient, query: str, variables: dict[str, str]) -> dict:
+    """Run a GraphQL query; GitHub answers 200 with `errors` when it fails, raised here as a `GitHubError`."""
+    body = (await client.post("/graphql", json={"query": query, "variables": variables})).json()
+    if errors := body.get("errors"):
+        if any(e.get("type") == "NOT_FOUND" for e in errors):
+            raise NoNativeStatusesError(errors[0].get("message", ""))
+        raise GitHubError(f"GitHub GraphQL failed: {errors[0].get('message', '')}"[:300])
+    return body.get("data") or {}
+
+
+async def _status_id(client: httpx.AsyncClient, repo: str, status: TaskStatus) -> str:
+    """Node id of the repository's planning status that maps to `status`."""
+    owner, name = split_full_name(repo)
+    data = await _graphql(client, _STATUSES_QUERY, {"owner": owner, "name": name})
+    nodes = ((data.get("repository") or {}).get("planningStatuses") or {}).get("nodes") or []
+    for node in nodes:
+        if NATIVE_STATUSES.get(str(node.get("name", "")).lower()) == status:
+            return str(node["id"])
+    raise NoNativeStatusesError(status)
+
+
+def _should_move(current: TaskStatus | None, target: TaskStatus) -> bool:
+    """Only forward: no status moves anywhere, a status only to one further on."""
+    return current is None or current.rank < target.rank
 
 
 def pr_list(prs: list[PRRef]) -> str:
@@ -96,6 +146,48 @@ class GitHubIssueWrites:
             if updated != body:
                 await client.patch(path, json={"body": updated})
         log.info("task_context_written", task_key=key, chars=len(section))
+
+    async def advance_status(self, key: str, status: TaskStatus) -> None:
+        """
+        Move the issue's native status forward to `status` (`_should_move`); never raises.
+
+        The status is only shown to people, so a failed write, or a repository without native statuses, only logs.
+        """
+        try:
+            async with self._issue_client(key, "advance_status") as issue:
+                if issue is None:
+                    return
+                client, path = issue
+                await self._advance(client, path, key, status)
+        except NoNativeStatusesError:
+            log.info("task_status_skipped", task_key=key, status=status, reason="no_native_statuses")
+        except (GitHubError, httpx.HTTPError) as exc:
+            log.warning("task_status_failed", task_key=key, status=status, error=str(exc))
+
+    @staticmethod
+    async def _advance(client: httpx.AsyncClient, path: str, key: str, status: TaskStatus) -> None:
+        try:
+            found = (await client.get(path)).json()
+        except GitHubNotFoundError as exc:
+            raise GitHubError(str(exc), exc.status_code) from exc  # no such issue: a failure, not missing statuses
+        if "status" not in found:
+            raise NoNativeStatusesError(key)
+        name = str((found["status"] or {}).get("name") or "").lower()
+        current = NATIVE_STATUSES.get(name) if name else None
+        if name and current is None:
+            log.info("task_status_skipped", task_key=key, status=status, reason="unknown_status", current=name)
+            return
+        if not _should_move(current, status):
+            log.info("task_status_kept", task_key=key, status=status, current=current)
+            return
+        repo = parse_key(key).repo
+        assert repo is not None  # noqa: S101 - `_issue_client` yields only GitHub issue keys
+        try:
+            status_id = await _status_id(client, repo, status)
+        except GitHubNotFoundError as exc:
+            raise NoNativeStatusesError(key) from exc
+        await _graphql(client, _SET_STATUS, {"issueId": str(found["node_id"]), "statusId": status_id})
+        log.info("task_status_advanced", task_key=key, status=status, previous=current)
 
     async def link_prs(self, key: str, prs: list[PRRef]) -> None:
         if prs:
