@@ -25,6 +25,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run black --check .
+      - run: uv run lint-imports
       # pytest-timeout fails a single deadlocked test after 60 s (pyproject.toml); this caps anything it misses,
       # which otherwise runs until GitHub's 6 h job limit. The full suite takes about 5 min.
       - run: uv run pytest

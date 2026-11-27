@@ -57,7 +57,7 @@ graph TD
 | fact.yaml | `@fact.yaml` | Exists | Global settings and project registry (one project: `fact`, home `Kahncode/fact`) |
 | scripts | `scripts/` | Exists | Python dev scripts; today only `scripts/tests/` (tests for the `.claude/hooks` scripts). The task loop was retired in M2-14: run every ready task with `fact dev` (the scheduler is on at every API start in dev). Every script is Python |
 | Agent tooling | `.agents/` | Exists | Canonical skills (`.agents/skills/`) and subagent definitions (`.agents/agents/`); the SessionStart hook `@.claude/hooks/project_dot_agents.py` projects them into the gitignored `.claude/skills` and `.claude/agents` (see `docs/decisions.md`) |
-| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, pytest (20 min step timeout); PRs on ubuntu, main on ubuntu and windows |
+| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, `lint-imports`, pytest (20 min step timeout); PRs on ubuntu, main on ubuntu and windows |
 | Work items | GitHub issues on `Kahncode/fact`, `tasks/` | Exists | fact's work is `fact:ready` issues since M2-12; `tasks/` keeps `backlog.md`, `README.md` (the task-file format for `task_source: files` projects) and the last bootstrap file task, M2-14 |
 | Design spec | `docs/spec/` | Exists | Design, one file per section |
 
@@ -229,7 +229,8 @@ Implemented choices are in effect now; the rest are specified in `docs/spec/13-s
 | Python 3.15, uv workspace | One lockfile; namespace packages `fact.*`; hatchling builds each package | In use |
 | pydantic-settings + `fact.yaml` | Layered config with `FACT_*` overrides; frozen settings avoid mutation after load | In use |
 | structlog | One `run_id` on every line, including third-party stdlib logs | In use |
-| ruff (`select = ALL`), black (120), pre-commit | Enforced style; CI runs ruff, black and pytest on Linux and Windows | In use |
+| ruff (`select = ALL`), black (120), pre-commit | Enforced style; CI runs ruff, black, `lint-imports` and pytest on Linux and Windows | In use |
+| import-linter | Package boundaries as `[tool.importlinter]` contracts in `pyproject.toml` (layers, clients never import `fact.sdk`, only `fact.core.tasks` imports `FileTaskSource`); `sdk/tests/test_workflow_imports.py` checks `.fact/workflows/` | In use |
 | pytest, pytest-asyncio (auto) | Per-package `tests/` | In use |
 | Temporal | Durable workflows; deterministic workflow code, side effects only in activities; project workflows only (the scheduler ticks in the API) | In use (dev server via `fact dev`; worker on `control` and `sandbox` queues and per-project `wf-<project>` queues with Worker Deployment Versioning, pinned) |
 | FastAPI, Pydantic v2 | Plain routers, typed models | In use (health, projects, runs, artifacts, run start, gates, steering and stop, notifications, scheduler) |
