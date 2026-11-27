@@ -2,6 +2,19 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "fact dev (follow main)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "fact.cli.main",
+      "args": ["dev", "--follow", "main"],
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": false,
+      "env": { "PYTHONUNBUFFERED": "1" }
+    },
+    {
       "name": "fact dev (pinned main)",
       "type": "debugpy",
       "request": "launch",

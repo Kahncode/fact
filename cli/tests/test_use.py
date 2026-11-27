@@ -45,11 +45,11 @@ def synced(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], Path]]:
     calls: list[tuple[list[str], Path]] = []
     real_run = use._run  # noqa: SLF001
 
-    def fake_run(argv: list[str], cwd: Path) -> str:
+    def fake_run(argv: list[str], cwd: Path, timeout: float | None = None) -> str:
         if argv[0] == "uv":
             calls.append((argv, cwd))
             return ""
-        return real_run(argv, cwd)
+        return real_run(argv, cwd, timeout)
 
     monkeypatch.setattr(use, "_run", fake_run)
     return calls

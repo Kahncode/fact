@@ -6,6 +6,7 @@ SHA out as a detached worktree at `pinned_dir/factory/<sha>`, `uv sync --locked`
 `pinned_dir/current`. Agents never work there: their worktrees live under `workspaces_dir`.
 """
 
+import os
 import re
 import shutil
 import stat
@@ -20,6 +21,9 @@ from fact.core.settings import REPO_ROOT, Settings, get_settings
 CURRENT_FILE = "current"
 FACTORY_SUBDIR = "factory"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+FETCH_TIMEOUT_S = 120.0
+# never wait on a credential prompt (terminal or Git Credential Manager's window): fail, and the caller retries
+NO_PROMPT = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
 
 
 class PinError(RuntimeError):
@@ -60,8 +64,22 @@ def sync_argv(uv: str) -> list[str]:
     return [uv, "sync", "--locked"]
 
 
-def _run(argv: list[str], cwd: Path) -> str:
-    result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=False)  # noqa: S603
+def _run(argv: list[str], cwd: Path, timeout: float | None = None) -> str:
+    try:
+        result = subprocess.run(  # noqa: S603
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            env={**os.environ, **NO_PROMPT},
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:  # a missing git or uv, or a fetch that hangs
+        msg = f"{' '.join(argv)} failed in {cwd}: {exc}"
+        raise PinError(msg) from exc
     if result.returncode != 0:
         msg = f"{' '.join(argv)} failed ({result.returncode}) in {cwd}: {(result.stderr or result.stdout).strip()}"
         raise PinError(msg)
@@ -110,10 +128,15 @@ def _checkout(repo: Path, checkout: Path, sha: str) -> None:
     _run(worktree_add_argv(checkout, sha), repo)
 
 
+def latest(ref: str, repo: Path = REPO_ROOT) -> str:
+    """Fetch `origin` and return the SHA `ref` names now."""
+    _run(fetch_argv(), repo, timeout=FETCH_TIMEOUT_S)
+    return resolve_ref(repo, ref)
+
+
 def pin(settings: Settings, ref: str, uv: str, repo: Path = REPO_ROOT) -> Path:
     """Fetch, check `ref` out under `pinned_dir/factory/<sha>`, sync it, point `current` at it; return the checkout."""
-    _run(fetch_argv(), repo)
-    sha = resolve_ref(repo, ref)
+    sha = latest(ref, repo)
     checkout = factory_checkout(settings, sha)
     _checkout(repo, checkout, sha)
     _run(sync_argv(uv), checkout)
