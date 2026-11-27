@@ -89,12 +89,12 @@ class TaskSource(Protocol):
     A source whose state lives elsewhere (a file task's lives in its file and in fact's DB) may only log the writes.
     """
 
-    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
+    async def list_ready(self, *, include_waiting: bool = False, close_parents: bool = False) -> list[ReadyItem]:
         """
         Tasks marked ready, not gated by an ancestor, whose dependencies are all done.
 
-        `include_waiting`: also the others (`waiting_on`, `gated_by`). `close_epics`: close the ready epics with nothing
-        left to wait on (only the scheduler's tick asks; epics are never listed).
+        `include_waiting`: also the others (`waiting_on`, `gated_by`). `close_parents`: close the ready parents without a
+        work type with nothing left to wait on (only the scheduler's tick asks; such parents are never listed).
         """
         ...
 

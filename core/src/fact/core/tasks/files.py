@@ -209,9 +209,9 @@ class FileTaskSource:
             if e.status == "ready" and all(self._dep_done(d, entries) for d in e.task.depends_on)
         ]
 
-    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
+    async def list_ready(self, *, include_waiting: bool = False, close_parents: bool = False) -> list[ReadyItem]:
         """Tasks with status `ready` and their dependency depth (`depths()`); unless `include_waiting`, deps all done."""
-        del close_epics  # file tasks have no epics
+        del close_parents  # file tasks have no sub-issues
 
         def read() -> list[ReadyItem]:
             entries, depths = self._entries(), self.depths()

@@ -78,8 +78,8 @@ async def test_tick_skips_a_start_the_api_refuses(
 ) -> None:
     real = scheduler.find_ready
 
-    async def stale(settings: Settings, session: AsyncSession, *, close_epics: bool = False) -> ReadyTasks:
-        ready = await real(settings, session, close_epics=close_epics)
+    async def stale(settings: Settings, session: AsyncSession, *, close_parents: bool = False) -> ReadyTasks:
+        ready = await real(settings, session, close_parents=close_parents)
         await add_run(client, 1, "task:M2-01")  # `fact run` lands after the tick's read
         return ready
 

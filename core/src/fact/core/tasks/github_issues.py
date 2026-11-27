@@ -9,8 +9,8 @@ issue's fields (type, complexity, priority, acceptance criteria, `Depends on` li
   closed for any reason is out of its parent's way, so only open ones are listed.
 - A parent's label gates its sub-issues, transitively: an issue is ready only when it and every ancestor carry
   `fact:ready` (`not_ready_ancestor`).
-- An epic (`type:epic`) never runs: once it is ready with nothing to wait on, `list_ready(close_epics=True)` comments
-  and closes it as completed.
+- A parent runs by its work type (`type:epic` is for people, never read): a parent without a work type never runs;
+  once it is ready with nothing to wait on, `list_ready(close_parents=True)` comments and closes it as completed.
 """
 
 from collections.abc import AsyncIterator
@@ -32,7 +32,7 @@ from fact.core.tasks.github_fields import (
     depends_on_lines,
     has_label,
     is_done,
-    is_epic,
+    is_parent_without_work,
     issue_key,
     label_names,
     priority,
@@ -48,9 +48,9 @@ __all__ = ["READY_LABEL", "GitHubIssuesSource", "acceptance_criteria", "complexi
 
 PER_PAGE = 100
 MAX_ANCESTORS = 16  # GitHub nests sub-issues 8 levels deep; the bound only guards against a cycle
-EPIC_CLOSED = (
-    "fact closed this epic as completed: it is `fact:ready` and none of its sub-issues is open. "
-    "An epic has no work of its own, so it never starts a run."
+PARENT_CLOSED = (
+    "fact closed this issue as completed: it is `fact:ready` and none of its sub-issues is open. "
+    "It has no work type (`type:feature`, `bug`, `chore` or `incident`), so it never starts a run."
 )
 
 
@@ -218,21 +218,21 @@ class GitHubIssuesSource(GitHubIssueWrites):
                 waiting.append(key)
         return tuple(waiting)
 
-    async def _close_epic(self, key: str) -> None:
+    async def _close_parent(self, key: str) -> None:
         try:
-            await self.comment(key, EPIC_CLOSED)
+            await self.comment(key, PARENT_CLOSED)
             await self.close(key)
         except (GitHubError, httpx.HTTPError) as exc:  # the next tick tries again
-            log.warning("epic_close_failed", task_key=key, error=str(exc))
+            log.warning("parent_close_failed", task_key=key, error=str(exc))
             return
-        log.info("epic_closed", task_key=key)
+        log.info("parent_closed", task_key=key)
 
-    async def list_ready(self, *, include_waiting: bool = False, close_epics: bool = False) -> list[ReadyItem]:
+    async def list_ready(self, *, include_waiting: bool = False, close_parents: bool = False) -> list[ReadyItem]:
         """
         Open `fact:ready` issues (not PRs) under ready ancestors whose dependencies are done (depth 0).
 
-        `include_waiting`: also the others, with `waiting_on` and `gated_by` set. Epics are never listed;
-        `close_epics` closes those with nothing left to wait on.
+        `include_waiting`: also the others, with `waiting_on` and `gated_by` set. Parents without a work type are never
+        listed; `close_parents` closes those with nothing left to wait on.
         """
         owner, name = split_full_name(self.repo)
         url = f"/repos/{owner}/{name}/issues?state=open&labels={READY_LABEL}&per_page={PER_PAGE}"
@@ -246,9 +246,9 @@ class GitHubIssuesSource(GitHubIssueWrites):
             item = ReadyItem(
                 task, waiting_on=await self._waiting_on(task), gated_by=await self.not_ready_ancestor(task.key)
             )
-            if is_epic(issue):
-                if close_epics and not item.waiting_on and item.gated_by is None:
-                    await self._close_epic(task.key)
+            if is_parent_without_work(issue):
+                if close_parents and not item.waiting_on and item.gated_by is None:
+                    await self._close_parent(task.key)
             elif include_waiting or (not item.waiting_on and item.gated_by is None):
                 items.append(item)
         return items
