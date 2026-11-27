@@ -19,7 +19,7 @@ Read only the sections a task points you to.
 | [11-ui-and-notifications.md](11-ui-and-notifications.md) | Views, run graph, notifications |
 | [12-integrations.md](12-integrations.md) | Task source interface, GitHub Issues, Linear, labels, GitHub App setup |
 | [13-storage-and-stack.md](13-storage-and-stack.md) | The tech for each component |
-| [14-dogfooding-and-safety.md](14-dogfooding-and-safety.md) | Pinned checkout, guardrails |
+| [14-dogfooding-and-safety.md](14-dogfooding-and-safety.md) | Pinned checkout, upgrading while it runs, shutdown, cleanup, guardrails |
 | [16-decisions.md](16-decisions.md) | Decisions and open questions |
 | [17-future-ideas.md](17-future-ideas.md) | Ideas not in v0 |
 | [18-sources.md](18-sources.md) | Links |
