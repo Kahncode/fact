@@ -19,7 +19,7 @@ Everything runs as three local processes (Temporal, the API, the worker) with tw
 | GitHub | `gh` CLI for git and PR operations, REST API over `httpx` for checks, labels and comments | GitHub App with webhooks |
 | Config | YAML (`fact.yaml` in the factory repo; `.fact/project.yaml` and `.fact/repo.yaml` in project repositories) loaded with pydantic-settings, with per-environment config files as in the template (local, dev, staging, prod); secrets in `.env` | A secret store |
 | Tests | pytest, pytest-asyncio and pytest-postgresql from the template, plus Temporal's test environment and replay tests; for the UI as much testing as possible: Vitest and Testing Library for components and hooks against a mocked API (MSW), Playwright end-to-end scenarios for every page and critical flow (answer a gate, start a run, follow a live log) against a seeded API, plus ESLint, Prettier, `tsc` and the build in CI | Same |
-| Dev tooling | `uv` (Python), `pnpm` (UI), Black, Ruff, pre-commit and detect-secrets from the template; one cross-platform `fact dev` | Same |
+| Dev tooling | `uv` (Python), `pnpm` (UI), Black, Ruff, pre-commit and detect-secrets from the template, import-linter for package boundaries; one cross-platform `fact dev` | Same |
 
 Tooling: Python 3.15 with `uv`, `pnpm` for the UI, and one `fact dev` (a Python script; every script in fact is Python, never bash) that starts Temporal, the API and the worker.
 
