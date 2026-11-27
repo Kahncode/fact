@@ -53,8 +53,8 @@ The milestones live here, and only here. v0 is done when the factory has shipped
 - M4 UI: the web app covers everything a person does.
 - M5 Cloud (planned 27 Nov 2026, `docs/spec/19-cloud.md`): API, UI, control worker, database, Temporal and artifact store hosted; the runner worker stays on your PC. Every route authenticated. Local `fact dev` keeps working unchanged. Stretch, not required: CI deploys `main`, and upgrades that wait for or drain active runs.
 - M5.2: Multi tenancy, organizations, projects, teams, etc.
-- M5.3 Run queue (planned 27 Nov 2026, `docs/spec/10-observability.md`, Run queue): concurrency counts compute; a run releases its slot before every wait and queues a `resume` when it ends; one dispatcher grants slots in priority order under the factory, project and pool caps. Built after M5.
-  - Later: a factory-side cap on one project (a registry entry in `fact.yaml`), for projects the factory serves but does not own; a limit on waiting runs, so open PRs and gates do not outgrow the people reviewing them.
+- M5.3 Run queue (planned 27 Nov 2026, `docs/spec/10-observability.md`, Run queue): concurrency counts compute; a run releases its slot before every wait and queues a `resume` when it ends; one dispatcher grants slots in priority order under each runner pool's `max_concurrent_runs` (the only cap, configured with the project's pool). Built after M5.
+  - Later: a limit on waiting runs, so open PRs and gates do not outgrow the people reviewing them.
   - Later: the `workspace.keep_while_waiting` teardown timer (the setting exists from M5.3, default `forever`).
 - M6: Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner. Also how do ideas in the backlog become planned and how does the planner work with the humans to get that done?
 - M7: Using some sort of serverless compute for runners. Docker runner, even for local development, ideally.
