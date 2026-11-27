@@ -39,6 +39,8 @@ class FakeIssues:
 
     issues: dict[int, dict] = field(default_factory=lambda: copy.deepcopy(ISSUES))
     writes: list[tuple[str, str]] = field(default_factory=list)  # shared with whatever else wants the order
+    parents: dict[int, int] = field(default_factory=lambda: dict(PARENTS))
+    blocked_by: dict[int, list[int]] = field(default_factory=dict)  # issue -> the issues blocking it
 
     def __post_init__(self) -> None:  # noqa: D105
         for issue in self.issues.values():
@@ -58,11 +60,11 @@ class FakeIssues:
             ]
             return httpx.Response(200, json=ready)
         if parts[-2:] == ["dependencies", "blocked_by"]:
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json=[self.issues[n] for n in self.blocked_by.get(int(parts[-3]), [])])
         if parts[-1] == "sub_issues":
-            return httpx.Response(200, json=[self.issues[c] for c, p in PARENTS.items() if p == int(parts[-2])])
+            return httpx.Response(200, json=[self.issues[c] for c, p in self.parents.items() if p == int(parts[-2])])
         if parts[-1] == "parent":
-            parent = PARENTS.get(int(parts[-2]))
+            parent = self.parents.get(int(parts[-2]))
             return self._found(self.issues[parent] if parent else None)
         return self._found(self.issues.get(int(parts[-1])) if parts[1:3] == ["acme", "app"] else None)
 

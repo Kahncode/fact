@@ -9,6 +9,8 @@ issue's fields (type, complexity, priority, acceptance criteria, `Depends on` li
   closed for any reason is out of its parent's way, so only open ones are listed.
 - A parent's label gates its sub-issues, transitively: an issue is ready only when it and every ancestor carry
   `fact:ready` (`not_ready_ancestor`).
+- An ancestor's dependencies hold its sub-issues: a sub-issue also depends on every ancestor's blocked-by links and
+  `Depends on` lines (never on the ancestor's sub-issues).
 - A parent runs by its work type (`type:epic` is for people, never read): a parent without a work type never runs;
   once it is ready with nothing to wait on, `list_ready(close_parents=True)` comments and closes it as completed.
 """
@@ -58,8 +60,8 @@ class GitHubIssuesSource(GitHubIssueWrites):
     """
     Issues of `repo` ("owner/repo") read and written with the App's installation token. Implements `TaskSource`.
 
-    Issue states and parent links fetched by one instance are reused by it: keep an instance for one read (one request
-    or one scheduler tick), which then asks GitHub for each issue's parent at most once.
+    Issue states, parent and blocked-by links fetched by one instance are reused by it: keep an instance for one read
+    (one request or one scheduler tick), which then asks GitHub for each issue's parent and blockers at most once.
     """
 
     def __init__(self, repo: str, app: GitHubApp) -> None:
@@ -68,6 +70,7 @@ class GitHubIssuesSource(GitHubIssueWrites):
         self.app = app
         self._issues: dict[str, dict[str, Any]] = {}  # lower-cased key -> issue, as fetched
         self._parents: dict[str, str | None] = {}  # lower-cased key -> its parent's key; None: a top-level issue
+        self._blockers: dict[str, list[str]] = {}  # lower-cased key -> keys of its blocked-by issues
 
     @asynccontextmanager
     async def _client(self, repo: str) -> AsyncIterator[httpx.AsyncClient]:
@@ -124,26 +127,58 @@ class GitHubIssuesSource(GitHubIssueWrites):
         self._parents[key.lower()] = parent
         return parent
 
-    async def not_ready_ancestor(self, key: str) -> str | None:
-        """Return the nearest ancestor of issue `key` without `fact:ready`; None when all have it, or for another key."""
+    async def _ancestors(self, key: str) -> list[str]:
+        """Keys of issue `key`'s ancestors, nearest first (each one's issue remembered); none for another key."""
         if parse_key(key).kind != "gh":
-            return None
+            return []
+        chain: list[str] = []
         seen = {key.lower()}
         current = key
         for _ in range(MAX_ANCESTORS):
             parent = await self._parent(current)
             if parent is None or parent.lower() in seen:
-                return None
+                break
             seen.add(parent.lower())
-            if not has_label(self._issues.get(parent.lower(), {}), READY_LABEL):
-                return parent
+            chain.append(parent)
             current = parent
+        return chain
+
+    async def not_ready_ancestor(self, key: str) -> str | None:
+        """Return the nearest ancestor of issue `key` without `fact:ready`; None when all have it, or for another key."""
+        for ancestor in await self._ancestors(key):
+            if not has_label(self._issues.get(ancestor.lower(), {}), READY_LABEL):
+                return ancestor
         return None
 
-    async def _blocked_by(self, client: httpx.AsyncClient, number: int) -> list[str]:
-        owner, name = split_full_name(self.repo)
-        url = f"/repos/{owner}/{name}/issues/{number}/dependencies/blocked_by?per_page={PER_PAGE}"
-        return [self._remember(issue, self.repo) for issue in await self._pages(client, url)]
+    async def _blocked_by(self, key: str) -> list[str]:
+        """Keys of the issues blocking issue `key`, asked once per instance; none if its repository is unreadable."""
+        if (cached := self._blockers.get(key.lower())) is not None:
+            return cached
+        parsed = parse_key(key)
+        assert parsed.repo is not None  # noqa: S101 - a gh key always has one
+        owner, name = split_full_name(parsed.repo)
+        url = f"/repos/{owner}/{name}/issues/{parsed.id}/dependencies/blocked_by?per_page={PER_PAGE}"
+        blockers: list[str] = []
+        try:
+            async with self._client(parsed.repo) as client:
+                blockers = [self._remember(issue, parsed.repo) for issue in await self._pages(client, url)]
+        except GitHubNotFoundError:  # an ancestor on a repository the App cannot read
+            log.warning("task_blockers_unreadable", task_key=key)
+        self._blockers[key.lower()] = blockers
+        return blockers
+
+    async def _own_dependencies(self, key: str, issue: dict[str, Any]) -> list[str]:
+        """Return the issue's blocked-by links and `Depends on` lines (not its sub-issues)."""
+        body = str(issue.get("body") or "")
+        return [*await self._blocked_by(key), *depends_on_lines(body, parse_key(key).repo or self.repo)]
+
+    async def _inherited_dependencies(self, key: str) -> list[str]:
+        """Return the own dependencies of every ancestor of issue `key`, nearest ancestor first."""
+        deps: list[str] = []
+        for ancestor in await self._ancestors(key):
+            if (issue := await self._issue(ancestor)) is not None:
+                deps.extend(await self._own_dependencies(ancestor, issue))
+        return deps
 
     async def _open_sub_issues(self, client: httpx.AsyncClient, issue: dict[str, Any]) -> list[str]:
         """Keys of the issue's open sub-issues; each one's parent is known from here on, without asking GitHub."""
@@ -165,12 +200,12 @@ class GitHubIssuesSource(GitHubIssueWrites):
         body = str(issue.get("body") or "").replace("\r\n", "\n")
         labels = label_names(issue)
         number = int(issue["number"])
-        deps = [
-            *await self._blocked_by(client, number),
-            *depends_on_lines(body, self.repo),
-            *await self._open_sub_issues(client, issue),
-        ]
         own = f"{GITHUB_PREFIX}{self.repo}#{number}"
+        deps = [
+            *await self._own_dependencies(own, issue),
+            *await self._open_sub_issues(client, issue),
+            *await self._inherited_dependencies(own),
+        ]
         return Task(
             key=own,
             id=str(number),
