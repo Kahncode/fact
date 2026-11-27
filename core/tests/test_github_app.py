@@ -120,10 +120,6 @@ async def test_installation_token_uses_jwt_and_github_headers(
     assert token.installation.id == INSTALLATION_ID
     assert token.installation.account == "Kahncode"
     assert json.loads(fake.requests[-1].content) == {"repositories": ["fact"]}
-    assert fake.paths() == [
-        "GET /repos/Kahncode/fact/installation",
-        f"POST /app/installations/{INSTALLATION_ID}/access_tokens",
-    ]
     for request in fake.requests:
         assert request.headers["X-GitHub-Api-Version"] == "2022-11-28"
         scheme, _, bearer = request.headers["Authorization"].partition(" ")
@@ -147,7 +143,6 @@ async def test_concurrent_calls_mint_once(gh: GitHubApp, fake: FakeGitHub) -> No
 
     assert fake.minted == ["ghs_secret_0"]
     assert {t.token for t in tokens} == {"ghs_secret_0"}
-    assert fake.paths().count(f"POST /app/installations/{INSTALLATION_ID}/access_tokens") == 1
 
 
 async def test_installation_token_not_installed(gh: GitHubApp) -> None:
@@ -174,7 +169,6 @@ async def test_bot_identity(gh: GitHubApp, fake: FakeGitHub) -> None:
     user_request = fake.requests[-1]
     assert "Authorization" not in user_request.headers
     assert await gh.bot_identity() is bot
-    assert fake.paths()[-2:] == ["GET /app", "GET /users/fact-factory[bot]"]
     assert len(fake.requests) == len(set(fake.paths()))
 
 

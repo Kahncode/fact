@@ -1,5 +1,6 @@
 """A git checkout whose `origin/main` holds task files, for the tests that read tasks from the default branch."""
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,7 +41,7 @@ def make_checkout(tmp_path: Path) -> Path:
     """Clone a bare origin; origin/main holds M1-01 (done), M1-02 (needs M1-01) and M1-03 (needs M1-02)."""
     origin, work = tmp_path / "origin.git", tmp_path / "work"
     git(tmp_path, "init", "--bare", "-b", "main", str(origin))
-    git(tmp_path, "clone", str(origin), str(work))
+    git(tmp_path, "clone", origin.as_posix(), str(work))  # a POSIX url, so copy_checkout can rewrite it
     git(work, "checkout", "-b", "main")
     write(
         work,
@@ -56,4 +57,18 @@ def make_checkout(tmp_path: Path) -> Path:
     git(work, "push", "origin", "main")
     # Only in the working tree: a start must not see it.
     write(work, {"tasks/M1/04-local.md": task_file("M1-04", [])})
+    return work
+
+
+def copy_checkout(template: Path, tmp_path: Path) -> Path:
+    """Copy a `make_checkout` result into `tmp_path`, its `origin` remote pointing at the copied bare repository."""
+    shutil.copytree(template.parent / "origin.git", tmp_path / "origin.git")
+    work = tmp_path / "work"
+    shutil.copytree(template, work)
+    config = work / ".git" / "config"
+    text = config.read_text(encoding="utf-8")
+    config.write_text(
+        text.replace((template.parent / "origin.git").as_posix(), (tmp_path / "origin.git").as_posix()),
+        encoding="utf-8",
+    )
     return work

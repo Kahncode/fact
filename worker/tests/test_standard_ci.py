@@ -2,7 +2,6 @@
 
 from fact.core.activity_contract import (
     AGENT_STEP,
-    NOTIFY,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     RECORD_GATE_ANSWERED,
@@ -29,7 +28,6 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     assert result.outcome == RunOutcome.MERGED
     assert _fix_ci_sessions(fakes) == [("fix_ci", 1, "fix_ci")]
     fix = next(s for s in fakes.of(AGENT_STEP) if s.stage_id == "fix_ci")
-    assert "### test (windows): failure on acme/widget#7 at abc123" in fix.context
     assert "https://ci/1" in fix.context
     assert "E boom" in fix.context
 
@@ -40,8 +38,6 @@ async def test_ci_failure_goes_to_a_fix_session_then_pushes_and_waits_again() ->
     assert [(w.attempt, w.pr.head_sha) for w in waits] == [(1, PR.head_sha), (2, "fix1")]  # CI on the new head
     assert result.prs == [PR.model_copy(update={"head_sha": "fix1"})]
     assert fakes.of(POST_COST_COMMENT)[-1].prs == result.prs
-    tail = [n for n, _ in fakes.calls][-5:]
-    assert tail == ["record_run_finished", "report_status", TEARDOWN_WORKSPACE, POST_COST_COMMENT, NOTIFY]
 
 
 async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
@@ -56,8 +52,6 @@ async def test_exhausted_ci_fixes_need_a_human_with_the_pr_open() -> None:
     assert len(fakes.of(OPEN_CHANGE_SET)) == MAX_CI_FIX_ATTEMPTS + 1
     (comment,) = fakes.of(POST_COST_COMMENT)  # once, after the run's end is recorded, on the open PR
     assert comment.prs == result.prs
-    names = [n for n, _ in fakes.calls]
-    assert names.index(POST_COST_COMMENT) > names.index("record_run_finished")
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []
     (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected

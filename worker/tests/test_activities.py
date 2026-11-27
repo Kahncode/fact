@@ -37,8 +37,10 @@ def _repo_yaml(**sections: list[str]) -> str:
     return "".join(f"{name}:\n{''.join(_cmd(c) for c in cmds)}" for name, cmds in sections.items())
 
 
-@pytest.fixture
-def remote(tmp_path: Path) -> Path:
+@pytest.fixture(scope="module")
+def remote(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Read-only for the tests (each clones its own mirror), so one remote serves the whole module."""
+    tmp_path = tmp_path_factory.mktemp("remote")
     bare, seed = tmp_path / "remote.git", tmp_path / "seed"
     _git("init", "--bare", "-b", "main", str(bare), cwd=tmp_path)
     _git("clone", str(bare), str(seed), cwd=tmp_path)

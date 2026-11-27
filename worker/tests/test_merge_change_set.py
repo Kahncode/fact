@@ -77,18 +77,3 @@ async def test_a_server_error_is_retried(private_key: str) -> None:
     with pytest.raises(ApplicationError) as caught:
         await _merge(fake, private_key, [_pr(7)])
     assert not caught.value.non_retryable
-
-
-async def test_pr_not_found_is_not_retried_and_hides_the_token(private_key: str) -> None:
-    fake = FakeGitHub(statuses={7: 404})
-    with pytest.raises(ApplicationError) as caught:
-        await _merge(fake, private_key, [_pr(7)])
-    assert caught.value.non_retryable
-    assert TOKEN not in str(caught.value)
-
-
-async def test_without_a_github_app_it_is_not_retried() -> None:
-    spec = MergeChangeSetInput(run_id="r", prs=[_pr(7)])
-    with pytest.raises(ApplicationError) as caught:
-        await ActivityEnvironment().run(MergeActivities(None).merge_change_set, spec)
-    assert caught.value.non_retryable

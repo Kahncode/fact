@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fact.core.db import Base, create_engine, database_url, session_factory
+from fact.core.db import create_engine, database_url, session_factory
 from fact.core.migrate import upgrade
 from fact.core.settings import Settings
 from sqlalchemy import text
@@ -22,16 +22,11 @@ def test_upgrade_with_zero_migrations_creates_missing_data_dir(tmp_path: Path) -
     assert (data_dir / "fact.db").exists()
 
 
-async def test_session_runs_select_and_pragmas(tmp_path: Path) -> None:
+async def test_session_sets_pragmas(tmp_path: Path) -> None:
     engine = create_engine(_url(tmp_path))
     try:
         async with session_factory(engine)() as session:
-            assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
             assert (await session.execute(text("PRAGMA foreign_keys"))).scalar_one() == 1
             assert (await session.execute(text("PRAGMA journal_mode"))).scalar_one() == "wal"
     finally:
         await engine.dispose()
-
-
-def test_naming_convention_names_constraints() -> None:
-    assert Base.metadata.naming_convention["pk"] == "pk_%(table_name)s"

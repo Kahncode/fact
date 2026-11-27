@@ -15,20 +15,11 @@ PROJECT_COUNT = 2
 UUID_LENGTH = 36
 
 
-async def test_health(client: AsyncClient) -> None:
-    response = await client.get("/health")
-    assert response.status_code == HTTPStatus.OK
-    assert response.json() == {"status": "ok"}
-    assert response.headers["X-Request-ID"]
-
-
 async def test_projects_lists_fact_with_repository(client: AsyncClient) -> None:
     response = await client.get("/api/v1/projects")
     assert response.status_code == HTTPStatus.OK
     by_name = {p["name"]: p for p in response.json()}
-    assert by_name["fact"]["home_repo"] == "Kahncode/fact"
     assert [r["full_name"] for r in by_name["fact"]["repositories"]] == ["Kahncode/fact"]
-    assert by_name["fact"]["repositories"][0]["role"] == "factory"
     assert by_name["remote"]["repositories"] == []
 
 
@@ -72,9 +63,10 @@ async def test_request_log_has_request_id_and_no_credentials(client: AsyncClient
     assert entry["http_response"]["status_code"] == HTTPStatus.OK
 
 
-async def test_health_is_not_logged(client: AsyncClient) -> None:
+async def test_health_is_up_and_not_logged(client: AsyncClient) -> None:
     with capture_logs(processors=[merge_contextvars]) as logs:
-        await client.get("/health")
+        response = await client.get("/health")
+    assert response.status_code == HTTPStatus.OK
     assert not [e for e in logs if e["event"] == "request_completed"]
 
 

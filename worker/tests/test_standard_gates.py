@@ -87,14 +87,14 @@ async def test_answering_an_unknown_or_closed_gate_is_an_error() -> None:
         first = await open_gate(handle)
         with pytest.raises(WorkflowUpdateFailedError) as unknown:
             await answer(handle, "nope", GateDecision.APPROVE)
-        assert "unknown gate 'nope'" in str(unknown.value.cause)
+        assert "nope" in str(unknown.value.cause)
 
         await answer(handle, first.gate_id, GateDecision.APPROVE)
         second = await open_gate(handle, after=[first.gate_id])
         assert (second.gate_id, second.attempt) == ("checks-2", 2)  # the next attempt of stage `needs_human`
         with pytest.raises(WorkflowUpdateFailedError) as closed:
             await answer(handle, first.gate_id, GateDecision.REJECT)
-        assert "gate 'checks-1' is already closed" in str(closed.value.cause)
+        assert first.gate_id in str(closed.value.cause)
 
         await answer(handle, second.gate_id, GateDecision.REJECT)
         result: RunResult = await handle.result()

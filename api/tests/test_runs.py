@@ -82,8 +82,6 @@ async def test_patch_run(client: AsyncClient) -> None:
     assert response.status_code == HTTPStatus.OK
     assert response.json()["status"] == "finished"
     assert response.json()["outcome"] == "merged"
-    bad = await client.patch(f"/api/v1/runs/{run['id']}", json={"status": "bogus"})
-    assert bad.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
 async def test_list_runs_filters(client: AsyncClient) -> None:

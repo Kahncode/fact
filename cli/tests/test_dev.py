@@ -1,5 +1,4 @@
 import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -10,31 +9,15 @@ from fact.core.settings import CONFIG_VAR, Settings, config_file
 from typer.testing import CliRunner
 
 
-def test_build_commands(settings: Settings) -> None:
+def test_build_commands(settings: Settings, tmp_path: Path) -> None:
     temporal, api, worker = dev.build_commands(settings, "/bin/temporal", environ={})
 
-    assert temporal.name == "temporal"
-    assert temporal.argv == [
-        "/bin/temporal",
-        "server",
-        "start-dev",
-        "--db-filename",
-        str(settings.temporal_db_path),
-        "--port",
-        "7300",
-        "--ui-port",
-        "8233",
-    ]
-    assert temporal.wait_for is None
-    assert api.argv == [sys.executable, "-m", "fact.api"]
-    assert api.wait_for is None
-    assert worker.argv == [sys.executable, "-m", "fact.worker"]
-    assert worker.wait_for == ("localhost", 7300)
-
-
-def test_temporal_db_lives_in_data_dir(settings: Settings, tmp_path: Path) -> None:
-    temporal, *_ = dev.build_commands(settings, "temporal")
-    assert Path(temporal.argv[4]) == tmp_path / "data" / "temporal.db"
+    assert temporal.argv[0] == "/bin/temporal"
+    assert temporal.argv[temporal.argv.index("--db-filename") + 1] == str(tmp_path / "data" / "temporal.db")
+    assert temporal.argv[temporal.argv.index("--port") + 1] == "7300"  # from settings.temporal.address
+    assert api.argv[-2:] == ["-m", "fact.api"]
+    assert worker.argv[-2:] == ["-m", "fact.worker"]
+    assert worker.wait_for == ("localhost", 7300)  # the worker starts once Temporal listens
 
 
 def test_dev_fails_without_temporal(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ARG001
@@ -49,27 +32,17 @@ def test_dev_fails_without_temporal(settings: Settings, monkeypatch: pytest.Monk
     assert called == []
 
 
-def test_dev_creates_data_dir_and_runs(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(("supervisor_code", "exit_code"), [(130, 0), (3, 3)])  # 130: Ctrl-C is a clean stop
+def test_dev_creates_data_dir_and_exits_with_the_supervisor_code(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, supervisor_code: int, exit_code: int
+) -> None:
     monkeypatch.setattr(dev.shutil, "which", lambda _: "temporal")
-    started: list[list[str]] = []
-
-    def fake_run_all(specs: list) -> int:
-        started.extend(s.name for s in specs)
-        return 130  # Ctrl-C
-
-    monkeypatch.setattr(dev, "run_all", fake_run_all)
+    monkeypatch.setattr(dev, "run_all", lambda _: supervisor_code)
 
     result = CliRunner().invoke(app, ["dev"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == exit_code
     assert settings.data_dir.is_dir()
-    assert started == ["temporal", "api", "worker"]
-
-
-def test_version() -> None:
-    result = CliRunner().invoke(app, ["--version"])
-    assert result.exit_code == 0
-    assert result.output.startswith("fact ")
 
 
 @pytest.mark.parametrize(

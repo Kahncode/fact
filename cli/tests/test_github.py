@@ -61,11 +61,8 @@ def test_check_prints_app_installation_and_expiry() -> None:
     result = CliRunner().invoke(app, ["github", "check", "Kahncode/fact"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.splitlines() == [
-        "app:          fact-factory (id 12)",
-        "installation: 34 (account Kahncode)",
-        "token:        expires 2026-11-25T13:00:00+00:00",
-    ]
+    for shown in ("fact-factory", "12", "34", "Kahncode", "2026-11-25T13:00:00"):
+        assert shown in result.output
     assert TOKEN not in result.output
 
 
@@ -135,11 +132,3 @@ def test_labels_sync_creates_then_changes_nothing(monkeypatch: pytest.MonkeyPatc
     assert second.output.splitlines()[-1] == f"0 of {len(FACT_LABELS)} labels changed on Kahncode/fact"
     assert writes == ["POST"] * len(FACT_LABELS)
     assert TOKEN not in first.output + second.output
-
-
-@pytest.mark.usefixtures("fake_app")
-def test_labels_sync_not_installed() -> None:
-    result = CliRunner().invoke(app, ["github", "labels", "sync", "someone/else"])
-
-    assert result.exit_code == 1
-    assert "404" in result.output

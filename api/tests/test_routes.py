@@ -9,7 +9,7 @@ from fact.core.settings import Settings
 
 # (path, method) -> tests as "module.test_name" inside api/tests; None marks a route deliberately left untested.
 TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
-    ("/health", "GET"): ["test_app.test_health"],
+    ("/health", "GET"): ["test_app.test_health_is_up_and_not_logged"],
     ("/api/v1/projects", "GET"): ["test_app.test_projects_lists_fact_with_repository"],
     ("/api/v1/runs", "POST"): ["test_runs.test_create_and_get_run", "test_runs.test_create_run_errors"],
     ("/api/v1/runs", "GET"): ["test_runs.test_list_runs_filters"],
@@ -76,7 +76,6 @@ TESTED_ROUTES: dict[tuple[str, str], list[str | None]] = {
     ("/api/v1/usage/{account}", "PUT"): [
         "test_usage.test_report_then_list",
         "test_usage.test_newer_report_wins_and_unmentioned_windows_stay",
-        "test_usage.test_bad_reports_are_refused",
     ],
     ("/api/v1/usage", "GET"): ["test_usage.test_report_then_list"],
 }

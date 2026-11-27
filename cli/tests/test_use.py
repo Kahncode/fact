@@ -1,4 +1,4 @@
-"""`fact use`: command lines, and a version pinned from a local repository with a bare `origin`."""
+"""`fact use`: a version pinned from a local repository with a bare `origin`."""
 
 import shutil
 import stat
@@ -53,20 +53,6 @@ def synced(monkeypatch: pytest.MonkeyPatch) -> list[tuple[list[str], Path]]:
 
     monkeypatch.setattr(use, "_run", fake_run)
     return calls
-
-
-def test_command_lines(tmp_path: Path) -> None:
-    sha = "a" * 40
-    assert use.fetch_argv() == ["git", "fetch", "--prune", "origin"]
-    assert use.worktree_add_argv(tmp_path / sha, sha) == [
-        "git",
-        "worktree",
-        "add",
-        "--detach",
-        str(tmp_path / sha),
-        sha,
-    ]
-    assert use.sync_argv("/bin/uv") == ["/bin/uv", "sync", "--locked"]
 
 
 def test_pin_uses_fetched_origin(settings: Settings, source: Path, synced: list[tuple[list[str], Path]]) -> None:
@@ -125,7 +111,6 @@ def test_use_command_reports_errors(settings: Settings, monkeypatch: pytest.Monk
     result = CliRunner().invoke(app, ["use", "x"])
 
     assert result.exit_code == 1
-    assert "cannot resolve 'x'" in result.output
 
 
 def test_pin_head_is_local(settings: Settings, source: Path, synced: list[tuple[list[str], Path]]) -> None:

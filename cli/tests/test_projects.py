@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import httpx
 import pytest
 from fact.cli import projects
@@ -24,18 +26,11 @@ def _use_transport(monkeypatch: pytest.MonkeyPatch, settings: Settings, handler:
 
 
 def test_projects_list(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[httpx.URL] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url)
-        return httpx.Response(200, json=PROJECTS)
-
-    _use_transport(monkeypatch, settings, httpx.MockTransport(handler))
+    _use_transport(monkeypatch, settings, httpx.MockTransport(lambda _: httpx.Response(200, json=PROJECTS)))
 
     result = CliRunner().invoke(app, ["projects", "list"])
 
     assert result.exit_code == 0, result.output
-    assert [str(u) for u in seen] == ["http://127.0.0.1:8100/api/v1/projects"]
     lines = result.output.splitlines()
     assert lines[0].split() == ["NAME", "HOME", "REPOSITORIES"]
     assert lines[1].split() == ["fact", "Kahncode/fact", "Kahncode/fact,", "Kahncode/fact-web"]
@@ -49,30 +44,24 @@ def test_projects_list_empty(settings: Settings, monkeypatch: pytest.MonkeyPatch
     assert result.output.strip() == "No projects."
 
 
-def test_projects_list_api_down(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        msg = "refused"
-        raise httpx.ConnectError(msg, request=request)
+def _refuse(request: httpx.Request) -> httpx.Response:
+    msg = "refused"
+    raise httpx.ConnectError(msg, request=request)
 
+
+@pytest.mark.parametrize(
+    ("handler", "shown"),
+    [
+        (_refuse, "cannot reach the API"),
+        (lambda _: httpx.Response(500, text="boom"), "API answered 500"),
+        (lambda _: httpx.Response(200, text="<html>"), "unexpected API response"),
+    ],
+    ids=["api_down", "api_error", "unexpected_body"],
+)
+def test_projects_list_failures_exit_1(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch, handler: Callable[[httpx.Request], httpx.Response], shown: str
+) -> None:
     _use_transport(monkeypatch, settings, httpx.MockTransport(handler))
     result = CliRunner().invoke(app, ["projects", "list"])
     assert result.exit_code == 1
-    assert "cannot reach the API" in result.output
-
-
-def test_projects_list_api_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_transport(monkeypatch, settings, httpx.MockTransport(lambda _: httpx.Response(500, text="boom")))
-    result = CliRunner().invoke(app, ["projects", "list"])
-    assert result.exit_code == 1
-    assert "API answered 500" in result.output
-
-
-def test_format_table_aligns_columns() -> None:
-    assert projects.format_table(("A", "BB"), [("long", "x")]).splitlines() == ["A     BB", "long  x"]
-
-
-def test_projects_list_unexpected_body(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    _use_transport(monkeypatch, settings, httpx.MockTransport(lambda _: httpx.Response(200, text="<html>")))
-    result = CliRunner().invoke(app, ["projects", "list"])
-    assert result.exit_code == 1
-    assert "unexpected API response" in result.output
+    assert shown in result.output

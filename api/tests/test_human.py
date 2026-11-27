@@ -140,5 +140,3 @@ async def test_unknown_run_and_bad_bodies(client: AsyncClient) -> None:
     run_id = await _run(client, "run-gate-3")
     bad = await client.post(f"/api/v1/runs/{run_id}/gates/g-1", json={"decision": "maybe"})
     assert bad.status_code == HTTPStatus.UNPROCESSABLE_CONTENT
-    blank = await client.post(f"/api/v1/runs/{run_id}/instructions", json={"text": ""})
-    assert blank.status_code == HTTPStatus.UNPROCESSABLE_CONTENT

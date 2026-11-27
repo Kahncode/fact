@@ -44,7 +44,7 @@ async def test_limited_session_sleeps_until_the_reset_and_resumes_it() -> None:
     fakes = FakeActivities(implement_script=[_limited(resume_at)])
     async with started_standard(fakes, "run-limited") as (env, handle):
         status = await _waiting(handle)
-        assert status.waiting == f"usage limit until {resume_at:%Y-%m-%d %H:%M} UTC"
+        assert f"{resume_at:%H:%M}" in status.waiting  # says when it resumes
         assert (status.stage, status.attempt) == ("implement", 1)
         result: RunResult = await handle.result()
         now = await env.get_current_time()

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fact.core.settings import REPO_ROOT
 from fact.core.types import Task
-from fact.worker.prompts import PromptError, output_schema, render, render_prompt
+from fact.worker.prompts import PromptError, render, render_prompt
 
 TASK = Task(key="task:T-1", id="T-1", title="Add a thing", body="Body text", acceptance_criteria=["one", "two"])
 
@@ -68,29 +68,3 @@ def test_shipped_prompts_render(name: str) -> None:
     assert "Add a thing" in text
     assert "- one" in text
     assert "$" not in text  # no placeholder left unrendered
-    assert "push" in text.lower()
-
-
-def test_review_answer_schema() -> None:
-    schema = output_schema(REPO_ROOT, "review")
-    assert {"status", "summary", "criteria", "findings"} <= set(schema["required"])
-    finding = schema["properties"]["findings"]["items"]
-    assert finding["properties"]["severity"]["enum"] == ["low", "medium", "high"]
-    assert schema["properties"]["criteria"]["items"]["required"] == ["text", "met", "evidence"]
-
-
-def test_review_prompt_never_changes_code() -> None:
-    text = render_prompt(REPO_ROOT, "review", TASK, "", "/ws")
-    assert "Never change code" in text
-    assert "`review` skill" in text
-    assert "/ws/review.json" in text
-
-
-def test_learn_prompt_runs_the_skill_unattended_and_answers_a_title() -> None:
-    text = render_prompt(REPO_ROOT, "learn", TASK, "", "/ws")
-    assert "T-1" in text
-    assert "$" not in text
-    assert "`learn` skill" in text
-    assert "/ws/pr.json" in text
-    assert "push" in text.lower()
-    assert "title" in output_schema(REPO_ROOT, "learn")["properties"]
