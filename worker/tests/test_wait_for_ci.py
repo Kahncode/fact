@@ -22,6 +22,7 @@ PR = PRRef(repo=REPO, number=7, url=f"https://github.com/{REPO}/pull/7", head_sh
 TOKEN = "ghs_ci_secret_42"  # noqa: S105 - fake
 CHECK_RUNS = f"/repos/{REPO}/commits/{SHA}/check-runs"
 STATUS = f"/repos/{REPO}/commits/{SHA}/status"
+PULL = f"/repos/{REPO}/pulls/7"
 JOB_LOGS = f"/repos/{REPO}/actions/jobs/{{}}/logs"
 BLOB = "https://blob.test/logs/{}"
 TRANSIENT = 2  # polls that answer 502 before GitHub recovers
@@ -50,6 +51,10 @@ class FakeGitHub:
     logs: dict[int, str] = field(default_factory=dict)  # job id -> log; a missing job answers 410 (expired)
     fail_with: int | None = None
     transient: int = 0  # first check-run polls that answer 502
+    mergeable_state: str = "clean"  # what the PR says once no check ran: `dirty` when it conflicts with its base
+    pull_failures: int = 0  # first PR reads that answer 502
+    pull_head: str = SHA  # the head the PR answers about: another SHA is a stale answer from before the push
+    pull_reads: int = 0
     seen: list[str] = field(default_factory=list)
 
     async def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
@@ -67,8 +72,8 @@ class FakeGitHub:
         if path == CHECK_RUNS:
             runs = self.polls.pop(0) if len(self.polls) > 1 else self.polls[0]
             return httpx.Response(200, json={"total_count": len(runs), "check_runs": runs})
-        if path == STATUS:
-            return httpx.Response(200, json={"state": "pending", "statuses": self.statuses})
+        if path in {PULL, STATUS}:
+            return self._fixed(path)
         for job_id, text in self.logs.items():
             if path == JOB_LOGS.format(job_id):
                 return httpx.Response(302, headers={"Location": BLOB.format(job_id)})
@@ -76,6 +81,21 @@ class FakeGitHub:
                 assert "authorization" not in request.headers  # the signed URL needs no token, and must not get it
                 return httpx.Response(200, text=text)
         return httpx.Response(410, json={"message": "Gone"})
+
+    def _fixed(self, path: str) -> httpx.Response:
+        """Answer the PR (read when no check ran) or the commit statuses, which never change during a test."""
+        if path == PULL and self.pull_failures > 0:
+            self.pull_failures -= 1
+            return httpx.Response(502, json={"message": "Bad Gateway"})
+        if path == PULL:
+            self.pull_reads += 1
+            body = {
+                "mergeable": self.mergeable_state != "dirty",
+                "mergeable_state": self.mergeable_state,
+                "head": {"sha": self.pull_head},
+            }
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json={"state": "pending", "statuses": self.statuses})
 
 
 @pytest.fixture(scope="module")
@@ -172,6 +192,29 @@ async def test_no_checks_at_all_pass_after_the_grace(private_key: str, reporter:
 
     assert result.outcome == StepOutcome.PASSED
     assert result.outputs == {"checks": 0}
+    assert f"gh.test{PULL}" in fake.seen  # it made sure the PR does not conflict
+
+
+async def test_a_conflicting_pr_is_a_conflict_at_once_not_green(
+    private_key: str, reporter: StepReporter, run_id: str
+) -> None:
+    fake = FakeGitHub(polls=[[]], mergeable_state="dirty")
+    result = await _wait(_activities(fake, private_key, reporter), run_id)  # the default 5 min grace
+
+    assert result.outcome == StepOutcome.FAILED_CHECKS
+    assert result.outputs == {"checks": 0, "conflict": True}
+    assert "conflicts with its base branch" in result.summary
+    assert fake.seen.count(f"gh.test{CHECK_RUNS}") == 1  # at the first poll, not after the grace
+
+
+async def test_a_transient_error_reading_the_pr_only_skips_a_poll(
+    private_key: str, reporter: StepReporter, run_id: str
+) -> None:
+    fake = FakeGitHub(polls=[[]], mergeable_state="dirty", pull_failures=1)
+    result = await _wait(_activities(fake, private_key, reporter), run_id)
+
+    assert result.outputs == {"checks": 0, "conflict": True}
+    assert fake.seen.count(f"gh.test{CHECK_RUNS}") == 2  # noqa: PLR2004 - polled again after the failed read
 
 
 async def test_app_not_installed_is_not_retried(private_key: str, reporter: StepReporter, run_id: str) -> None:
@@ -201,3 +244,13 @@ async def test_timeout_still_reports_failures_already_known(
     assert "timed_out" not in result.outputs  # a fix session can still act on the known failure
     assert result.outputs["pending"] == ["deploy"]
     assert [f["name"] for f in result.outputs["failures"]] == ["test"]
+
+
+async def test_a_stale_answer_about_the_previous_head_is_not_a_conflict(
+    private_key: str, reporter: StepReporter, run_id: str
+) -> None:
+    fake = FakeGitHub(polls=[[]], mergeable_state="dirty", pull_head="0" * 40)  # GitHub has not seen the push yet
+    result = await _wait(_activities(fake, private_key, reporter), run_id, no_checks_grace_s=0)
+
+    assert result.outcome == StepOutcome.PASSED  # no conflict known for this head, and no CI: nothing to wait for
+    assert fake.pull_reads == 1  # one read per poll: the poll is the retry

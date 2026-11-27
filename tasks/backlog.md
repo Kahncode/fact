@@ -18,6 +18,17 @@ It probably builds on the gate and notification work in M2 (M2-01 to M2-03).
 
 - Workspaces of runs that did not open their PR (failed, needs_human, cancelled) stay in `workspaces_dir` forever. Add `fact workspaces prune`: list them with their run status and remove the ones a person picks (a removed folder frees its branch, and the next run resets it to the remote). Until then, a left-behind workspace holding a task branch sends every new run on that task to a suffixed branch and a new PR.
 
+## Restart survival (audit, 27 Nov 2026)
+
+An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-process state a run depends on) found these, none fixed yet:
+
+- `LocalWorktreeRunner._run_locks` (`worker/src/fact/worker/runners/local_worktree.py`) serialises `prepare` per run in one process only. `prepare` has no heartbeat, so a timed-out attempt can still be cloning while a retry on another process tears the same `workspaces_dir/<run_id>` down; `teardown` never takes the lock either. Fix: heartbeat `prepare` and await it with `WAIT_CANCELLED`, or a file lock next to the run folder held by `prepare` and `teardown`.
+- `LocalWorktreeRunner._mirror_locks` serialises clone, fetch and the free-branch pick per mirror in one process only. Across processes: a half-made first clone can be taken for a finished one, fetches hit ref locks, two runs can pick the same branch (git refuses, costing a retry). Fix: a file lock beside the mirror, clone into a temp folder and rename, treat "branch already checked out" as a re-pick.
+- Steps left `running`: a step row is created `running` and finished only by the process that ran it (`worker/src/fact/worker/reporting.py`). After a hard crash it stays `running` forever, and a retry of `shell_step` or `sync_base` (which take `spec.attempt` from the workflow) POSTs the same stage and attempt, gets 409 and records nothing. Fix: idempotent step creation (reuse the row on 409), and close a run's `running` steps when it ends.
+- Agent or shell processes outliving a hard-killed worker (no Job Object / `PR_SET_PDEATHSIG`): the heartbeat-timeout resume can start a second `claude --resume` in the same worktree. Fix: a Job Object with `KILL_ON_JOB_CLOSE`, or a PID file the next attempt kills first.
+- The API keeps the scheduler's last usage answer in memory (`PUT /scheduler/usage`): after an API restart `fact scheduler status` shows no usage hold until the gate makes a new call, which can be hours. Display only. Fix: PUT on every check, or keep it in a DB row.
+- Over the 300-line limit: `worker/tests/test_agent_step.py` (413), `worker/tests/test_local_worktree_runner.py` (315).
+
 ## GitHub Issues source
 
 - `GitHubIssuesSource.list_ready` reads each ready issue's blocked-by links and unknown dependencies one request at a time, every scheduler tick. Fine for a handful of issues; with dozens, fetch concurrently (bounded) or move to webhooks with hosting.

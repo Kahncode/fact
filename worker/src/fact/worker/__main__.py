@@ -122,6 +122,7 @@ def _activity_workers(
             ping,
             workspace.prepare_workspace,
             workspace.teardown_workspace,
+            workspace.sync_base,
             change_set.open_change_set,
             cost.post_cost_comment,
             ci.wait_for_ci,

@@ -1,11 +1,14 @@
-"""Find, create and update a branch's pull request through the GitHub REST API."""
+"""Find, create and update a branch's pull request through the GitHub REST API, and read whether it can merge."""
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 BODY_MAX_CHARS = 65_000  # GitHub rejects PR bodies over 65,536 characters
+MERGE_STATE_TRIES = 5
+OUT_OF_DATE_STATES = frozenset({"dirty", "behind"})  # refusals a merge of the base branch fixes
 
 
 @dataclass(frozen=True)
@@ -57,3 +60,28 @@ async def open_or_update_pr(
     payload = {"title": title, "head": branch, "base": repo.default_branch, "body": body}
     pr = (await client.post(f"/repos/{repo.full_name}/pulls", json=payload)).json()
     return PullRequest(number=pr["number"], url=pr["html_url"], created=True)
+
+
+async def merge_state(  # noqa: PLR0913 - the PR, the commit it must be about, and the retry
+    client: httpx.AsyncClient,
+    full_name: str,
+    number: int,
+    head_sha: str,
+    *,
+    tries: int = MERGE_STATE_TRIES,
+    delay_s: float = 2.0,
+) -> str | None:
+    """
+    Return the PR's `mergeable_state` (`dirty`: conflicts with its base, `behind`, `clean`, `blocked`, ...) at `head_sha`.
+
+    GitHub computes mergeability in the background after a push and answers `unknown` (`mergeable: null`) meanwhile,
+    and right after a push it may still describe the previous head. Both count as not known yet: ask again up to `tries`
+    times, then None.
+    """
+    for i in range(tries):
+        body = (await client.get(f"/repos/{full_name}/pulls/{number}")).json()
+        if body.get("mergeable") is not None and body.get("head", {}).get("sha") == head_sha:
+            return body.get("mergeable_state")
+        if i + 1 < tries:
+            await asyncio.sleep(delay_s)
+    return None

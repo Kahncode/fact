@@ -141,6 +141,10 @@ class LocalWorktreeRunner:
             await self._git_ok("remote", "set-head", "origin", "--auto", cwd=mirror)  # follow default-branch renames
         return mirror
 
+    async def fetch(self, full_name: str) -> None:
+        """Fetch the mirror: its worktrees share its `origin/*` refs."""
+        await self.sync_mirror(full_name)
+
     async def _keep_bare_out_of_worktrees(self, mirror: Path) -> None:
         """
         Keep `core.bare = true` in the mirror's own `config.worktree`, never in the shared config.

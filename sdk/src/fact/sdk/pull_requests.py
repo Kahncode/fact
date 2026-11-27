@@ -1,14 +1,14 @@
 """
-The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait for CI and fix it, wait for a merge.
+The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait for CI and fix it, merge, wait for one.
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
-`next_attempt`, `note_outcome`, `agent`, `report_task`, `_control`, `_record`, the gate recording helpers of
-`HumanSteps`, and the `pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
+`next_attempt`, `note_outcome`, `agent`, `report_task`, `_control`, `_record`, the gate recording
+helpers of `HumanSteps`, and the `pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
 """
 
 from collections.abc import Sequence
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from temporalio import workflow
 from temporalio.exceptions import ActivityError
@@ -26,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
         CriterionResult,
         MergeChangeSetInput,
         MergeMethod,
+        MergeResult,
         OpenChangeSetInput,
         PostCostCommentInput,
         PRState,
@@ -48,6 +49,8 @@ FIX_CI_STAGE = "fix_ci"
 CI_TIMEOUT = timedelta(minutes=60)  # give up on checks still running after this long
 CI_ACTIVITY_SLACK = timedelta(minutes=5)  # on top of `CI_TIMEOUT` for the activity's own polling and log downloads
 REVIEW_STAGE = "wait_for_review"
+# how `until_ci_green` ended: green, a PR conflicting with its base (merge the base), or out of fixes
+CIOutcome = Literal["passed", "conflict", "needs_human"]
 REVIEW_TIMEOUT = timedelta(days=30)  # a PR still open after this long fails the run, leaving the workspace
 
 
@@ -120,37 +123,54 @@ class PullRequestSteps:
         *,
         stage_id: str = CI_STAGE,
         fix_stage: str = FIX_CI_STAGE,
-    ) -> StepOutcome:
+    ) -> CIOutcome:
         """
         Wait for CI on every PR; on failure, a fresh `fix_stage` session gets the failing jobs, then push and wait again.
 
-        `max_attempts` caps the fix sessions. Returns `passed`, or `needs_human` once the fixes are exhausted, a fix
-        session does not pass or commits nothing, or CI never finished. `prs` holds the PRs at their latest head SHA.
+        `max_attempts` caps the fix sessions. Returns `passed`; `conflict` at once when a PR conflicts with its base
+        (GitHub runs no CI on it: the workflow merges the base, `sync_with_base`, pushes and calls this again); or
+        `needs_human` once the fixes are exhausted, a fix session does not pass or commits nothing, or CI never
+        finished. `prs` holds the PRs at their latest head SHA.
         """
         current = list(prs)
         for fixes in range(max_attempts + 1):
             results = [(pr, await self.wait_for_ci(pr, stage_id)) for pr in current]
             failed = [(pr, r) for pr, r in results if r.outcome != StepOutcome.PASSED]
             if not failed:
-                return StepOutcome.PASSED
+                return "passed"
+            if any(r.outputs.get("conflict") for _, r in failed):
+                return "conflict"
             if fixes == max_attempts or any(r.outputs.get("timed_out") for _, r in failed):
                 break  # a fix cannot make a stuck CI finish
-            fixed = await self.agent(fix_stage, fix_prompt, context=ci_failure_context(failed), pr_text=False)
-            if fixed.outcome != StepOutcome.PASSED:
+            pushed = await self._fix_ci(failed, fix_prompt, fix_stage)
+            if pushed is None:
                 break
-            pushed = await self.push_change_set()
             if [pr.head_sha for pr in pushed] == [pr.head_sha for pr in current]:
                 workflow.logger.warning("%s: the fix session committed nothing; CI would fail the same way", fix_stage)
                 break
             current = pushed
-        return StepOutcome.NEEDS_HUMAN
+        return "needs_human"
 
-    async def merge_change_set(self: FactWorkflow, prs: Sequence[PRRef], method: MergeMethod = "squash") -> bool:
-        """Merge the PRs (each at its pushed head SHA) without a person: False if GitHub refused one, so wait instead."""
+    async def _fix_ci(
+        self: FactWorkflow, failed: list[tuple[PRRef, StepResult]], fix_prompt: str, fix_stage: str
+    ) -> list[PRRef] | None:
+        """Run a CI fix session and push what it committed; None if it did not pass."""
+        fixed = await self.agent(fix_stage, fix_prompt, context=ci_failure_context(failed), pr_text=False)
+        if fixed.outcome != StepOutcome.PASSED:
+            return None
+        return await self.push_change_set()
+
+    async def merge_change_set(self: FactWorkflow, prs: Sequence[PRRef], method: MergeMethod = "squash") -> MergeResult:
+        """
+        Merge the PRs (each at its pushed head SHA) without a person: `merged`, or why GitHub refused one.
+
+        `out_of_date`: the PR conflicts with or is behind its base, which `sync_with_base` fixes; `refused`: anything
+        else (branch protection, the head moved on), so wait for a person.
+        """
         if not prs:
-            return False
+            return "refused"
         spec = MergeChangeSetInput(run_id=self.input.run_id, prs=list(prs), method=method)
-        return await self._control(MERGE_CHANGE_SET, spec, bool)
+        return await self._control(MERGE_CHANGE_SET, spec, str)  # type: ignore[return-value] - a `MergeResult`
 
     async def wait_for_pr_closed(self: FactWorkflow, prs: Sequence[PRRef], stage_id: str = REVIEW_STAGE) -> RunOutcome:
         """
