@@ -12,9 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 ACTIVE = (RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING)
 
 
-def _record(status: str, outcome: str | None, trigger: str) -> RunRecord:
+def _record(run_id: str, status: str, outcome: str | None, trigger: str) -> RunRecord:
     return RunRecord(
-        status=RunStatus(status), outcome=RunOutcome(outcome) if outcome else None, trigger=RunTrigger(trigger)
+        status=RunStatus(status),
+        outcome=RunOutcome(outcome) if outcome else None,
+        trigger=RunTrigger(trigger),
+        run_id=run_id,
     )
 
 
@@ -23,7 +26,7 @@ async def run_histories(
 ) -> dict[tuple[str, str], list[RunRecord]]:
     """Read the counted runs of every task (or one), newest first, by (project, task key)."""
     query = (
-        select(Project.name, Run.task_key, Run.status, Run.outcome, Run.trigger)
+        select(Project.name, Run.task_key, Run.id, Run.status, Run.outcome, Run.trigger)
         .join(Project, Project.id == Run.project_id)
         .where(counts_as_run())
         .order_by(Run.created_at.desc(), Run.id.desc())
@@ -31,8 +34,8 @@ async def run_histories(
     if project is not None and task_key is not None:
         query = query.where(Project.name == project, Run.task_key == task_key)
     histories: dict[tuple[str, str], list[RunRecord]] = defaultdict(list)
-    for name, key, status, outcome, trigger in (await session.execute(query)).all():
-        histories[name, key].append(_record(status, outcome, trigger))
+    for name, key, run_id, status, outcome, trigger in (await session.execute(query)).all():
+        histories[name, key].append(_record(run_id, status, outcome, trigger))
     return histories
 
 

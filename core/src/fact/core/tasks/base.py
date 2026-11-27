@@ -63,6 +63,11 @@ def parse_key(key: str) -> TaskKey:
     raise ValueError(msg)
 
 
+def is_issue(key: str) -> bool:
+    """Whether `key` names a GitHub issue, which carries labels (a file task has none)."""
+    return key.startswith(GITHUB_PREFIX)
+
+
 def branch_name(key: str) -> str:
     """`task:M1-02` becomes `fact/task-m1-02`; `gh:owner/repo#12` becomes `fact/gh-12`."""
     parsed = parse_key(key)

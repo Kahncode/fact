@@ -56,6 +56,7 @@ async def _report(event: TaskEvent, **kw: object) -> list[tuple[str, Any]]:
 
 
 ENDED = ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))
+HELD = ("set_labels", (KEY, [NEEDS_HUMAN], [RUNNING]))
 
 
 @pytest.mark.parametrize(
@@ -70,8 +71,8 @@ ENDED = ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))
         ("gate_answered", {}, [("set_labels", (KEY, [], [NEEDS_HUMAN]))]),
         ("prs_opened", {"prs": [PR]}, [("link_prs", (KEY, [PR]))]),
         ("merged", {}, [("close", KEY), ENDED]),
-        ("closed", {"detail": "superseded"}, [ENDED, ("comment", None)]),
-        ("stopped", {"detail": "superseded"}, [ENDED, ("comment", None)]),
+        ("closed", {"detail": "superseded"}, [HELD, ("comment", None)]),
+        ("stopped", {"detail": "superseded"}, [HELD, ("comment", None)]),
     ],
 )
 async def test_event_reaches_the_source(event: TaskEvent, kw: dict[str, Any], expected: list[tuple[str, Any]]) -> None:

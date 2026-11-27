@@ -45,6 +45,7 @@ class Task(_Model):
     depends_on: list[str] = Field(default_factory=list)
     path: str | None = None  # for file tasks
     require_plan_approval: bool | None = None  # the task's own setting; None: the project's
+    needs_human: bool = False  # an issue carrying `fact:needs-human`: held until a person releases it
 
 
 class RepoCheckout(_Model):

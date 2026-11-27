@@ -110,10 +110,12 @@ async def test_a_run_waiting_at_a_gate_shows_up_once_in_the_inbox(api: FastAPI) 
             result = await handle.result(rpc_timeout=None)
         assert result.outcome == RunOutcome.NEEDS_HUMAN
 
-        (notification,) = (await client.get("/api/v1/notifications")).json()
+        held, notification = (await client.get("/api/v1/notifications")).json()  # newest first
+        assert (held["kind"], held["dedupe_key"]) == ("task_held", f"{run_id}:held")  # needs_human holds the task
         assert notification["dedupe_key"] == f"{run_id}:gate:checks-1"
-        read = await fact("inbox", "read", str(notification["id"]))
-        assert read.exit_code == 0, read.output
+        for n in (held, notification):
+            read = await fact("inbox", "read", str(n["id"]))
+            assert read.exit_code == 0, read.output
         assert (await fact("inbox")).output.strip() == "No unread notifications."
         everything = (await fact("inbox", "--all")).output
         assert everything.count("gate_waiting") == 1

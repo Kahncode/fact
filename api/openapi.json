@@ -161,6 +161,7 @@
       "Hold": {
         "description": "Why a ready task does not start on this tick.",
         "enum": [
+          "needs_human",
           "dependency",
           "parent",
           "failure_cap",
@@ -243,7 +244,8 @@
           "gate_waiting",
           "prs_ready",
           "run_failed",
-          "run_finished"
+          "run_finished",
+          "task_held"
         ],
         "title": "NotificationKind",
         "type": "string"
@@ -465,6 +467,17 @@
                 "type": "null"
               }
             ]
+          },
+          "last_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Id"
           },
           "priority": {
             "default": "medium",

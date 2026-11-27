@@ -22,6 +22,7 @@ import httpx
 from fact.core.github import GitHubError
 from fact.core.github.app import GitHubApp, split_full_name
 from fact.core.github.client import GitHubNotFoundError
+from fact.core.holds import NEEDS_HUMAN
 from fact.core.logging import get_logger
 from fact.core.tasks.base import GITHUB_PREFIX, ReadyItem, dependency_key, parse_key
 from fact.core.tasks.github_fields import (
@@ -180,6 +181,7 @@ class GitHubIssuesSource(GitHubIssueWrites):
             complexity=complexity(labels),
             priority=priority(labels),
             depends_on=[d for d in unique_keys(deps) if d.lower() != own.lower()],
+            needs_human=NEEDS_HUMAN.lower() in (n.lower() for n in labels),
         )
 
     def _owns(self, key: str) -> bool:

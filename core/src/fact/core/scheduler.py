@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from enum import StrEnum
 
 from fact.core.enums import RunOutcome, RunStatus, RunTrigger
+from fact.core.holds import NEEDS_HUMAN, release_hint
 from fact.core.types import PRIORITIES, Priority
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,6 +31,7 @@ _ID_RE = re.compile(r"^M(\d+)-(\d+)$")
 class Hold(StrEnum):
     """Why a ready task does not start on this tick."""
 
+    NEEDS_HUMAN = "needs_human"  # an issue carrying `fact:needs-human`: a person removes it or runs `fact run`
     DEPENDENCY = "dependency"  # a dependency is not done
     PARENT = "parent"  # an ancestor (parent issue) is not marked ready: its label gates the task
     FAILURE_CAP = "failure_cap"  # its last `concurrency.max_failed_runs` runs failed: a person restarts it
@@ -53,7 +55,8 @@ class ReadyTask(_Model):
     waiting_on: list[str] = Field(default_factory=list)  # dependencies not done yet
     gated_by: str | None = None  # the nearest ancestor not marked ready
     failed_runs: int = 0  # failed runs in a row, counted since the last run a person started
-    hold: Hold | None = None  # PARENT, DEPENDENCY or FAILURE_CAP, set by `find_ready`
+    last_run_id: str | None = None  # its newest counted run, if any
+    hold: Hold | None = None  # NEEDS_HUMAN, PARENT, DEPENDENCY or FAILURE_CAP, set by `find_ready`
 
 
 class ProjectLoad(_Model):
@@ -90,22 +93,27 @@ class RunRecord(_Model):
     status: RunStatus
     outcome: RunOutcome | None = None
     trigger: RunTrigger = RunTrigger.MANUAL
+    run_id: str = ""
 
 
-def run_history_hold(newest_first: Sequence[RunRecord], max_failed: int) -> tuple[bool, int, Hold | None]:
+def run_history_hold(
+    newest_first: Sequence[RunRecord], max_failed: int, *, labelled: bool = False
+) -> tuple[bool, int, Hold | None]:
     """
     `(offered, failed_runs, hold)` for a task with these runs.
 
-    Not offered: a run is in progress, or the last one ended any way but `failed` (a person restarts it). A task whose
-    runs all failed is offered again, held by FAILURE_CAP once `max_failed` failed in a row; the count stops at the
-    newest run a person started, so `fact run` resets it.
+    Not offered: a run is in progress. A file task (`labelled` False) whose last run ended any way but `failed` is not
+    offered either (a person restarts it). An issue (`labelled`) is held by its `fact:needs-human` label instead, which
+    such run ends add, so its history holds nothing but the failure count. A task whose last runs failed is offered
+    again, held by FAILURE_CAP once `max_failed` failed in a row; the count stops at the newest run that did not fail
+    and at the newest run a person started, so `fact run` resets it.
     """
     if any(record.status != RunStatus.FINISHED for record in newest_first):
         return False, 0, None
     failed = 0
     for record in newest_first:
         if record.outcome != RunOutcome.FAILED:
-            if failed == 0:
+            if failed == 0 and not labelled:
                 return False, 0, None
             break
         failed += 1
@@ -146,6 +154,8 @@ def _order(task: ReadyTask) -> tuple[int, int, int, int, str]:
 
 
 def _held_detail(task: ReadyTask) -> str:
+    if task.hold == Hold.NEEDS_HUMAN:
+        return f"carries `{NEEDS_HUMAN}`: {release_hint(task.task_key)}"
     if task.hold == Hold.PARENT:
         return f"waits for its ancestor {task.gated_by} to be marked ready"
     if task.hold == Hold.DEPENDENCY:
