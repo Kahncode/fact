@@ -1,7 +1,5 @@
 """`shell_step`: run a repository's own lint or test commands in the run's workspace, as a reported step."""
 
-import asyncio
-import contextlib
 import time
 from collections import deque
 from pathlib import Path
@@ -15,7 +13,6 @@ from fact.worker.runners import ExecExit, ExecLine, Runner
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-HEARTBEAT_S = 30.0
 TAIL_BYTES = 4096  # tail of the failing command's output kept in `outputs["failure_output"]`
 TAIL_LINES = TAIL_BYTES  # every line is at least one byte, so this keeps the last TAIL_BYTES
 NOT_STARTED = 127
@@ -24,13 +21,6 @@ NL = "\n"
 
 def _tail_bytes(text: str, max_bytes: int) -> str:
     return text.encode("utf-8")[-max_bytes:].decode("utf-8", errors="ignore")
-
-
-async def _heartbeats(step: StepContext) -> None:
-    while True:
-        await asyncio.sleep(HEARTBEAT_S)
-        if activity.in_activity():
-            activity.heartbeat(f"{step.stage_id} running")
 
 
 class ShellActivities:
@@ -42,13 +32,7 @@ class ShellActivities:
     async def shell_step(self, spec: ShellStepInput) -> StepResult:
         name = spec.check if len(spec.handle.repos) <= 1 else f"{spec.check} ({spec.repo})"
         async with self._reporter.step(spec.run_id, spec.stage_id, StepKind.SHELL, spec.attempt, name=name) as step:
-            beat = asyncio.create_task(_heartbeats(step))
-            try:
-                await self._run_check(spec, step)
-            finally:
-                beat.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await beat
+            await self._run_check(spec, step)
         if step.result is None:
             msg = "step ended without a result"
             raise RuntimeError(msg)

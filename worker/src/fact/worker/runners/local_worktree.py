@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 
 import httpx
+from fact.core.activity_contract import SANDBOX_QUEUE
 from fact.core.github import GitHubApp, GitHubError
 from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT, Settings
@@ -45,6 +46,9 @@ class LocalWorktreeRunner:
     With a `github` App, worktrees commit as the App's bot user (fact[bot]); otherwise, or if that lookup fails, as
     `commit_author_name`/`commit_author_email` from settings.
 
+    Its handles name `task_queue`, the queue every step on the workspace is sent to: the sandbox queue, as the
+    workers run on this one machine.
+
     `factory_root` is the checkout of the factory that is running; `prepare` refuses a workspace inside it or inside
     `pinned_dir`, so an agent never edits the code it runs on.
 
@@ -58,11 +62,20 @@ class LocalWorktreeRunner:
         remote_url: Callable[[str], str] = github_url,
         github: GitHubApp | None = None,
         factory_root: Path = REPO_ROOT,
+        task_queue: str = SANDBOX_QUEUE,
     ) -> None:
         self._settings = settings
+        self.task_queue = task_queue
         self._remote_url = remote_url
         self._github = github
         self._factory_root = factory_root
+
+    def _handle(
+        self, run_id: str, root: Path, repos: dict[str, str], branches: dict[str, str] | None = None
+    ) -> WorkspaceHandle:
+        return WorkspaceHandle(
+            run_id=run_id, root=str(root), task_queue=self.task_queue, repos=repos, branches=branches or {}
+        )
 
     def capabilities(self) -> RunnerCapabilities:
         return RunnerCapabilities(name=PROFILE, isolation="none", runs_as_user=True, supports_resume=True)
@@ -137,13 +150,11 @@ class LocalWorktreeRunner:
                 return None
             repos[repo.full_name] = str(worktree)
             branches[repo.full_name] = branch
-        return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos, branches=branches)
+        return self._handle(spec.run_id, root, repos, branches)
 
     async def _prepare(self, spec: WorkspaceSpec, root: Path) -> WorkspaceHandle:
         # a retry after a crash mid-prepare finds this run's own half-made workspace: start over, keep the branch free
-        await self._remove(
-            WorkspaceHandle(run_id=spec.run_id, root=str(root), repos={r.full_name: "" for r in spec.repos})
-        )
+        await self._remove(self._handle(spec.run_id, root, {r.full_name: "" for r in spec.repos}))
         root.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 - one directory, instant
         repos: dict[str, str] = {}
         branches: dict[str, str] = {}
@@ -154,10 +165,10 @@ class LocalWorktreeRunner:
                 branches[repo.full_name] = await self._add_worktree(repo, worktree)
             write_workspace_md(root, spec, branches)
         except BaseException:
-            await self._remove(WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos))
+            await self._remove(self._handle(spec.run_id, root, repos))
             raise
         log.info("workspace_ready", run_id=spec.run_id, root=str(root), repos=list(repos), branches=branches)
-        return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos, branches=branches)
+        return self._handle(spec.run_id, root, repos, branches)
 
     async def sync_mirror(self, full_name: str) -> Path:
         """Clone or fetch the bare mirror of `owner/repo` (remote branches under `origin/*`) and return its path."""
@@ -177,17 +188,19 @@ class LocalWorktreeRunner:
         A held branch is never reset, so a workspace left behind keeps its unpushed commits.
         """
         mirror = self._mirror_path(repo.full_name)
+        name, email = await self._commit_identity()
         async with mirror_lock(mirror):  # runs on one mirror, in any process, must not pick the same free branch
             await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(repo.full_name))
             remote_branch = f"refs/remotes/origin/{repo.branch}"
             resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
             start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
             branch = await Mirror(self._git, self._git_ok, mirror).add_on_free_branch(repo.branch, worktree, start)
+            # git config reads the mirror's shared config, which another worker's sync may be rewriting: on Windows
+            # that read fails with "Permission denied" unless it too holds the mirror lock
+            await self._git("config", "--worktree", "user.name", name, cwd=worktree)
+            await self._git("config", "--worktree", "user.email", email, cwd=worktree)
         if branch != repo.branch:
             log.warning("branch_taken", repo=repo.full_name, wanted=repo.branch, branch=branch)
-        name, email = await self._commit_identity()
-        await self._git("config", "--worktree", "user.name", name, cwd=worktree)
-        await self._git("config", "--worktree", "user.email", email, cwd=worktree)
         log.info("worktree_added", repo=repo.full_name, branch=branch, resumed=resumed)
         return branch
 

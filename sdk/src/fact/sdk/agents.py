@@ -5,7 +5,7 @@ When to resume is decided in `fact.sdk.sessions`. A session the usage limit refu
 durable timer until its `resume_at`, however far away (a full weekly window means days), with the run marked
 `waiting` and the `status` query saying `usage limit until <time>`; then the same session is resumed.
 
-`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `_record`,
+`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `_record`, `_activity`,
 `_remember_pr_text` and `_remember_assumptions`.
 """
 
@@ -19,13 +19,11 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
         AGENT_STEP,
         RECORD_RUN_WAITING,
-        SANDBOX_QUEUE,
         AgentStepInput,
         RunWaitingInput,
     )
     from fact.core.enums import StepOutcome
     from fact.core.types import StepResult
-    from fact.sdk.policies import HEARTBEAT_TIMEOUT, NO_RETRY, WAIT_CANCELLED
     from fact.sdk.sessions import (
         INTERRUPTED,
         LIMIT_PAUSED,
@@ -128,16 +126,8 @@ class AgentSteps:
             resume_session_id=resume,
             handoff_ref=run.handoff_ref,
         )
-        result = await workflow.execute_activity(
-            AGENT_STEP,
-            spec,
-            result_type=StepResult,
-            task_queue=SANDBOX_QUEUE,
-            start_to_close_timeout=timedelta(seconds=run.limits.agent_timeout_s),
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=NO_RETRY,
-            cancellation_type=WAIT_CANCELLED,  # a stop tears the workspace down only once the session stopped
-        )
+        duration = timedelta(seconds=run.limits.agent_timeout_s)
+        result = await self._activity(AGENT_STEP, spec, StepResult, max_duration=duration)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         self.note_agent_step(stage_id, spec.attempt, result)
         return result

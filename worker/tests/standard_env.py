@@ -10,6 +10,7 @@ from fact.core.settings import REPO_ROOT
 
 WORKFLOWS_DIR = REPO_ROOT / ".fact" / "workflows"
 WORKFLOW_QUEUE = "wf-test"
+RUNNER_QUEUE = "runner-test"  # the queue the fake workspace handle names, not the default `sandbox`
 IDENTITY = "test-worker"  # a fixed worker identity instead of the host name
 # Heartbeats reach the server at once, so an activity sees its cancellation without the 60 s default throttle
 OPTIONS: dict[str, Any] = {"identity": IDENTITY, "max_heartbeat_throttle_interval": timedelta(milliseconds=50)}

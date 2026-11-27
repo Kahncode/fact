@@ -64,6 +64,7 @@ class WorkspaceSpec(_Model):
 class WorkspaceHandle(_Model):
     run_id: str
     root: str
+    task_queue: str  # the queue of the runner holding the workspace: every step on it is sent there
     repos: dict[str, str] = Field(default_factory=dict)  # full name -> worktree path
     # full name -> the branch checked out, which is the requested one or `<branch>-<n>` when another workspace holds it
     branches: dict[str, str] = Field(default_factory=dict)
@@ -133,7 +134,6 @@ class RunLimits(_Model):
 
     agent_timeout_s: float = Field(default=3600.0, gt=0)
     shell_timeout_s: float = Field(default=900.0, gt=0)
-    control_timeout_s: float = Field(default=600.0, gt=0)
 
 
 MergeMethod = Literal["squash", "merge", "rebase"]

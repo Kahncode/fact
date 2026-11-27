@@ -1,21 +1,118 @@
 """
-The contract between workflow code (`fact.sdk`) and the worker: task queues, activity names and activity inputs.
+The contract between workflow code (`fact.sdk`) and the worker: task queues, activity names, specs and inputs.
 
 Workflows call activities by name, so `fact.sdk` never imports `fact.worker`; the worker registers its activities
-under these names and takes these inputs. Everything here crosses the Temporal boundary: small and JSON-serializable.
+under these names and takes these inputs (`fact.core.activity_inputs`, re-exported here). Each name has an
+`ActivitySpec` in `SPECS`: its zone, default maximum duration, retry and cancellation, which the SDK's one call helper
+applies, so no workflow or step sets them by hand. Every activity heartbeats (the worker's framework does it), so the
+heartbeat timeout is the framework's, not the spec's.
 """
 
-from datetime import datetime
-from typing import Any, Literal
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Literal
 
-from fact.core.classification import Classification
-from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
-from fact.core.gates import GateDecision
-from fact.core.types import Complexity, MergeMethod, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
-from pydantic import BaseModel, ConfigDict, Field
+from fact.core.activity_inputs import (
+    AgentStepInput,
+    Check,
+    CheckResult,
+    ClassifySignalsInput,
+    CriterionResult,
+    GateAnsweredInput,
+    GateOpenedInput,
+    HandoffInput,
+    HandoffStep,
+    LabelChangeSetInput,
+    MarkTaskDoneInput,
+    MergeChangeSetInput,
+    MergeResult,
+    NotifyInput,
+    OpenChangeSetInput,
+    PostCostCommentInput,
+    PRState,
+    ReportStatusInput,
+    RunFinishedInput,
+    RunStartedInput,
+    RunWaitingInput,
+    ShellStepInput,
+    SyncBaseInput,
+    TaskEvent,
+    WaitForCIInput,
+    WaitForPRClosedInput,
+)
+from fact.core.types import MergeMethod
 
-CONTROL_QUEUE = "control"  # holds the GitHub App and the API; workspace, PR and bookkeeping steps
-SANDBOX_QUEUE = "sandbox"  # runs agents and the repository's own commands
+__all__ = [
+    "ACTIVITY_SPECS",
+    "AGENT_INTERRUPTED",
+    "AGENT_STEP",
+    "CLASSIFY_SIGNALS",
+    "CONTROL_DURATION",
+    "CONTROL_QUEUE",
+    "HEARTBEAT_INTERVAL",
+    "HEARTBEAT_TIMEOUT",
+    "INFRA_RETRY",
+    "LABEL_CHANGE_SET",
+    "LONG_WAIT_RETRY",
+    "MARK_TASK_DONE",
+    "MERGE_CHANGE_SET",
+    "NOTIFY",
+    "NO_RETRY",
+    "OPEN_CHANGE_SET",
+    "POST_COST_COMMENT",
+    "PREPARE_WORKSPACE",
+    "RECORD_GATE_ANSWERED",
+    "RECORD_GATE_OPENED",
+    "RECORD_RUN_FINISHED",
+    "RECORD_RUN_STARTED",
+    "RECORD_RUN_WAITING",
+    "REPORT_STATUS",
+    "SANDBOX_QUEUE",
+    "SHELL_STEP",
+    "SYNC_BASE",
+    "TEARDOWN_WORKSPACE",
+    "WAIT_FOR_CI",
+    "WAIT_FOR_PR_CLOSED",
+    "WORKFLOW_QUEUE_PREFIX",
+    "WRITE_HANDOFF",
+    "ActivitySpec",
+    "AgentStepInput",
+    "Cancellation",
+    "Check",
+    "CheckResult",
+    "ClassifySignalsInput",
+    "CriterionResult",
+    "GateAnsweredInput",
+    "GateOpenedInput",
+    "HandoffInput",
+    "HandoffStep",
+    "LabelChangeSetInput",
+    "MarkTaskDoneInput",
+    "MergeChangeSetInput",
+    "MergeMethod",
+    "MergeResult",
+    "NotifyInput",
+    "OpenChangeSetInput",
+    "PRState",
+    "PostCostCommentInput",
+    "ReportStatusInput",
+    "Retry",
+    "RunFinishedInput",
+    "RunStartedInput",
+    "RunWaitingInput",
+    "ShellStepInput",
+    "SyncBaseInput",
+    "TaskEvent",
+    "UnknownActivityError",
+    "WaitForCIInput",
+    "WaitForPRClosedInput",
+    "Zone",
+    "spec_for",
+    "workflow_queue",
+]
+
+CONTROL_QUEUE = "control"  # holds the GitHub App and the API; PR, tracker and bookkeeping steps
+SANDBOX_QUEUE = "sandbox"  # the local runner's queue: agents, the repository's own commands, git in the worktree
 WORKFLOW_QUEUE_PREFIX = "wf-"  # each project's workflows run on `wf-<project>`, one worker deployment per project
 
 PREPARE_WORKSPACE = "prepare_workspace"
@@ -40,245 +137,88 @@ REPORT_STATUS = "report_status"
 CLASSIFY_SIGNALS = "classify_signals"
 LABEL_CHANGE_SET = "label_change_set"
 
-Check = Literal["lint", "test", "build", "setup"]
-# a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
-TaskEvent = Literal[
-    "run_started",
-    "gate_opened",
-    "gate_answered",
-    "prs_opened",
-    "merged",
-    "closed",
-    "stopped",
-    "needs_human",
-    "pr_opened",
-]
-PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
-# how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
-# base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
-MergeResult = Literal["merged", "out_of_date", "refused"]
-
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
-# `(progress, session_id)`.
+# `(progress, session_id)`, the details the step hands the worker's heartbeat wrapper.
 AGENT_INTERRUPTED = "AgentInterrupted"
+
+HEARTBEAT_INTERVAL = timedelta(seconds=30)  # the worker heartbeats every running activity this often
+HEARTBEAT_TIMEOUT = timedelta(minutes=2)  # an attempt not heard from for this long is given up and retried
+
+# `control`: the control queue; `workspace`: the queue the run's `WorkspaceHandle` names (its runner's)
+Zone = Literal["control", "workspace"]
+# `wait`: a cancelled activity is awaited until it has stopped, so nothing it does overlaps what comes next;
+# `try`: the workflow goes on at once
+Cancellation = Literal["wait", "try"]
+
+
+@dataclass(frozen=True)
+class Retry:
+    """A retry policy; `maximum_attempts` 0 retries until the activity's maximum duration has passed."""
+
+    maximum_attempts: int
+    initial_interval: timedelta = timedelta(seconds=5)
+    maximum_interval: timedelta = timedelta(minutes=2)
+
+
+NO_RETRY = Retry(maximum_attempts=1)  # agent sessions are resumed only by `FactWorkflow.agent`, deliberately
+INFRA_RETRY = Retry(maximum_attempts=5)  # only infrastructure errors raise, and those may pass on retry
+LONG_WAIT_RETRY = Retry(maximum_attempts=0)  # a wait of days outlives worker restarts
+
+
+@dataclass(frozen=True)
+class ActivitySpec:
+    """How an activity runs: where, for how long at most (a step may ask for another), its retries and cancellation."""
+
+    zone: Zone
+    max_duration: timedelta
+    retry: Retry = INFRA_RETRY
+    cancellation: Cancellation = "try"
+
+
+CONTROL_DURATION = timedelta(minutes=10)
+_CONTROL = ActivitySpec("control", CONTROL_DURATION)
+
+ACTIVITY_SPECS: dict[str, ActivitySpec] = {
+    # control: no handle exists yet; a stale attempt must stop before its retry, which returns its workspace
+    PREPARE_WORKSPACE: ActivitySpec("control", CONTROL_DURATION, cancellation="wait"),
+    TEARDOWN_WORKSPACE: ActivitySpec("workspace", CONTROL_DURATION),
+    # a stop tears the workspace down only once the session, the check or git has stopped in it
+    AGENT_STEP: ActivitySpec("workspace", timedelta(minutes=60), NO_RETRY, "wait"),
+    SHELL_STEP: ActivitySpec("workspace", timedelta(minutes=16), cancellation="wait"),
+    SYNC_BASE: ActivitySpec("workspace", timedelta(minutes=30), cancellation="wait"),  # a fetch and a merge per repo
+    OPEN_CHANGE_SET: _CONTROL,
+    LABEL_CHANGE_SET: _CONTROL,
+    MARK_TASK_DONE: _CONTROL,
+    POST_COST_COMMENT: _CONTROL,
+    WAIT_FOR_CI: ActivitySpec("control", timedelta(minutes=65)),  # CI's 60 min, plus polling and log downloads
+    WAIT_FOR_PR_CLOSED: ActivitySpec("control", timedelta(days=30), LONG_WAIT_RETRY),  # then the run fails
+    MERGE_CHANGE_SET: _CONTROL,
+    RECORD_RUN_STARTED: _CONTROL,
+    RECORD_RUN_FINISHED: _CONTROL,
+    RECORD_RUN_WAITING: _CONTROL,
+    RECORD_GATE_OPENED: _CONTROL,
+    RECORD_GATE_ANSWERED: _CONTROL,
+    NOTIFY: _CONTROL,
+    WRITE_HANDOFF: _CONTROL,
+    REPORT_STATUS: _CONTROL,
+    CLASSIFY_SIGNALS: _CONTROL,
+}
+
+
+class UnknownActivityError(KeyError):
+    """An activity name with no `ActivitySpec`: declare it in `ACTIVITY_SPECS` before calling or registering it."""
+
+
+def spec_for(name: str) -> ActivitySpec:
+    """Return the spec of activity `name`; raise `UnknownActivityError` when it has none."""
+    try:
+        return ACTIVITY_SPECS[name]
+    except KeyError:
+        msg = f"activity {name!r} has no spec in fact.core.activity_contract.ACTIVITY_SPECS"
+        raise UnknownActivityError(msg) from None
 
 
 def workflow_queue(project: str) -> str:
     """Task queue (and worker deployment name) of a project's workflow worker."""
     return f"{WORKFLOW_QUEUE_PREFIX}{project}"
-
-
-class _Input(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-
-class AgentStepInput(_Input):
-    run_id: str
-    stage_id: str
-    attempt: int
-    handle: WorkspaceHandle
-    task: Task
-    prompt_name: str  # `.fact/prompts/<prompt_name>.md` in the home repository
-    context: str = ""  # `$context` in the prompt, such as failing check output
-    complexity: Complexity = "standard"
-    override: RouteOverride | None = None
-    home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
-    resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
-    handoff_ref: str | None = None  # artifact key of a stopped run's handoff note, `$handoff` in the prompt
-
-
-class ShellStepInput(_Input):
-    run_id: str
-    stage_id: str
-    attempt: int
-    handle: WorkspaceHandle
-    repo: str  # full name, a key of `handle.repos`
-    check: Check
-    timeout_s: float = 900.0  # for the whole check, all commands together
-
-
-class CheckResult(_Input):
-    """One check the run passed or failed, such as `lint` or `test`, for the PR description."""
-
-    name: str
-    outcome: StepOutcome
-    summary: str = ""
-
-
-class CriterionResult(_Input):
-    """One acceptance criterion as the review session judged it, with its evidence, for the PR description."""
-
-    text: str
-    met: bool
-    evidence: str = ""
-
-
-class OpenChangeSetInput(_Input):
-    run_id: str
-    task: Task
-    handle: WorkspaceHandle
-    branch: str  # the branch the workspace checked out (`WorkspaceHandle.branches`); the only one this pushes
-    title: str  # PR title, written by the last agent session
-    summary: str  # top of the PR description, written by the last agent session
-    check_results: list[CheckResult] = Field(default_factory=list)
-    criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
-    assumptions: list[str] = Field(default_factory=list)  # the agent sessions' `assumptions`, for the PR description
-    spec_ambiguous: bool = False  # an agent session found the spec ambiguous
-    classification: Classification | None = None  # once classified: the PR description's `## Review` section
-    run_url: str = ""
-    attempt: int = 1  # of stage `open_pr`: a CI fix pushes and updates the PR again as the next attempt
-
-
-class MarkTaskDoneInput(_Input):
-    run_id: str
-    task: Task
-    handle: WorkspaceHandle
-    home_repo: str | None = None  # full name in `handle.repos` holding `.fact/` and the tasks; None: the first
-
-
-class PostCostCommentInput(_Input):
-    run_id: str
-    prs: list[PRRef]  # each gets the run's cost comment, created or updated in place
-
-
-class WaitForCIInput(_Input):
-    run_id: str
-    stage_id: str
-    attempt: int
-    pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
-    timeout_s: float = 3600.0  # give up waiting for checks still running after this long
-    no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
-
-
-class WaitForPRClosedInput(_Input):
-    run_id: str
-    prs: list[PRRef]  # each is polled until it is merged or closed
-
-
-class MergeChangeSetInput(_Input):
-    run_id: str
-    prs: list[PRRef]  # merged in this order, each only at its `head_sha`
-    method: MergeMethod = "squash"
-
-
-class SyncBaseInput(_Input):
-    run_id: str
-    handle: WorkspaceHandle
-    repos: list[RepoCheckout]  # each worktree in `handle.repos` merges `origin/<default_branch>` into its branch
-    stage_id: str = "sync_base"
-    attempt: int = 1
-    verify_only: bool = False  # after a resolve session: conclude its merge, but never start a new one
-
-
-class RunStartedInput(_Input):
-    run_id: str
-    worker_version: str | None = (
-        None  # `<factory SHA>+<home SHA>`, the build id the run is pinned to; None: unversioned
-    )
-
-
-class RunFinishedInput(_Input):
-    run_id: str
-    outcome: RunOutcome
-
-
-class RunWaitingInput(_Input):
-    """The run starts (`waiting`) or stops waiting without a gate, such as for a usage limit to reset."""
-
-    run_id: str
-    waiting: bool
-    reason: str = ""  # such as `usage limit until <time>`, for the log
-
-
-class GateOpenedInput(_Input):
-    """A gate opened: its step (kind `gate`) starts waiting, and so does the run."""
-
-    run_id: str
-    stage_id: str
-    attempt: int
-    gate_id: str
-    kind: str
-    details: dict[str, Any] = Field(default_factory=dict)
-    opened_at: datetime  # workflow time, so the step's wall time is the wait
-
-
-class GateAnsweredInput(_Input):
-    """A gate answered: its step ends with the decision and the wait, and the run runs again."""
-
-    run_id: str
-    step_id: str | None  # from `record_gate_opened`; None if that could not create the step
-    stage_id: str
-    attempt: int
-    gate_id: str
-    kind: str
-    details: dict[str, Any] = Field(default_factory=dict)
-    decision: GateDecision
-    note: str = ""
-    outcome: StepOutcome  # `passed` for approve, `needs_human` for reject
-    opened_at: datetime
-    answered_at: datetime
-    wait_seconds: float  # human wait time: all of the step's wall time
-
-
-class NotifyInput(_Input):
-    """A notification for a person; a second one with the same `dedupe_key` is the same notification."""
-
-    run_id: str
-    kind: NotificationKind
-    title: str = Field(max_length=300)
-    body: str = ""
-    link: str | None = None
-    dedupe_key: str = Field(max_length=300)  # such as `<run id>:gate:<gate id>`: one per run state
-
-
-class HandoffStep(_Input):
-    """One agent step of a stopped run, for its handoff note."""
-
-    stage_id: str
-    attempt: int
-    outcome: StepOutcome
-    summary: str = ""
-
-
-class HandoffInput(_Input):
-    """What a stopped run leaves for the next run of its task: written to the artifact store as `handoff_key`."""
-
-    run_id: str
-    task: Task
-    reason: str = ""  # why the run was stopped, from the cancellation
-    stage_id: str | None = None  # the last stage reached
-    attempt: int | None = None
-    steps: list[HandoffStep] = Field(default_factory=list)  # agent steps, in order
-    prs: list[PRRef] = Field(default_factory=list)  # left open, for the next run to reuse
-
-
-class ReportStatusInput(_Input):
-    """A status change for the task's source: labels, comments, PR links or closing, as `fact.core.tasks.events`."""
-
-    run_id: str
-    project: str  # the project whose `.fact/project.yaml` names the task source
-    task_key: str
-    event: TaskEvent
-    run_url: str = ""
-    detail: str = ""  # what a gate needs from a person, or why the run ended
-    prs: list[PRRef] = Field(default_factory=list)  # for `prs_opened`
-
-
-class ClassifySignalsInput(_Input):
-    """The change set to classify: each repository's branch against the merge base with its default branch."""
-
-    run_id: str
-    project: str  # the project whose `.fact/project.yaml` (in its registered checkout) holds the globs and source
-    task_key: str
-    handle: WorkspaceHandle
-
-
-class LabelChangeSetInput(_Input):
-    """Label each PR with its classification and re-render its description, `## Review` included."""
-
-    run_id: str
-    change_set: OpenChangeSetInput  # with `classification` set
-    prs: list[PRRef]
-    stage_id: str = "label_prs"
-    attempt: int = 1

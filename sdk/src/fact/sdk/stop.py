@@ -6,7 +6,7 @@ summary, the PR links), tears its workspace down so the task branch is free, tel
 outcome, so a run shown `stopped` already has its note, and comments the run's cost on its PRs last. The remote branch and the PRs stay: the next run of the
 task starts from that branch, reuses the open PRs and gets the note as `$handoff` in its prompts.
 
-`StopSteps` uses the workflow's `input`, `prs`, `_stage`, `_stage_attempt`, `_control`, `_teardown`, `report_end`
+`StopSteps` uses the workflow's `input`, `prs`, `_stage`, `_stage_attempt`, `_activity`, `_teardown`, `report_end`
 and `record_run_end`.
 """
 
@@ -69,7 +69,7 @@ class StopSteps:
             prs=list(self.prs),
         )
         try:
-            await self._control(WRITE_HANDOFF, note, str)
+            await self._activity(WRITE_HANDOFF, note, str)
         except ActivityError as exc:
             workflow.logger.warning("handoff note failed for run %s: %s", run_id, exc.cause or exc)
         await self._teardown()

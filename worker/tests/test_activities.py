@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from fact.core.settings import Settings
 from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
-from fact.worker.activities import shell as shell_module
 from fact.worker.activities.shell import ShellActivities, ShellStepInput
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.reporting import StepReporter
@@ -21,7 +20,6 @@ PY = sys.executable
 BIG = 6000
 SUMMARY_MAX = 2048
 TAIL_MAX = 4096
-MIN_BEATS = 2
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -151,18 +149,6 @@ async def test_timeout_is_failed_check(shell: ShellActivities, run_id: str, hand
     result = await ActivityEnvironment().run(shell.shell_step, _input(run_id, handle, "test", timeout_s=1.0))
     assert result.outcome == "failed_checks"
     assert "timed out" in result.summary
-
-
-async def test_heartbeats_while_running(
-    shell: ShellActivities, run_id: str, handle: WorkspaceHandle, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(shell_module, "HEARTBEAT_S", 0.1)
-    _write_repo_yaml(handle, test=["import time; time.sleep(1)"])
-    beats: list[object] = []
-    env = ActivityEnvironment()
-    env.on_heartbeat = lambda *details: beats.append(details)
-    assert (await env.run(shell.shell_step, _input(run_id, handle, "test"))).outcome == "passed"
-    assert len(beats) >= MIN_BEATS
 
 
 async def test_unknown_repo_and_missing_config_are_non_retryable(

@@ -6,7 +6,7 @@ and survives worker restarts. Its step (kind `gate`) is recorded through control
 outage must not lose a person's answer. Opening a gate also creates a `gate_waiting` notification, once per gate, and
 reports `gate_opened` to the task's source (`fact:needs-human`); answering it reports `gate_answered`.
 
-`HumanSteps` uses the workflow's `input`, `next_attempt`, `_control` and `report_task`; `FactWorkflow` calls its
+`HumanSteps` uses the workflow's `input`, `next_attempt`, `_activity` and `report_task`; `FactWorkflow` calls its
 `__init__`, which calls the next mixin's.
 """
 
@@ -107,7 +107,7 @@ class HumanSteps:
             dedupe_key=f"{run_id}:{key or kind}"[:KEY_MAX_CHARS],
         )
         try:
-            await self._control(NOTIFY, spec, int)
+            await self._activity(NOTIFY, spec, int)
         except ActivityError as exc:
             workflow.logger.warning("notify failed for %s: %s", spec.dedupe_key, exc.cause or exc)
 
@@ -243,7 +243,7 @@ class HumanSteps:
     ) -> T | None:
         """Best effort: the gate holds the run either way; a missing step only leaves the UI without it."""
         try:
-            return await self._control(name, arg, result_type)
+            return await self._activity(name, arg, result_type)
         except ActivityError as exc:
             workflow.logger.warning("%s failed for gate %s: %s", name, arg.gate_id, exc.cause or exc)
             return None

@@ -59,7 +59,9 @@ class FakeGitHub:
 
 
 def _spec(route: str) -> LabelChangeSetInput:
-    handle = WorkspaceHandle(run_id="r1", root="/ws", repos={REPO: "/ws/widget"}, branches={REPO: "fact/x"})
+    handle = WorkspaceHandle(
+        run_id="r1", root="/ws", task_queue="sandbox", repos={REPO: "/ws/widget"}, branches={REPO: "fact/x"}
+    )
     change_set = OpenChangeSetInput(
         run_id="r1",
         task=Task(key="task:M1-1", id="M1-1", title="Widget"),

@@ -4,19 +4,17 @@ The steps of `FactWorkflow` that keep the run's branch up to date with its base 
 `sync_with_base` merges each repository's default branch into the run's branch (a merge commit: the PR is squashed in
 the end) and hands conflicts to an agent session, which resolves them and commits the merge. `BaseSyncSteps` is a
 mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `next_attempt`, `note_outcome`, `agent` and
-`raise_if_stopped`.
+`_activity`.
 """
 
-from datetime import timedelta
 from typing import TYPE_CHECKING, Literal
 
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
-    from fact.core.activity_contract import CONTROL_QUEUE, SYNC_BASE, SyncBaseInput
+    from fact.core.activity_contract import SYNC_BASE, SyncBaseInput
     from fact.core.enums import StepOutcome
     from fact.core.types import StepResult
-    from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, WAIT_CANCELLED
 
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
@@ -24,7 +22,6 @@ if TYPE_CHECKING:
 SYNC_STAGE = "sync_base"
 RESOLVE_STAGE = "resolve_conflicts"
 MAX_RESOLVE_ATTEMPTS = 2
-SYNC_TIMEOUT = timedelta(minutes=30)  # a fetch and a merge per repository, each git call up to 10 min; it heartbeats
 # `up_to_date`: nothing to merge; `merged`: a clean merge commit; `resolved`: an agent resolved conflicts, so the
 # change needs its checks again; `needs_human`: the conflicts are still there
 BaseSync = Literal["up_to_date", "merged", "resolved", "needs_human"]
@@ -59,17 +56,7 @@ class BaseSyncSteps:
             attempt=self.next_attempt(stage_id),
             verify_only=verify_only,
         )
-        self.raise_if_stopped()
-        result = await workflow.execute_activity(
-            SYNC_BASE,
-            spec,
-            result_type=StepResult,
-            task_queue=CONTROL_QUEUE,
-            start_to_close_timeout=SYNC_TIMEOUT,
-            heartbeat_timeout=HEARTBEAT_TIMEOUT,
-            retry_policy=INFRA_RETRY,
-            cancellation_type=WAIT_CANCELLED,  # a stop tears the worktree down only once git has stopped in it
-        )
+        result = await self._activity(SYNC_BASE, spec, StepResult)
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result
 

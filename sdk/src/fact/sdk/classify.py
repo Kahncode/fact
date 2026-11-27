@@ -9,7 +9,7 @@ classification. Signals that cannot be read, or a session with no valid answer, 
 the project, or GitHub refused the merge), adding why to its reasons.
 
 `ClassifySteps` uses the workflow's `input`, `handle`, `assumptions`, `spec_ambiguous`, `_change_set`, `agent`,
-`next_attempt`, `note_outcome` and `_control`.
+`next_attempt`, `note_outcome` and `_activity`.
 """
 
 from collections.abc import Sequence
@@ -74,7 +74,7 @@ class ClassifySteps:
         run = self.input
         spec = ClassifySignalsInput(run_id=run.run_id, project=run.project, task_key=run.task.key, handle=self.handle)
         try:
-            return await self._control(CLASSIFY_SIGNALS, spec, list[ClassifySignal]), []
+            return await self._activity(CLASSIFY_SIGNALS, spec, list[ClassifySignal]), []
         except ActivityError as exc:
             return [], [f"the rules' signals could not be read: {exc.cause or exc}"]
 
@@ -98,5 +98,5 @@ class ClassifySteps:
             stage_id=stage_id,
             attempt=self.next_attempt(stage_id),
         )
-        await self._control(LABEL_CHANGE_SET, spec, type(None))
+        await self._activity(LABEL_CHANGE_SET, spec, type(None))
         self.note_outcome(stage_id, spec.attempt, StepOutcome.PASSED)

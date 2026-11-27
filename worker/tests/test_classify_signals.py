@@ -82,7 +82,7 @@ def _commit(repo: Path, files: dict[str, str]) -> None:
 
 async def _classify(project: Path, worktree: Path) -> list[ClassifySignal]:
     settings = Settings(projects=[ProjectRef(name="acme", home=REPO, path=project)])
-    handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), repos={REPO: str(worktree)})
+    handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)})
     spec = ClassifySignalsInput(run_id="r1", project="acme", task_key=KEY, handle=handle)
     return await ClassifyActivities(settings).classify_signals(spec)
 
@@ -140,7 +140,7 @@ async def test_a_closed_task(project: Path, worktree: Path) -> None:
 
 
 async def test_an_unregistered_project_fails_for_good(worktree: Path) -> None:
-    handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), repos={REPO: str(worktree)})
+    handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)})
     spec = ClassifySignalsInput(run_id="r1", project="acme", task_key=KEY, handle=handle)
     with pytest.raises(ApplicationError) as exc:
         await ClassifyActivities(Settings(projects=[])).classify_signals(spec)

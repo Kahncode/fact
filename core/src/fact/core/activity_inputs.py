@@ -1,0 +1,247 @@
+"""
+The inputs of the factory's activities and the literals they carry: small, frozen and JSON-serializable.
+
+Re-exported by `fact.core.activity_contract`, which names the activities and declares how each one runs.
+"""
+
+from datetime import datetime
+from typing import Any, Literal
+
+from fact.core.classification import Classification
+from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
+from fact.core.gates import GateDecision
+from fact.core.types import Complexity, MergeMethod, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
+from pydantic import BaseModel, ConfigDict, Field
+
+Check = Literal["lint", "test", "build", "setup"]
+# a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
+TaskEvent = Literal[
+    "run_started",
+    "gate_opened",
+    "gate_answered",
+    "prs_opened",
+    "merged",
+    "closed",
+    "stopped",
+    "needs_human",
+    "pr_opened",
+]
+PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
+# how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
+# base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
+MergeResult = Literal["merged", "out_of_date", "refused"]
+
+
+class _Input(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class AgentStepInput(_Input):
+    run_id: str
+    stage_id: str
+    attempt: int
+    handle: WorkspaceHandle
+    task: Task
+    prompt_name: str  # `.fact/prompts/<prompt_name>.md` in the home repository
+    context: str = ""  # `$context` in the prompt, such as failing check output
+    complexity: Complexity = "standard"
+    override: RouteOverride | None = None
+    home_repo: str | None = None  # full name in `handle.repos` holding `.fact/`; None: the first repository
+    resume_session_id: str | None = None  # resume this session with the resume prompt; `context` says why
+    handoff_ref: str | None = None  # artifact key of a stopped run's handoff note, `$handoff` in the prompt
+
+
+class ShellStepInput(_Input):
+    run_id: str
+    stage_id: str
+    attempt: int
+    handle: WorkspaceHandle
+    repo: str  # full name, a key of `handle.repos`
+    check: Check
+    timeout_s: float = 900.0  # for the whole check, all commands together
+
+
+class CheckResult(_Input):
+    """One check the run passed or failed, such as `lint` or `test`, for the PR description."""
+
+    name: str
+    outcome: StepOutcome
+    summary: str = ""
+
+
+class CriterionResult(_Input):
+    """One acceptance criterion as the review session judged it, with its evidence, for the PR description."""
+
+    text: str
+    met: bool
+    evidence: str = ""
+
+
+class OpenChangeSetInput(_Input):
+    run_id: str
+    task: Task
+    handle: WorkspaceHandle
+    branch: str  # the branch the workspace checked out (`WorkspaceHandle.branches`); the only one this pushes
+    title: str  # PR title, written by the last agent session
+    summary: str  # top of the PR description, written by the last agent session
+    check_results: list[CheckResult] = Field(default_factory=list)
+    criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
+    assumptions: list[str] = Field(default_factory=list)  # the agent sessions' `assumptions`, for the PR description
+    spec_ambiguous: bool = False  # an agent session found the spec ambiguous
+    classification: Classification | None = None  # once classified: the PR description's `## Review` section
+    run_url: str = ""
+    attempt: int = 1  # of stage `open_pr`: a CI fix pushes and updates the PR again as the next attempt
+
+
+class MarkTaskDoneInput(_Input):
+    run_id: str
+    task: Task
+    handle: WorkspaceHandle
+    home_repo: str | None = None  # full name in `handle.repos` holding `.fact/` and the tasks; None: the first
+
+
+class PostCostCommentInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # each gets the run's cost comment, created or updated in place
+
+
+class WaitForCIInput(_Input):
+    run_id: str
+    stage_id: str
+    attempt: int
+    pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
+    timeout_s: float = 3600.0  # give up waiting for checks still running after this long
+    no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
+
+
+class WaitForPRClosedInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # each is polled until it is merged or closed
+
+
+class MergeChangeSetInput(_Input):
+    run_id: str
+    prs: list[PRRef]  # merged in this order, each only at its `head_sha`
+    method: MergeMethod = "squash"
+
+
+class SyncBaseInput(_Input):
+    run_id: str
+    handle: WorkspaceHandle
+    repos: list[RepoCheckout]  # each worktree in `handle.repos` merges `origin/<default_branch>` into its branch
+    stage_id: str = "sync_base"
+    attempt: int = 1
+    verify_only: bool = False  # after a resolve session: conclude its merge, but never start a new one
+
+
+class RunStartedInput(_Input):
+    run_id: str
+    worker_version: str | None = (
+        None  # `<factory SHA>+<home SHA>`, the build id the run is pinned to; None: unversioned
+    )
+
+
+class RunFinishedInput(_Input):
+    run_id: str
+    outcome: RunOutcome
+
+
+class RunWaitingInput(_Input):
+    """The run starts (`waiting`) or stops waiting without a gate, such as for a usage limit to reset."""
+
+    run_id: str
+    waiting: bool
+    reason: str = ""  # such as `usage limit until <time>`, for the log
+
+
+class GateOpenedInput(_Input):
+    """A gate opened: its step (kind `gate`) starts waiting, and so does the run."""
+
+    run_id: str
+    stage_id: str
+    attempt: int
+    gate_id: str
+    kind: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    opened_at: datetime  # workflow time, so the step's wall time is the wait
+
+
+class GateAnsweredInput(_Input):
+    """A gate answered: its step ends with the decision and the wait, and the run runs again."""
+
+    run_id: str
+    step_id: str | None  # from `record_gate_opened`; None if that could not create the step
+    stage_id: str
+    attempt: int
+    gate_id: str
+    kind: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    decision: GateDecision
+    note: str = ""
+    outcome: StepOutcome  # `passed` for approve, `needs_human` for reject
+    opened_at: datetime
+    answered_at: datetime
+    wait_seconds: float  # human wait time: all of the step's wall time
+
+
+class NotifyInput(_Input):
+    """A notification for a person; a second one with the same `dedupe_key` is the same notification."""
+
+    run_id: str
+    kind: NotificationKind
+    title: str = Field(max_length=300)
+    body: str = ""
+    link: str | None = None
+    dedupe_key: str = Field(max_length=300)  # such as `<run id>:gate:<gate id>`: one per run state
+
+
+class HandoffStep(_Input):
+    """One agent step of a stopped run, for its handoff note."""
+
+    stage_id: str
+    attempt: int
+    outcome: StepOutcome
+    summary: str = ""
+
+
+class HandoffInput(_Input):
+    """What a stopped run leaves for the next run of its task: written to the artifact store as `handoff_key`."""
+
+    run_id: str
+    task: Task
+    reason: str = ""  # why the run was stopped, from the cancellation
+    stage_id: str | None = None  # the last stage reached
+    attempt: int | None = None
+    steps: list[HandoffStep] = Field(default_factory=list)  # agent steps, in order
+    prs: list[PRRef] = Field(default_factory=list)  # left open, for the next run to reuse
+
+
+class ReportStatusInput(_Input):
+    """A status change for the task's source: labels, comments, PR links or closing, as `fact.core.tasks.events`."""
+
+    run_id: str
+    project: str  # the project whose `.fact/project.yaml` names the task source
+    task_key: str
+    event: TaskEvent
+    run_url: str = ""
+    detail: str = ""  # what a gate needs from a person, or why the run ended
+    prs: list[PRRef] = Field(default_factory=list)  # for `prs_opened`
+
+
+class ClassifySignalsInput(_Input):
+    """The change set to classify: each repository's branch against the merge base with its default branch."""
+
+    run_id: str
+    project: str  # the project whose `.fact/project.yaml` (in its registered checkout) holds the globs and source
+    task_key: str
+    handle: WorkspaceHandle
+
+
+class LabelChangeSetInput(_Input):
+    """Label each PR with its classification and re-render its description, `## Review` included."""
+
+    run_id: str
+    change_set: OpenChangeSetInput  # with `classification` set
+    prs: list[PRRef]
+    stage_id: str = "label_prs"
+    attempt: int = 1

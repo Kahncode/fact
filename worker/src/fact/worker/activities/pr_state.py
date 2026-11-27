@@ -1,7 +1,7 @@
 """
 `wait_for_pr_closed`: wait until each of a run's PRs is merged or closed, and say which.
 
-Polls every PR still open every `poll_interval_s`, heartbeating, for as long as review takes (the workflow gives it up
+Polls every PR still open every `poll_interval_s` for as long as review takes (the workflow gives it up
 to 30 days). A transient GitHub error only skips a poll; a permanent one (bad credentials, PR or App not found) fails
 the activity without a retry. The workflow records the wait as a gate-like step: this activity reports no step.
 """
@@ -20,11 +20,6 @@ log = get_logger(__name__)
 
 POLL_INTERVAL_S = 60.0
 PERMANENT_STATUSES = frozenset({401, 404, 422})  # bad credentials, PR or App not found, bad request
-
-
-def _heartbeat(states: dict[int, PRState]) -> None:
-    if activity.in_activity():
-        activity.heartbeat(len(states))
 
 
 class PRStateActivities:
@@ -50,7 +45,6 @@ class PRStateActivities:
                         log.info("pr_closed", pr=pr.url, state=state)
                 if len(states) == len(spec.prs):
                     return [states[i] for i in range(len(spec.prs))]
-                _heartbeat(states)
                 await asyncio.sleep(self._poll_s)
 
     @staticmethod

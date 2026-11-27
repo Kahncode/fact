@@ -11,14 +11,17 @@ from fact.core.activity_contract import AGENT_INTERRUPTED
 from fact.core.enums import StepOutcome
 from fact.core.settings import RoutingSettings, Settings
 from fact.core.types import Route, RouteOverride, StepResult, Task, Usage, WorkspaceHandle
+from fact.sdk.sessions import interrupted_session
 from fact.worker.activities import agent as agent_module
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
 from fact.worker.harnesses import HarnessError, HarnessRequest, HarnessResult, OnMessage, PermissionDenial
+from fact.worker.heartbeats import heartbeating
 from fact.worker.prompts import BASE_OUTPUT_SCHEMA
 from fact.worker.reporting import StepContext, StepReporter
 from httpx import AsyncClient
 from temporalio.activity import ActivityCancellationDetails
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError, RetryState, TimeoutType
+from temporalio.exceptions import TimeoutError as TemporalTimeoutError
 from temporalio.testing import ActivityEnvironment
 
 HOME = "acme/widget"
@@ -113,7 +116,7 @@ def handle(tmp_path: Path, run_id: str) -> WorkspaceHandle:
     prompts = root / "widget" / ".fact" / "prompts"
     prompts.mkdir(parents=True)
     (prompts / "implement.md").write_text("Implement $task_id: $task_title in $workspace\n$context", encoding="utf-8")
-    return WorkspaceHandle(run_id=run_id, root=str(root), repos={HOME: str(root / "widget")})
+    return WorkspaceHandle(run_id=run_id, root=str(root), task_queue="sandbox", repos={HOME: str(root / "widget")})
 
 
 @pytest.fixture
@@ -314,14 +317,26 @@ async def test_home_repo_selects_the_prompt_source(env: Env) -> None:
     assert harness.requests[0].prompt == "from other"
 
 
-async def test_heartbeats_carry_turn_count(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(agent_module, "HEARTBEAT_S", 0.05)
+async def test_heartbeat_details_name_the_session_to_resume(env: Env) -> None:
+    """The step hands `(progress, session_id)` to the framework's beats; a heartbeat timeout resumes that session."""
     activity_env = ActivityEnvironment()
     beats: list[tuple[Any, ...]] = []
     activity_env.on_heartbeat = lambda *details: beats.append(details)
-    await activity_env.run(env.activities(FakeHarness(delay=0.3)).agent_step, env.input())
-    assert beats
+    step = env.activities(FakeHarness(delay=0.3)).agent_step
+    await activity_env.run(heartbeating, lambda: step(env.input()), 0.05)
     assert beats[-1] == ("implement: 2 turns", "s-1")  # the session id from the init message
+    timeout = TemporalTimeoutError("timed out", type=TimeoutType.HEARTBEAT, last_heartbeat_details=list(beats[-1]))
+    died = ActivityError(
+        "activity failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="test",
+        activity_type="agent_step",
+        activity_id="1",
+        retry_state=RetryState.TIMEOUT,
+    )
+    died.__cause__ = timeout
+    assert interrupted_session(died) == "s-1"
 
 
 async def test_cancel_keeps_the_transcript(env: Env) -> None:
