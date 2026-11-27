@@ -24,7 +24,7 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 
 - Agent or shell processes outliving a hard-killed worker (no Job Object / `PR_SET_PDEATHSIG`): the heartbeat-timeout resume can start a second `claude --resume` in the same worktree. Fix: a Job Object with `KILL_ON_JOB_CLOSE`, or a PID file the next attempt kills first.
 - The API keeps the scheduler's last usage answer in memory (`PUT /scheduler/usage`): after an API restart `fact scheduler status` shows no usage hold until the gate makes a new call, which can be hours. Display only. Fix: PUT on every check, or keep it in a DB row.
-- Over the 300-line limit: `worker/tests/test_agent_step.py` (406).
+- Over the 300-line limit: `worker/tests/test_agent_step.py` (413), `worker/tests/test_local_worktree_runner.py` (315).
 
 ## GitHub Issues source
 
