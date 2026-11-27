@@ -76,7 +76,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Run one package's tests | `uv run pytest core/tests`                      |
 | Run a single test       | `uv run pytest path/to/test_file.py::test_name` |
 | Run the API             | `uv run python -m fact.api`                     |
-| Run Temporal, API, worker | `uv run fact dev`                             |
+| Run Temporal, API, worker (detached, tracked in `<data_dir>/run/`; a restarted `fact dev` adopts them, a second one is refused) | `uv run fact dev` |
 | Pin the factory version | `uv run fact use <ref>`                         |
 | Run the pinned factory  | `uv run fact dev --pinned`                      |
 | Run pinned and upgrade each time `main` moves, once no run is active | `uv run fact dev --follow main` |
