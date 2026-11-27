@@ -7,8 +7,10 @@ import httpx
 import pytest
 from fact.core.activity_contract import ReportStatusInput, TaskEvent
 from fact.core.github import github_client
+from fact.core.holds import HELD_ENDS
 from fact.core.tasks import GitHubIssuesSource
 from fact.core.tasks.events import NEEDS_HUMAN, RUNNING, report
+from fact.core.tasks.github_fields import READY_LABEL
 from fact.core.tasks.github_writes import CONTEXT_END, CONTEXT_START, with_context
 from fact.core.types import PRRef
 
@@ -111,13 +113,17 @@ async def test_merged_closes_as_completed_and_clears_running() -> None:
     assert github.labels == set()  # `fact:needs-human` was not there: its 404 is not an error
 
 
-@pytest.mark.parametrize("event", ["closed", "stopped"])
-async def test_closed_or_stopped_clears_running_and_comments(event: TaskEvent) -> None:
-    github = FakeGitHub(labels={RUNNING, NEEDS_HUMAN})
+@pytest.mark.parametrize("event", ["stopped", "needs_human", "pr_opened", "closed"])
+async def test_a_held_end_adds_needs_human_keeps_ready_and_says_how_to_release(event: TaskEvent) -> None:
+    github = FakeGitHub(labels={READY_LABEL, RUNNING})
     writes = await _report(github, event, detail="no longer wanted")
-    assert github.labels == set()
+    assert github.labels == {READY_LABEL, NEEDS_HUMAN}
     assert writes[-1][:2] == ("POST", f"{ISSUE}/comments")
-    assert f"ended {event}: no longer wanted" in writes[-1][2]["body"]  # type: ignore[index]
+    body = writes[-1][2]["body"]  # type: ignore[index]
+    assert f"ended {event}: no longer wanted" in body
+    assert HELD_ENDS[event] in body
+    assert f"remove the `{NEEDS_HUMAN}` label" in body
+    assert f"`fact run {KEY}`" in body
 
 
 async def test_write_context_appends_markers_to_a_body_without_them() -> None:

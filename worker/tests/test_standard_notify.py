@@ -32,6 +32,7 @@ async def test_each_gate_notifies_once_then_the_end() -> None:
     assert _sent(fakes) == [
         (NotificationKind.GATE_WAITING, "run-1:gate:checks-1"),
         (NotificationKind.GATE_WAITING, "run-1:gate:checks-2"),
+        (NotificationKind.TASK_HELD, "run-1:held"),  # needs_human holds the task
         (NotificationKind.RUN_FAILED, "run-1:run_failed"),
     ]
     gate: NotifyInput = fakes.of(NOTIFY)[0]
@@ -41,11 +42,17 @@ async def test_each_gate_notifies_once_then_the_end() -> None:
     assert ended.link == RUN_URL  # no PR to point at
 
 
-async def test_blocked_agent_notifies_the_run_failed() -> None:
+async def test_blocked_agent_notifies_the_run_failed_and_its_task_held() -> None:
     blocked = StepResult(outcome=StepOutcome.NEEDS_HUMAN, summary="needs a key")
     fakes = FakeActivities(implement_script=[blocked])
     await run_standard(fakes, "run-notify-blocked")
-    assert _sent(fakes) == [(NotificationKind.RUN_FAILED, "run-1:run_failed")]
+    assert _sent(fakes) == [
+        (NotificationKind.TASK_HELD, "run-1:held"),
+        (NotificationKind.RUN_FAILED, "run-1:run_failed"),
+    ]
+    held: NotifyInput = fakes.of(NOTIFY)[0]
+    assert "needs a person" in held.title
+    assert "fact run" in held.body  # how to release it
 
 
 async def test_failed_run_notifies_before_failing() -> None:

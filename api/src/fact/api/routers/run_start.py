@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fact.api.deps import get_session
+from fact.api.failure_cap import held_runs
 from fact.api.run_counts import active_by_project, run_histories
 from fact.api.run_start import (
     FoundTask,
@@ -16,16 +17,18 @@ from fact.api.run_start import (
     workflow_id,
     workflow_type,
 )
-from fact.api.task_ref import TaskReadError
+from fact.api.task_ref import TaskReadError, project_tasks
 from fact.api.temporal import connect_temporal
 from fact.core.activity_contract import workflow_queue
 from fact.core.artifacts import LocalArtifactStore
 from fact.core.enums import RunOutcome, RunStatus, RunTrigger
+from fact.core.holds import NEEDS_HUMAN, release_hint
 from fact.core.logging import get_logger
 from fact.core.models import Project, Run, new_id
 from fact.core.project_config import ConfigError
 from fact.core.scheduler import run_history_hold
 from fact.core.settings import Settings
+from fact.core.tasks import is_issue
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -81,22 +84,37 @@ async def scheduler_refusal(session: AsyncSession, settings: Settings, found: Fo
     """
     Why the scheduler may no longer start this task; "" if it may.
 
-    A run in progress or ended, the failure cap, or `concurrency.max_runs` or the project's `max_runs` reached: the API
-    stays the authority even when the tick's snapshot is stale.
+    An issue carrying `fact:needs-human`, a run in progress (or, for a file task, ended), the failure cap, or
+    `concurrency.max_runs` or the project's `max_runs` reached: the API stays the authority even when the tick's
+    snapshot is stale.
     """
     key = found.check.task.key
+    if found.check.task.needs_human:
+        return f"{key} carries `{NEEDS_HUMAN}`: {release_hint(key)}"
     history = (await run_histories(session, found.ref.name, key)).get((found.ref.name, key), [])
-    offered, failed, hold = run_history_hold(history, settings.concurrency.max_failed_runs)
+    offered, failed, hold = run_history_hold(history, settings.concurrency.max_failed_runs, labelled=is_issue(key))
     if not offered:
         return f"{key} already has a run"
-    if hold:
-        return f"{key} failed {failed} runs in a row: start it with `fact run`"
+    if hold and not (is_issue(key) and history[0].run_id in await held_runs(session, [history[0].run_id])):
+        return f"{key} failed {failed} runs in a row: start it with `fact run`"  # unless a person removed its label
     active = await active_by_project(session)
     if sum(active.values()) >= settings.concurrency.max_runs:
         return f"max_runs {settings.concurrency.max_runs} reached"
     if active.get(found.ref.name, 0) >= found.ref.max_runs:
         return f"project {found.ref.name} max_runs {found.ref.max_runs} reached"
     return ""
+
+
+async def _release(settings: Settings, found: FoundTask) -> None:
+    """Remove `fact:needs-human` from an issue a person starts (`fact run`), so its hold is lifted first."""
+    key = found.check.task.key
+    try:
+        async with project_tasks(settings, found.ref) as tasks:
+            if tasks is not None:
+                await tasks.source.set_labels(key, add=[], remove=[NEEDS_HUMAN])
+    except (ConfigError, TaskReadError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"cannot remove {NEEDS_HUMAN} from {key}: {exc}") from exc
+    log.info("task_released", task_key=key)
 
 
 async def _reserve(session: AsyncSession, found: FoundTask, wf_type: str, trigger: RunTrigger) -> Run:
@@ -156,6 +174,8 @@ async def start_task(state: State, body: RunStart, session: AsyncSession) -> Run
     if active := await active_run_id(session, found.ref.name, found.check.task.key):
         detail = f"{found.check.task.key} already has an active run: {active} (stop it first with `fact stop`)"
         raise HTTPException(status.HTTP_409_CONFLICT, detail)
+    if not body.scheduled and found.check.task.needs_human:
+        await _release(settings, found)
     trigger = RunTrigger.SCHEDULER if body.scheduled else RunTrigger.MANUAL
     for _ in range(RESERVE_ATTEMPTS):
         run = await _reserve(session, found, wf_type, trigger)

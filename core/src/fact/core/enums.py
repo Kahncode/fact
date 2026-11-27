@@ -56,3 +56,4 @@ class NotificationKind(StrEnum):
     PRS_READY = "prs_ready"  # a run's PRs are open and green, ready for review
     RUN_FAILED = "run_failed"  # a run ended badly: failed, or gave up and needs a person
     RUN_FINISHED = "run_finished"  # a run ended any other way worth telling a person about
+    TASK_HELD = "task_held"  # a task carries `fact:needs-human`: nothing starts it until a person releases it

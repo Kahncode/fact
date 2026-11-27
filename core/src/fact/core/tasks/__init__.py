@@ -6,6 +6,7 @@ from fact.core.tasks.base import (
     TaskSource,
     branch_name,
     dependency_key,
+    is_issue,
     parse_key,
     source_for,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "TaskSource",
     "branch_name",
     "dependency_key",
+    "is_issue",
     "parse_key",
     "source_for",
 ]

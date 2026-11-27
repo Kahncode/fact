@@ -77,6 +77,21 @@ def test_run_history_hold(history: list[RunRecord], expected: tuple[bool, int, H
     assert run_history_hold(history, max_failed=3) == expected
 
 
+@pytest.mark.parametrize(
+    ("history", "expected"),
+    [
+        # an issue's label holds it: a run end that is not `failed` holds nothing in its history
+        ([RunRecord(status=RunStatus.FINISHED, outcome=RunOutcome.STOPPED), FAILED], (True, 0, None)),
+        ([FAILED, FAILED, FAILED], (True, 3, Hold.FAILURE_CAP)),
+        ([RunRecord(status=RunStatus.RUNNING)], (False, 0, None)),
+    ],
+)
+def test_run_history_holds_an_issue_only_by_a_run_in_progress_or_failures(
+    history: list[RunRecord], expected: tuple[bool, int, Hold | None]
+) -> None:
+    assert run_history_hold(history, max_failed=3, labelled=True) == expected
+
+
 def _usage(**utilization: float) -> ClaudeUsage:
     return ClaudeUsage(
         windows=tuple(UsageWindow(name=n, utilization=u, resets_at=RESET) for n, u in utilization.items())

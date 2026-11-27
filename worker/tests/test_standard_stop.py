@@ -88,10 +88,10 @@ async def test_stop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
     assert [(s.stage_id, s.outcome) for s in note.steps][:2] == [("implement", "passed"), ("implement", "passed")]
     assert note.steps[0].summary == "implement done"
     assert fakes.of(OPEN_CHANGE_SET) == []
-    (notified,) = [n for n in fakes.of("notify") if n.kind != NotificationKind.GATE_WAITING]
-    assert notified.kind == NotificationKind.RUN_FINISHED
+    notified = [n.kind for n in fakes.of("notify") if n.kind != NotificationKind.GATE_WAITING]
+    assert sorted(notified) == [NotificationKind.RUN_FINISHED, NotificationKind.TASK_HELD]
     reports = [(r.event, r.detail) for r in fakes.of(REPORT_STATUS)]
-    assert reports[-1] == ("stopped", "restart on the new prompts")  # labels cleared, said why
+    assert reports[-1] == ("stopped", "restart on the new prompts")  # the task is held, said why
     assert [e for e, _ in reports].count("gate_opened") == 1  # the gate was never answered
 
 

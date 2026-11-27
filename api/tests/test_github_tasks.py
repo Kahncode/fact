@@ -1,104 +1,60 @@
 """`gh:` task keys through the API: a project whose task source is GitHub Issues, against a fake GitHub."""
 
-from collections.abc import AsyncIterator, Iterator
-from dataclasses import dataclass
+from collections.abc import Iterator
 from http import HTTPStatus
 from pathlib import Path
 
-import httpx
 import pytest
-from fact.api.app import create_app
 from fact.api.routers import run_start as run_start_router
 from fact.api.run_start import find_task, run_input
-from fact.api.scheduler import _ready_in
-from fact.core.github import GitHubAppConfigError, github_client
+from fact.api.scheduler import _ready_in, run_tick
+from fact.api.usage_gate import UsageGate
+from fact.core.github import GitHubAppConfigError
 from fact.core.github import app as github_app
 from fact.core.scheduler import Hold
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
 from fastapi import FastAPI, HTTPException
-from httpx import ASGITransport, AsyncClient
-from task_repo import write
+from httpx import AsyncClient
+from issues_env import PROJECT, FakeApp, FakeIssues, write_issues_config
+from scheduler_env import FakeTemporal, FakeUsage
 
-PROJECT = "issues"
-PROJECT_YAML = """name: issues
-repositories:
-  - full_name: acme/app
-    role: app
-task_source:
-  kind: github
-  repo: acme/app
-workflows:
-  default: standard
-  bug: bugfix
-"""
-ISSUES = {
-    12: {"number": 12, "title": "Fix it", "body": "Depends on #3\n", "state": "open", "state_reason": None},
-    13: {"number": 13, "title": "Then this", "body": "Depends on #12\n", "state": "open", "state_reason": None},
-    3: {"number": 3, "title": "Done", "body": "", "state": "closed", "state_reason": "completed"},
-    20: {"number": 20, "title": "A plan", "body": "", "state": "open", "state_reason": None},
-    21: {"number": 21, "title": "Its step", "body": "", "state": "open", "state_reason": None},
-}
-for _n, _issue in ISSUES.items():
-    _issue["labels"] = [{"name": "fact:ready"}, {"name": "type:bug"}] if _n in {12, 13, 21} else []
-ISSUES[20]["labels"] = [{"name": "fact:planned"}]
-PARENTS = {21: 20}  # sub-issue -> parent
-
-
-def _github(request: httpx.Request) -> httpx.Response:
-    parts = request.url.path.strip("/").split("/")
-    if request.url.path == "/repos/acme/app/issues":
-        ready = [i for i in ISSUES.values() if i["state"] == "open" and {"name": "fact:ready"} in i["labels"]]
-        return httpx.Response(200, json=ready)
-    if parts[-2:] == ["dependencies", "blocked_by"]:
-        return httpx.Response(200, json=[])
-    if parts[-1] == "sub_issues":
-        return httpx.Response(200, json=[ISSUES[c] for c, p in PARENTS.items() if p == int(parts[-2])])
-    if parts[-1] == "parent":
-        parent = PARENTS.get(int(parts[-2]))
-        return (
-            httpx.Response(200, json=ISSUES[parent]) if parent else httpx.Response(404, json={"message": "Not Found"})
-        )
-    issue = ISSUES.get(int(parts[-1])) if parts[1:3] == ["acme", "app"] else None
-    return httpx.Response(200, json=issue) if issue else httpx.Response(404, json={"message": "Not Found"})
-
-
-@dataclass(frozen=True)
-class _Token:
-    token: str
-
-
-class _FakeApp:
-    async def installation_token(self, full_name: str) -> _Token:
-        return _Token(f"tok-{full_name}")
-
-    def api_client(self, token: str | None) -> httpx.AsyncClient:
-        return github_client(token, api_url="https://gh.test", transport=httpx.MockTransport(_github))
+ENDED = "2026-11-26T00:00:00Z"
+HELD, READY, NEEDS_HUMAN = "gh:acme/app#14", "fact:ready", "fact:needs-human"
 
 
 @pytest.fixture
-def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
-    home = tmp_path / "home"  # a GitHub source reads no task files: no git needed
-    write(home, {".fact/project.yaml": PROJECT_YAML})
-    config = tmp_path / "fact.yaml"
-    config.write_text(
-        f"data_dir: {(tmp_path / 'data').as_posix()}\n"
-        f"projects:\n  - name: {PROJECT}\n    home: acme/app\n    path: {home.as_posix()}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(CONFIG_VAR, str(config))
-    monkeypatch.setattr(github_app, "shared_app", lambda _settings=None: _FakeApp())
+def github() -> FakeIssues:
+    return FakeIssues()
+
+
+@pytest.fixture
+def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, github: FakeIssues) -> Iterator[Settings]:
+    monkeypatch.setenv(CONFIG_VAR, str(write_issues_config(tmp_path)))
+    monkeypatch.setattr(github_app, "shared_app", lambda _settings=None: FakeApp(github))
     reset_settings()
     yield Settings()
     reset_settings()
 
 
-@pytest.fixture
-async def client(settings: Settings) -> AsyncIterator[AsyncClient]:
-    application: FastAPI = create_app(settings)
-    async with application.router.lifespan_context(application):
-        transport = ASGITransport(app=application, raise_app_exceptions=False)
-        async with AsyncClient(transport=transport, base_url="http://test") as c:
-            yield c
+def _fakes(app: FastAPI, github: FakeIssues) -> FakeTemporal:
+    """Temporal records each start in `github.writes` too, so a test sees what came before it."""
+    temporal = FakeTemporal()
+    real = temporal.start_workflow
+
+    async def start_workflow(wf_type: str, arg: object, *, id: str, task_queue: str) -> None:  # noqa: A002
+        github.writes.append(("START", id))
+        await real(wf_type, arg, id=id, task_queue=task_queue)
+
+    temporal.start_workflow = start_workflow  # type: ignore[method-assign]
+    app.state.temporal = temporal
+    app.state.scheduler.gate = UsageGate(app.state.settings.claude, fetch=FakeUsage(), environ={})
+    return temporal
+
+
+async def _add_run(client: AsyncClient, n: int, task_key: str, **update: str) -> None:
+    body = {"workflow_id": f"run-{n}", "project": PROJECT, "task_key": task_key, "workflow_type": "standard"}
+    run = (await client.post("/api/v1/runs", json={**body, "trigger": "scheduler"})).json()
+    await client.patch(f"/api/v1/runs/{run['id']}", json={"status": "finished", "ended_at": ENDED, **update})
 
 
 async def test_find_an_issue_and_build_its_run_input(settings: Settings) -> None:
@@ -157,7 +113,66 @@ async def test_scheduler_reads_ready_issues(settings: Settings) -> None:
     assert [(t.task_key, t.task_id, t.hold) for t in ready] == [
         ("gh:acme/app#12", "12", None),
         ("gh:acme/app#13", "13", Hold.DEPENDENCY),
+        ("gh:acme/app#14", "14", Hold.NEEDS_HUMAN),  # fact:ready, and fact:needs-human
         ("gh:acme/app#21", "21", Hold.PARENT),  # its parent #20 is fact:planned
     ]
     assert ready[1].waiting_on == ["gh:acme/app#12"]
-    assert ready[2].gated_by == "gh:acme/app#20"
+    assert ready[3].gated_by == "gh:acme/app#20"
+
+
+async def test_the_label_holds_an_issue_and_run_history_does_not(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    await _add_run(client, 1, "gh:acme/app#12", outcome="stopped")  # stopped, but carries no fact:needs-human
+    preview = (await client.get("/api/v1/scheduler/preview")).json()
+    holds = {p["task"]["task_key"]: (p["hold"], p["detail"]) for p in preview["tasks"]}
+    assert holds["gh:acme/app#12"] == (None, "")
+    assert holds[HELD][0] == "needs_human"
+    assert f"`fact run {HELD}`" in holds[HELD][1]
+    temporal = _fakes(app, github)
+    result = await run_tick(app.state)
+    assert (len(result.started), result.failed) == (1, [])
+    assert temporal.started[0].startswith("run-gh-acme-app-12-")
+
+
+async def test_the_tick_holds_an_issue_at_the_failure_cap_once(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    for n in range(1, 4):
+        await _add_run(client, n, "gh:acme/app#12", outcome="failed")
+    temporal = _fakes(app, github)
+    await run_tick(app.state)
+    assert {READY, NEEDS_HUMAN} <= github.labels(12)
+    writes = [w for w in github.writes if w[1].startswith("/repos/acme/app/issues/12/")]
+    issue = "/repos/acme/app/issues/12"
+    assert [w for w in writes if w[0] == "POST"] == [("POST", f"{issue}/labels"), ("POST", f"{issue}/comments")]
+    await run_tick(app.state)
+    assert [w for w in github.writes if w[1].startswith("/repos/acme/app/issues/12/")] == writes
+    held = [n for n in (await client.get("/api/v1/notifications")).json() if n["kind"] == "task_held"]
+    assert [n["title"] for n in held] == ["gh:acme/app#12 is held: its last 3 runs failed in a row"]
+    assert temporal.started == []
+
+
+async def test_the_tick_retries_a_capped_issue_once_a_person_removed_its_label(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    for n in range(1, 4):
+        await _add_run(client, n, "gh:acme/app#12", outcome="failed")
+    temporal = _fakes(app, github)
+    await run_tick(app.state)
+    github.issues[12]["labels"] = [{"name": READY}]  # removed by hand
+    await run_tick(app.state)
+    assert len(temporal.started) == 1
+
+
+async def test_fact_run_on_a_held_issue_removes_the_label_before_starting(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    _fakes(app, github)
+    response = await client.post("/api/v1/runs/start", json={"task_key": HELD})
+    assert response.status_code == HTTPStatus.CREATED, response.text
+    assert github.writes[-2:] == [
+        ("DELETE", "/repos/acme/app/issues/14/labels/fact:needs-human"),
+        ("START", response.json()["workflow_id"]),
+    ]
+    assert NEEDS_HUMAN not in github.labels(14)
