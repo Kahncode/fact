@@ -19,14 +19,16 @@ async def held_branches(git: Git, mirror: Path) -> set[str]:
     return {line.removeprefix(HEAD_PREFIX) for line in listing.splitlines() if line.startswith(HEAD_PREFIX)}
 
 
-async def free_branch(git: Git, git_ok: GitOk, mirror: Path, wanted: str) -> str:
+async def free_branch(
+    git: Git, git_ok: GitOk, mirror: Path, wanted: str, skip: frozenset[str] | set[str] = frozenset()
+) -> str:
     """
-    Return `wanted`, or `<wanted>-2`, `-3`, ... when another worktree holds it.
+    Return `wanted`, or `<wanted>-2`, `-3`, ... when another worktree holds it or it is in `skip`.
 
     A suffixed name is also skipped when it exists on the remote, so a run never takes over another run's PR branch;
     `wanted` itself may exist there, which is how a task branch is resumed.
     """
-    held = await held_branches(git, mirror)
+    held = await held_branches(git, mirror) | skip
     for n in range(1, MAX_SUFFIX + 1):
         name = wanted if n == 1 else f"{wanted}-{n}"
         if name in held:

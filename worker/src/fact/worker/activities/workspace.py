@@ -1,5 +1,8 @@
 """
-`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`.
+Workspace activities.
+
+`prepare_workspace`: create the run's workspace on a runner, reported as a `shell` step in stage `prepare`. It
+heartbeats, so a retry starts only once Temporal has given up on (and cancelled) a stale attempt.
 
 `sync_base`: merge each repository's default branch into the run's branch, reported as a `shell` step.
 
@@ -40,7 +43,13 @@ class WorkspaceActivities:
         attempt = activity.info().attempt if activity.in_activity() else 1
         async with self._reporter.step(spec.run_id, PREPARE_STAGE, StepKind.SHELL, attempt) as step:
             step.log(f"preparing workspace for {spec.task_key}: {', '.join(r.full_name for r in spec.repos)}")
-            handle = await self._runner.prepare(spec)
+            beat = asyncio.create_task(_heartbeats(PREPARE_STAGE))  # a stale attempt is cancelled at its next beat
+            try:
+                handle = await self._runner.prepare(spec)
+            finally:
+                beat.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await beat
             for repo in spec.repos:
                 branch = handle.branches.get(repo.full_name, repo.branch)
                 taken = f" ({repo.branch} is checked out by another workspace)" if branch != repo.branch else ""

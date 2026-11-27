@@ -446,6 +446,7 @@ source = { editable = "worker" }
 dependencies = [
     { name = "fact-core" },
     { name = "fact-sdk" },
+    { name = "filelock" },
     { name = "httpx" },
     { name = "temporalio" },
 ]
@@ -454,6 +455,7 @@ dependencies = [
 requires-dist = [
     { name = "fact-core", editable = "core" },
     { name = "fact-sdk", editable = "sdk" },
+    { name = "filelock", specifier = ">=4.3" },
     { name = "httpx" },
     { name = "temporalio", specifier = ">=1.36.1" },
 ]

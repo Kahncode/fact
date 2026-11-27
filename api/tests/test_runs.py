@@ -107,16 +107,48 @@ async def test_steps_lifecycle_and_order(client: AsyncClient) -> None:
     step = await _make_step(client, run["id"], name="implement")
     assert step["status"] == "running"
     await _make_step(client, run["id"], stage="tests")
-    dup = await client.post(
-        f"/api/v1/runs/{run['id']}/steps", json={"stage_id": "implement", "kind": "agent", "attempt": 1}
-    )
-    assert dup.status_code == HTTPStatus.CONFLICT
     await _finish(client, step["id"], 5, "0.10", log_ref="runs/x/log", outputs={"k": 1})
     detail = (await client.get(f"/api/v1/runs/{run['id']}")).json()
     assert [(s["stage_id"], s["name"]) for s in detail["steps"]] == [("implement", "implement"), ("tests", None)]
     assert detail["steps"][0]["outcome"] == "passed"
     assert detail["steps"][0]["log_ref"] == "runs/x/log"
     assert detail["steps"][0]["outputs"] == {"k": 1}
+
+
+async def test_a_retried_step_takes_over_its_row_and_ends_with_the_retry_outcome(client: AsyncClient) -> None:
+    run = await _make_run(client)
+    first = await _make_step(client, run["id"])  # its worker died before finishing it
+    retry = await client.post(
+        f"/api/v1/runs/{run['id']}/steps",
+        json={
+            "stage_id": "implement",
+            "kind": "agent",
+            "attempt": 1,
+            "started_at": (T0 + timedelta(minutes=5)).isoformat(),
+        },
+    )
+    assert retry.status_code == HTTPStatus.OK, retry.text
+    assert retry.json()["id"] == first["id"]
+    assert retry.json()["status"] == "running"
+    await _finish(client, first["id"], 400, "0.10", outcome="failed_checks")
+    steps = (await client.get(f"/api/v1/runs/{run['id']}")).json()["steps"]
+    assert [(s["status"], s["outcome"]) for s in steps] == [("finished", "failed_checks")]
+
+
+async def test_a_finished_run_closes_the_steps_left_running(client: AsyncClient) -> None:
+    run = await _make_run(client)
+    stuck = await _make_step(client, run["id"], stage="implement")
+    done = await _make_step(client, run["id"], stage="review")
+    await _finish(client, done["id"], 10, "0.10")
+    end = T0 + timedelta(minutes=1)
+    response = await client.patch(
+        f"/api/v1/runs/{run['id']}", json={"status": "finished", "outcome": "failed", "ended_at": end.isoformat()}
+    )
+    assert response.status_code == HTTPStatus.OK, response.text
+    steps = {s["id"]: s for s in (await client.get(f"/api/v1/runs/{run['id']}")).json()["steps"]}
+    assert (steps[stuck["id"]]["status"], steps[stuck["id"]]["outcome"]) == ("finished", "failed_error")
+    assert datetime.fromisoformat(steps[stuck["id"]]["ended_at"]).replace(tzinfo=UTC) == end
+    assert steps[done["id"]]["outcome"] == "passed"
 
 
 async def test_totals_after_two_finished_steps(client: AsyncClient) -> None:

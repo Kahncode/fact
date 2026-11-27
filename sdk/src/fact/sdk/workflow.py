@@ -140,7 +140,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, BaseSyncSteps, HumanSteps, Stop
             return self._handle
         run = self.input
         spec = WorkspaceSpec(run_id=run.run_id, task_key=run.task.key, repos=run.repos)
-        self._handle = await self._control(PREPARE_WORKSPACE, spec, WorkspaceHandle)
+        self._handle = await self._control(PREPARE_WORKSPACE, spec, WorkspaceHandle, heartbeats=True)
         return self._handle
 
     async def setup(self, stage_id: str = "setup") -> StepResult | None:
@@ -212,7 +212,13 @@ class FactWorkflow(AgentSteps, PullRequestSteps, BaseSyncSteps, HumanSteps, Stop
         self.note_outcome(stage_id, spec.attempt, result.outcome)
         return result
 
-    async def _control[T](self, name: str, arg: object, result_type: type[T]) -> T:
+    async def _control[T](self, name: str, arg: object, result_type: type[T], *, heartbeats: bool = False) -> T:
+        """
+        Run a control activity on the control queue.
+
+        With `heartbeats`, an attempt whose worker is gone times out after `HEARTBEAT_TIMEOUT`,
+        and a cancelled one is awaited until it has stopped, so a retry never overlaps a stale attempt's work.
+        """
         self.raise_if_stopped()
         return await workflow.execute_activity(
             name,
@@ -220,7 +226,9 @@ class FactWorkflow(AgentSteps, PullRequestSteps, BaseSyncSteps, HumanSteps, Stop
             result_type=result_type,
             task_queue=CONTROL_QUEUE,
             start_to_close_timeout=timedelta(seconds=self.input.limits.control_timeout_s),
+            heartbeat_timeout=HEARTBEAT_TIMEOUT if heartbeats else None,
             retry_policy=INFRA_RETRY,
+            cancellation_type=WAIT_CANCELLED if heartbeats else workflow.ActivityCancellationType.TRY_CANCEL,
         )
 
     async def _teardown(self) -> None:

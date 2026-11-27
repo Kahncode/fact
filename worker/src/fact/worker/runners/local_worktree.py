@@ -3,8 +3,6 @@
 import asyncio
 import re
 import shutil
-import stat
-from collections import defaultdict
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -14,14 +12,23 @@ from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT, Settings
 from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
 from fact.worker.runners.base import ExecLine, ExecOutput, RunnerCapabilities, RunnerError
-from fact.worker.runners.branches import free_branch
+from fact.worker.runners.mirror import Mirror
 from fact.worker.runners.process import build_env, spawn, stream
+from fact.worker.runners.workspace_files import (
+    WORKSPACE_MD,
+    folder,
+    make_writable_and_retry,
+    mirror_lock,
+    run_lock,
+    write_workspace_md,
+)
 
 log = get_logger(__name__)
 
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PROFILE = "local-worktree"
 GIT_TIMEOUT = 600.0
+_GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}  # LC_ALL=C: `Mirror` reads git's English messages
 
 
 def github_url(full_name: str) -> str:
@@ -29,10 +36,6 @@ def github_url(full_name: str) -> str:
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
-
-
-def _folder(full_name: str) -> str:
-    return full_name.partition("/")[2]
 
 
 class LocalWorktreeRunner:
@@ -44,6 +47,9 @@ class LocalWorktreeRunner:
 
     `factory_root` is the checkout of the factory that is running; `prepare` refuses a workspace inside it or inside
     `pinned_dir`, so an agent never edits the code it runs on.
+
+    It keeps no coordination state in memory: file locks on disk serialise a run's `prepare` and `teardown` and each
+    mirror's clone, fetch and branch pick, across worker processes.
     """
 
     def __init__(
@@ -57,8 +63,6 @@ class LocalWorktreeRunner:
         self._remote_url = remote_url
         self._github = github
         self._factory_root = factory_root
-        self._mirror_locks: defaultdict[Path, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._run_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def capabilities(self) -> RunnerCapabilities:
         return RunnerCapabilities(name=PROFILE, isolation="none", runs_as_user=True, supports_resume=True)
@@ -88,7 +92,7 @@ class LocalWorktreeRunner:
     def _validate(self, spec: WorkspaceSpec) -> Path:
         root = self._root(spec.run_id)
         self._refuse_protected(root)
-        names = [_folder(r.full_name) for r in spec.repos]
+        names = [folder(r.full_name) for r in spec.repos]
         if len(set(names)) != len(names):
             msg = "two repositories share a folder name; the workspace needs distinct repo names"
             raise RunnerError(msg)
@@ -101,28 +105,56 @@ class LocalWorktreeRunner:
         return root
 
     async def prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
-        self._validate(spec)
-        # a timed-out attempt may still run while Temporal starts the next one: one prepare per run at a time
-        async with self._run_locks[spec.run_id]:
-            return await self._prepare(spec)
+        """
+        Create the run's workspace, or return the one an earlier attempt of this run finished.
 
-    async def _prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
-        root = self._root(spec.run_id)
+        Attempts of one run take turns on the run lock, even in different processes, and `WORKSPACE.md`, renamed
+        into place last, marks a finished workspace: a retry never tears down a workspace another attempt returned.
+        """
+        root = self._validate(spec)
+        async with run_lock(root):
+            handle = await self._finished_workspace(spec, root)
+            if handle is not None:
+                log.info("workspace_reused", run_id=spec.run_id, root=str(root), branches=handle.branches)
+                return handle
+            return await self._prepare(spec, root)
+
+    async def _finished_workspace(self, spec: WorkspaceSpec, root: Path) -> WorkspaceHandle | None:
+        """Read back the handle of a workspace an earlier attempt finished; None if there is none."""
+        if not (root / WORKSPACE_MD).is_file():
+            return None
+        repos: dict[str, str] = {}
+        branches: dict[str, str] = {}
+        for repo in spec.repos:
+            worktree = root / folder(repo.full_name)
+            if not (worktree / ".git").is_file():
+                return None
+            try:
+                branch = (await self._git("branch", "--show-current", cwd=worktree)).strip()
+            except RunnerError:
+                return None
+            if not branch:
+                return None
+            repos[repo.full_name] = str(worktree)
+            branches[repo.full_name] = branch
+        return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos, branches=branches)
+
+    async def _prepare(self, spec: WorkspaceSpec, root: Path) -> WorkspaceHandle:
         # a retry after a crash mid-prepare finds this run's own half-made workspace: start over, keep the branch free
-        await self.teardown(
+        await self._remove(
             WorkspaceHandle(run_id=spec.run_id, root=str(root), repos={r.full_name: "" for r in spec.repos})
         )
-        root.mkdir(parents=True, exist_ok=True)
+        root.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 - one directory, instant
         repos: dict[str, str] = {}
         branches: dict[str, str] = {}
         try:
             for repo in spec.repos:
-                worktree = root / _folder(repo.full_name)
+                worktree = root / folder(repo.full_name)
                 repos[repo.full_name] = str(worktree)
                 branches[repo.full_name] = await self._add_worktree(repo, worktree)
-            (root / "WORKSPACE.md").write_text(_workspace_md(spec, branches), encoding="utf-8", newline="\n")
+            write_workspace_md(root, spec, branches)
         except BaseException:
-            await self.teardown(WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos))
+            await self._remove(WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos))
             raise
         log.info("workspace_ready", run_id=spec.run_id, root=str(root), repos=list(repos), branches=branches)
         return WorkspaceHandle(run_id=spec.run_id, root=str(root), repos=repos, branches=branches)
@@ -130,32 +162,13 @@ class LocalWorktreeRunner:
     async def sync_mirror(self, full_name: str) -> Path:
         """Clone or fetch the bare mirror of `owner/repo` (remote branches under `origin/*`) and return its path."""
         mirror = self._mirror_path(full_name)
-        async with self._mirror_locks[mirror]:
-            if not (mirror / "HEAD").exists():
-                mirror.parent.mkdir(parents=True, exist_ok=True)
-                await self._git("clone", "--bare", self._remote_url(full_name), str(mirror), cwd=mirror.parent)
-                # A bare clone maps no remote branches; keep them under origin/* so local branches are never overwritten.
-                await self._git("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*", cwd=mirror)
-            await self._keep_bare_out_of_worktrees(mirror)
-            await self._git("fetch", "--prune", "origin", cwd=mirror)
-            await self._git_ok("remote", "set-head", "origin", "--auto", cwd=mirror)  # follow default-branch renames
+        async with mirror_lock(mirror):
+            await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(full_name))
         return mirror
 
     async def fetch(self, full_name: str) -> None:
         """Fetch the mirror: its worktrees share its `origin/*` refs."""
         await self.sync_mirror(full_name)
-
-    async def _keep_bare_out_of_worktrees(self, mirror: Path) -> None:
-        """
-        Keep `core.bare = true` in the mirror's own `config.worktree`, never in the shared config.
-
-        With `extensions.worktreeConfig`, a shared `core.bare` also applies to every worktree, so git refuses
-        work-tree commands there (`add`, `commit`). This also repairs mirrors cloned before the fix.
-        """
-        await self._git("config", "extensions.worktreeConfig", "true", cwd=mirror)  # before any --worktree write
-        if await self._git_ok("config", "--file", "config", "--get", "core.bare", cwd=mirror):
-            await self._git("config", "--worktree", "core.bare", "true", cwd=mirror)
-            await self._git("config", "--file", "config", "--unset", "core.bare", cwd=mirror)
 
     async def _add_worktree(self, repo: RepoCheckout, worktree: Path) -> str:
         """
@@ -163,13 +176,13 @@ class LocalWorktreeRunner:
 
         A held branch is never reset, so a workspace left behind keeps its unpushed commits.
         """
-        mirror = await self.sync_mirror(repo.full_name)
-        remote_branch = f"refs/remotes/origin/{repo.branch}"
-        resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
-        start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
-        async with self._mirror_locks[mirror]:  # two runs on one mirror must not pick the same free branch
-            branch = await free_branch(self._git, self._git_ok, mirror, repo.branch)
-            await self._git("worktree", "add", "--no-track", "-B", branch, str(worktree), start, cwd=mirror)
+        mirror = self._mirror_path(repo.full_name)
+        async with mirror_lock(mirror):  # runs on one mirror, in any process, must not pick the same free branch
+            await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(repo.full_name))
+            remote_branch = f"refs/remotes/origin/{repo.branch}"
+            resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
+            start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
+            branch = await Mirror(self._git, self._git_ok, mirror).add_on_free_branch(repo.branch, worktree, start)
         if branch != repo.branch:
             log.warning("branch_taken", repo=repo.full_name, wanted=repo.branch, branch=branch)
         name, email = await self._commit_identity()
@@ -219,16 +232,22 @@ class LocalWorktreeRunner:
 
     async def teardown(self, handle: WorkspaceHandle) -> None:
         root = self._root(handle.run_id)
+        async with run_lock(root):
+            await self._remove(handle)
+
+    async def _remove(self, handle: WorkspaceHandle) -> None:
+        """Remove the run's worktrees and folder; the caller holds the run lock."""
+        root = self._root(handle.run_id)
         for full_name in handle.repos:
             try:
                 mirror = self._mirror_path(full_name)
             except RunnerError:
                 continue
             if mirror.exists():
-                await self._git_ok("worktree", "remove", "--force", str(root / _folder(full_name)), cwd=mirror)
+                await self._git_ok("worktree", "remove", "--force", str(root / folder(full_name)), cwd=mirror)
                 await self._git_ok("worktree", "prune", cwd=mirror)
         if root.exists():  # in a thread: a large tree can take minutes, and activities on this loop must heartbeat
-            await asyncio.to_thread(shutil.rmtree, root, onexc=_make_writable_and_retry)
+            await asyncio.to_thread(shutil.rmtree, root, onexc=make_writable_and_retry)
         log.info("workspace_removed", run_id=handle.run_id)
 
     async def _git_ok(self, *args: str, cwd: Path) -> bool:
@@ -239,7 +258,7 @@ class LocalWorktreeRunner:
         return True
 
     async def _git(self, *args: str, cwd: Path) -> str:
-        proc = await spawn(["git", *args], cwd, build_env({"GIT_TERMINAL_PROMPT": "0"}))
+        proc = await spawn(["git", *args], cwd, build_env(_GIT_ENV))
         lines = [item.text async for item in stream(proc, GIT_TIMEOUT) if isinstance(item, ExecLine)]
         out = "\n".join(lines)
         if proc.returncode != 0:
@@ -247,26 +266,3 @@ class LocalWorktreeRunner:
             msg = f"git {' '.join(args)} failed ({proc.returncode}): {out}"
             raise RunnerError(msg)
         return out
-
-
-def _make_writable_and_retry(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
-    """Git marks object files read-only; on Windows `rmtree` needs them writable."""
-    Path(path).chmod(stat.S_IWRITE)
-    func(path)
-
-
-def _workspace_md(spec: WorkspaceSpec, branches: Mapping[str, str]) -> str:
-    lines = [
-        "# Workspace",
-        "",
-        f"Task: `{spec.task_key}`. Every repository below is checked out side by side on its own branch.",
-        "Commit locally; never push.",
-        "",
-        "| Folder | Repository | Role | Branch |",
-        "| --- | --- | --- | --- |",
-    ]
-    lines.extend(
-        f"| `{_folder(r.full_name)}` | {r.full_name} | {r.role or '-'} | `{branches[r.full_name]}` |"
-        for r in spec.repos
-    )
-    return "\n".join(lines) + "\n"

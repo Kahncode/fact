@@ -2716,6 +2716,7 @@
     },
     "/api/v1/runs/{run_id}/steps": {
       "post": {
+        "description": "Create the step (201), or restart the row the same stage and attempt already has (200).\n\nAn activity retried after its worker died posts the same step again: it takes the row over and finishes it.",
         "operationId": "create_step_api_v1_runs__run_id__steps_post",
         "parameters": [
           {
