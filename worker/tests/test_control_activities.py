@@ -192,9 +192,3 @@ async def test_record_run_started_records_the_pinned_version(client: AsyncClient
 
     run = (await client.get(f"/api/v1/runs/{run_id}")).json()
     assert (run["worker_version"], run["home_sha"]) == (version, home)
-
-
-async def test_record_unknown_run_is_not_retried(client: AsyncClient) -> None:
-    with pytest.raises(ApplicationError, match="404") as info:
-        await ControlActivities(BASE, client).record_run_started(RunStartedInput(run_id="nope"))
-    assert info.value.non_retryable

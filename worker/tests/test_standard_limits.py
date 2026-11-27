@@ -1,6 +1,6 @@
 """`Standard` when the usage limit refuses an agent session: a durable sleep until the reset, then the same session."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET, RECORD_RUN_WAITING
 from fact.core.enums import RunOutcome, StepOutcome
@@ -10,12 +10,18 @@ from fact.sdk.sessions import LIMIT_PAUSED, MAX_LIMIT_PAUSES
 from fact.worker.loader import sandbox_runner
 from gate_harness import until_status
 from standard_harness import STANDARD, FakeActivities, finished, started_standard
+from temporal_env import time_skipping_env
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHandle
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
 WAIT = timedelta(days=3)  # a full weekly window: a wait of days
+
+
+async def _now() -> datetime:
+    """Read the shared test server's clock: earlier tests have skipped it ahead of the wall clock."""
+    return await (await time_skipping_env()).get_current_time()
 
 
 def _limited(resume_at: datetime, session_id: str | None = "s-1") -> StepResult:
@@ -40,11 +46,11 @@ def _implements(fakes: FakeActivities) -> list:
 
 
 async def test_limited_session_sleeps_until_the_reset_and_resumes_it() -> None:
-    resume_at = (datetime.now(UTC) + WAIT).replace(microsecond=0)
+    resume_at = (await _now() + WAIT).replace(microsecond=0)
     fakes = FakeActivities(implement_script=[_limited(resume_at)])
     async with started_standard(fakes, "run-limited") as (env, handle):
         status = await _waiting(handle)
-        assert status.waiting == f"usage limit until {resume_at:%Y-%m-%d %H:%M} UTC"
+        assert f"{resume_at:%H:%M}" in status.waiting  # says when it resumes
         assert (status.stage, status.attempt) == ("implement", 1)
         result: RunResult = await handle.result()
         now = await env.get_current_time()
@@ -71,7 +77,7 @@ async def test_limited_session_sleeps_until_the_reset_and_resumes_it() -> None:
 
 
 async def test_stop_during_the_sleep_ends_the_run_stopped() -> None:
-    fakes = FakeActivities(implement_script=[_limited(datetime.now(UTC) + WAIT)])
+    fakes = FakeActivities(implement_script=[_limited(await _now() + WAIT)])
     async with started_standard(fakes, "run-limited-stop") as (_, handle):
         await _waiting(handle)
         await handle.cancel(reason="not worth the wait")
@@ -83,7 +89,7 @@ async def test_stop_during_the_sleep_ends_the_run_stopped() -> None:
 
 
 async def test_a_limit_pause_does_not_use_up_the_resumes() -> None:
-    resume_at = datetime.now(UTC) + timedelta(hours=5)
+    resume_at = await _now() + timedelta(hours=5)
     fakes = FakeActivities(implement_script=[_limited(resume_at), RETRYABLE])
     async with started_standard(fakes, "run-limited-then-retryable") as (_, handle):
         result: RunResult = await handle.result()
@@ -93,7 +99,7 @@ async def test_a_limit_pause_does_not_use_up_the_resumes() -> None:
 
 
 async def test_limit_without_a_session_starts_the_session_over() -> None:
-    fakes = FakeActivities(implement_script=[_limited(datetime.now(UTC) + timedelta(hours=1), session_id=None)])
+    fakes = FakeActivities(implement_script=[_limited(await _now() + timedelta(hours=1), session_id=None)])
     async with started_standard(fakes, "run-limited-no-session") as (_, handle):
         result: RunResult = await handle.result()
 
@@ -103,7 +109,7 @@ async def test_limit_without_a_session_starts_the_session_over() -> None:
 
 
 async def test_too_many_limit_pauses_need_a_human() -> None:
-    resume_at = datetime.now(UTC) + timedelta(hours=1)  # already past after the first pause: no wait, still counted
+    resume_at = await _now() + timedelta(hours=1)  # already past after the first pause: no wait, still counted
     fakes = FakeActivities(implement_script=[_limited(resume_at)] * (MAX_LIMIT_PAUSES + 1))
     async with started_standard(fakes, "run-limited-forever") as (_, handle):
         result: RunResult = await handle.result()

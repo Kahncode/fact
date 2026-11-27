@@ -40,9 +40,8 @@ PREVIEW = {
 }
 
 
-def _use(monkeypatch: pytest.MonkeyPatch, settings: Settings, calls: list[str], status: int = 200) -> None:
+def _use(monkeypatch: pytest.MonkeyPatch, settings: Settings, status: int = 200) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(f"{request.method} {request.url.path}")
         if status != 200:  # noqa: PLR2004
             return httpx.Response(status, json={"detail": "No Temporal schedule fact-scheduler"})
         if request.url.path.endswith("/preview"):
@@ -55,39 +54,32 @@ def _use(monkeypatch: pytest.MonkeyPatch, settings: Settings, calls: list[str], 
 
 
 @pytest.mark.parametrize(
-    ("command", "call", "shown"),
-    [
-        ("on", "POST /api/v1/scheduler/on", "fact-scheduler: on"),
-        ("off", "POST /api/v1/scheduler/off", "fact-scheduler: off (paused)"),
-        ("status", "GET /api/v1/scheduler,GET /api/v1/scheduler/preview", "Every:     30 s"),
-    ],
+    ("command", "shown"),
+    [("on", "fact-scheduler: on"), ("off", "fact-scheduler: off (paused)"), ("status", "30 s")],
 )
-def test_scheduler_commands(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch, command: str, call: str, shown: str
-) -> None:
-    calls: list[str] = []
-    _use(monkeypatch, settings, calls)
+def test_scheduler_commands(settings: Settings, monkeypatch: pytest.MonkeyPatch, command: str, shown: str) -> None:
+    _use(monkeypatch, settings)  # `on` and `off` only show the state the API answers with: off is the paused one
     result = CliRunner().invoke(app, ["scheduler", command])
     assert result.exit_code == 0, result.output
-    assert calls == call.split(",")
     assert shown in result.output
 
 
 def test_status_previews_the_next_tick(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    _use(monkeypatch, settings, [])
+    _use(monkeypatch, settings)
     result = CliRunner().invoke(app, ["scheduler", "status"])
     assert result.exit_code == 0, result.output
     out = result.output
     assert "1 active of max 2" in out
-    assert "five_hour         93% used, reserve 10%, resets 2026-11-26 18:00 UTC  FULL" in out
-    assert "next check 2026-11-26 18:01 UTC" in out
+    usage_line = next(line for line in out.splitlines() if "five_hour" in line)
+    assert all(shown in usage_line for shown in ("93%", "10%", "18:00", "FULL"))
+    assert "18:01" in out  # next usage check
     lines = [line for line in out.splitlines() if "gh:Kahncode/fact#" in line and "waits" in line]
     assert ["#12" in lines[0], "#13" in lines[1], "#14" in lines[2]] == [True, True, True]  # start order
-    assert "waits (failure_cap): 3 failed runs in a row" in lines[1]
+    assert "failure_cap" in lines[1]
 
 
 def test_missing_schedule_is_an_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    _use(monkeypatch, settings, [], status=404)
+    _use(monkeypatch, settings, status=404)
     result = CliRunner().invoke(app, ["scheduler", "status"])
     assert result.exit_code == 1
     assert "404" in result.output

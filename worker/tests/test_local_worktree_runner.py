@@ -125,7 +125,7 @@ async def test_timeout_kills_whole_process_tree(runner: LocalWorktreeRunner) -> 
     beat = Path(handle.root) / "beat"
 
     start = time.monotonic()
-    lines, done = await _collect(runner.exec(handle, [sys.executable, "-c", _SPAWN_CHILD], timeout=3))
+    lines, done = await _collect(runner.exec(handle, [sys.executable, "-c", _SPAWN_CHILD], timeout=1.5))
 
     assert time.monotonic() - start < TIMEOUT_SLACK
     assert done.timed_out
@@ -133,7 +133,7 @@ async def test_timeout_kills_whole_process_tree(runner: LocalWorktreeRunner) -> 
     assert lines == ["started"]
     assert beat.exists(), "child never ran"
     before = _beat(beat)
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.3)
     assert _beat(beat) == before, "child survived the timeout"
     await runner.teardown(handle)
 
@@ -178,7 +178,7 @@ async def test_timeout_when_stdout_closes_but_process_lives(runner: LocalWorktre
     handle = await runner.prepare(_spec())
     code = "import os,time; os.close(1); time.sleep(600)"
 
-    _, done = await _collect(runner.exec(handle, [sys.executable, "-c", code], timeout=2))
+    _, done = await _collect(runner.exec(handle, [sys.executable, "-c", code], timeout=1))
 
     assert done.timed_out
     await runner.teardown(handle)

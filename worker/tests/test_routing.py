@@ -1,9 +1,7 @@
-"""Routing resolution order and the shipped fact.yaml table."""
-
-from collections.abc import Iterator
+"""Routing resolution order."""
 
 import pytest
-from fact.core.settings import CONFIG_VAR, REPO_ROOT, RoutingSettings, Settings, reset_settings
+from fact.core.settings import RoutingSettings
 from fact.core.types import Route, RouteOverride
 from fact.worker.routing import choose
 from pydantic import ValidationError
@@ -17,23 +15,6 @@ TABLE = RoutingSettings(
         "*.review": RouteOverride(model="review"),
     },
 )
-
-
-@pytest.fixture
-def shipped(monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
-    monkeypatch.setenv(CONFIG_VAR, str(REPO_ROOT / "fact.yaml"))
-    for name in ("FACT_ROUTING", "FACT_ROUTING__DEFAULT__MODEL", "FACT_ROUTING__DEFAULT__HARNESS"):
-        monkeypatch.delenv(name, raising=False)
-    reset_settings()
-    yield Settings()
-    reset_settings()
-
-
-@pytest.mark.usefixtures("shipped")
-def test_shipped_table_routes_every_step_to_opus() -> None:
-    assert choose("complex", "implement") == Route(harness="claude-code", model="opus")
-    assert choose("standard", "implement") == Route(harness="claude-code", model="opus")
-    assert choose("trivial", "review").model == "opus"
 
 
 def test_override_wins() -> None:

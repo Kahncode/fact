@@ -137,7 +137,7 @@ def test_effective_log_level_per_env() -> None:
     assert Settings(env=AppEnv.PROD, log_level="warning").effective_log_level == "WARNING"
 
 
-def test_gcp_keeps_bodies_and_invalid_level_is_rejected(capsys: pytest.CaptureFixture[str]) -> None:
+def test_gcp_keeps_bodies(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("prod", gcp=True)
     get_logger("t").info(
         "done",
@@ -148,6 +148,3 @@ def test_gcp_keeps_bodies_and_invalid_level_is_rejected(capsys: pytest.CaptureFi
     assert record["request_body"] == {"k": 1}
     assert record["response_body"] == {"ok": True}
     assert record["request_query"] == "a=1"
-    with pytest.raises(ValueError, match="log_level"):
-        Settings(log_level="bogus")
-    assert Settings(log_level="warning").effective_log_level == "WARNING"

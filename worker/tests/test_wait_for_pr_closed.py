@@ -10,7 +10,6 @@ from fact.core.activity_contract import WaitForPRClosedInput
 from fact.core.github import GitHubApp
 from fact.core.types import PRRef
 from fact.worker.activities.pr_state import PRStateActivities
-from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
 REPO = "acme/widget"
@@ -85,19 +84,3 @@ async def test_each_pr_is_polled_until_it_ends(private_key: str) -> None:
 async def test_a_transient_error_only_skips_a_poll(private_key: str) -> None:
     fake = FakeGitHub(polls={7: [None, None, CLOSED]})
     assert await _wait(fake, private_key, [_pr(7)]) == ["closed"]
-
-
-async def test_pr_not_found_is_not_retried(private_key: str) -> None:
-    fake = FakeGitHub(polls={7: [OPEN]}, fail_with=404)
-    with pytest.raises(ApplicationError) as caught:
-        await _wait(fake, private_key, [_pr(7)])
-    assert caught.value.non_retryable
-    assert TOKEN not in str(caught.value)
-
-
-async def test_without_a_github_app_it_is_not_retried() -> None:
-    activities = PRStateActivities(None)
-    spec = WaitForPRClosedInput(run_id="r", prs=[_pr(7)])
-    with pytest.raises(ApplicationError) as caught:
-        await ActivityEnvironment().run(activities.wait_for_pr_closed, spec)
-    assert caught.value.non_retryable

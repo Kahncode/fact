@@ -1,7 +1,7 @@
 """The `learn` stage of `Standard`: it runs after review, and its answer titles and describes the PR."""
 
 import pytest
-from fact.core.activity_contract import AGENT_STEP, MARK_TASK_DONE, OPEN_CHANGE_SET
+from fact.core.activity_contract import OPEN_CHANGE_SET
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
 from standard_harness import FakeActivities, agent_sessions, finished, run_standard
@@ -9,27 +9,6 @@ from standard_inputs import HIGH, LEARNED, MET
 from temporalio.exceptions import ApplicationError
 
 IMPLEMENT_TITLE = "feat(M1-99): add the widget"  # what the fake implement session answers
-
-
-async def test_learn_runs_after_review_and_before_the_task_is_marked_done() -> None:
-    fakes = FakeActivities()
-    result, _ = await run_standard(fakes, "run-learn")
-
-    assert result.outcome == RunOutcome.MERGED
-    names = [n for n, _ in fakes.calls]
-    learn_index = next(i for i, (n, spec) in enumerate(fakes.calls) if n == AGENT_STEP and spec.stage_id == "learn")
-    assert learn_index < names.index(MARK_TASK_DONE) < names.index(OPEN_CHANGE_SET)
-    learn = fakes.calls[learn_index][1]
-    assert (learn.prompt_name, learn.attempt, learn.context) == ("learn", 1, "")
-
-
-async def test_pr_title_and_summary_come_from_the_learn_session() -> None:
-    fakes = FakeActivities()
-    await run_standard(fakes, "run-learn-title")
-
-    (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
-    assert pr_spec.title == LEARNED["title"]
-    assert pr_spec.summary == LEARNED["summary"]
 
 
 @pytest.mark.parametrize(

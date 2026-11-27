@@ -3,9 +3,10 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fact.core.activity_contract import GateAnsweredInput, GateOpenedInput
+from fact.core.activity_contract import GateAnsweredInput, GateOpenedInput, RunStartedInput
 from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
+from fact.worker.activities.control import ControlActivities
 from fact.worker.activities.gates import GateActivities
 from httpx import AsyncClient
 from temporalio.exceptions import ApplicationError
@@ -84,7 +85,13 @@ async def test_gate_answered_without_a_step_creates_it(client: AsyncClient, run_
     assert (step["kind"], step["status"], step["wait_seconds"]) == ("gate", "finished", WAIT.total_seconds())
 
 
-async def test_gate_of_unknown_run_is_not_retried(client: AsyncClient) -> None:
-    with pytest.raises(ApplicationError, match="404") as info:
-        await GateActivities(BASE, client).record_gate_opened(_opened("nope"))
-    assert info.value.non_retryable
+async def test_recording_for_an_unknown_run_is_not_retried(client: AsyncClient) -> None:
+    """The runs API's 404 is permanent for every activity that records through it."""
+    records = [
+        GateActivities(BASE, client).record_gate_opened(_opened("nope")),
+        ControlActivities(BASE, client).record_run_started(RunStartedInput(run_id="nope")),
+    ]
+    for record in records:
+        with pytest.raises(ApplicationError, match="404") as info:
+            await record
+        assert info.value.non_retryable

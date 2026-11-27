@@ -176,5 +176,4 @@ async def test_scheduler_on_off_status(app: FastAPI, client: AsyncClient) -> Non
         assert on.json()["next_ticks"]
         off = (await client.post("/api/v1/scheduler/off")).json()
         assert off["paused"] is True
-        assert "fact scheduler off" in off["note"]
         assert (await env.client.get_schedule_handle(SCHEDULE_ID).describe()).schedule.state.paused

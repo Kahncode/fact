@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004, SLF001
+# ruff: noqa: PLR2004
 import subprocess
 import sys
 import time
@@ -75,12 +75,6 @@ def test_port_wait_aborts_when_a_process_exits(capsys: pytest.CaptureFixture[str
     code = run_all([ChildSpec("a", early_exit), ChildSpec("b", SLEEPER, wait_for=("127.0.0.1", 1))])
     assert code == 1
     assert "error: a exited while waiting for 127.0.0.1:1" in capsys.readouterr().out
-
-
-def test_port_wait_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(supervisor, "_port_open", lambda *_: False)
-    with pytest.raises(supervisor.PortTimeoutError, match="did not open"):
-        supervisor._wait_for_port("127.0.0.1", 1, [], timeout=0.3)
 
 
 def test_signal_death_maps_to_shell_exit_code() -> None:

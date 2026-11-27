@@ -47,7 +47,7 @@ class _Connection:
         return self._client
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")  # one test server per module: starting one costs about half a second
 async def env() -> AsyncIterator[WorkflowEnvironment]:
     async with await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as e:
         yield e

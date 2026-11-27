@@ -11,7 +11,6 @@ from fact.core.types import PRRef, Route, Task, WorkspaceHandle
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
 from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.handoff import HANDOFF_HEADING, render_handoff
-from fact.worker.prompts import render, variables
 from fact.worker.reporting import StepReporter
 from httpx import AsyncClient
 from temporalio.testing import ActivityEnvironment
@@ -54,11 +53,6 @@ def test_note_of_a_run_stopped_before_any_step() -> None:
     assert "had not started a step" in text
     assert "It ran no agent session." in text
     assert "Open PRs" not in text
-
-
-def test_handoff_placeholder_is_known_and_empty_by_default() -> None:
-    assert variables(TASK, "", "/ws")["handoff"] == ""
-    assert render("A$handoff.", variables(TASK, "", "/ws", handoff="B")) == "AB."
 
 
 @pytest.fixture

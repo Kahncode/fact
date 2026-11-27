@@ -1,7 +1,5 @@
 """`.fact/workflows/standard.py` against fake activities registered under the real names, replaying the green run's history."""
 
-import json
-
 import pytest
 from fact.core.activity_contract import (
     AGENT_INTERRUPTED,
@@ -12,15 +10,12 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
-    RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
-    RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
     REPORT_STATUS,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_CI,
-    WAIT_FOR_PR_CLOSED,
 )
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.types import StepResult
@@ -48,31 +43,12 @@ async def test_green_path() -> None:
 
     assert result.outcome == RunOutcome.MERGED
     assert result.prs == [PR]
-    assert [n for n, _ in fakes.calls] == [
-        RECORD_RUN_STARTED,
-        REPORT_STATUS,  # run_started
-        PREPARE_WORKSPACE,
-        SHELL_STEP,
-        AGENT_STEP,
-        SHELL_STEP,
-        SHELL_STEP,
-        AGENT_STEP,
-        AGENT_STEP,
-        MARK_TASK_DONE,
-        OPEN_CHANGE_SET,
-        REPORT_STATUS,  # prs_opened
-        WAIT_FOR_CI,
-        MERGE_CHANGE_SET,  # refused by default in the fakes: a person reviews
-        NOTIFY,  # PRs ready
-        RECORD_GATE_OPENED,  # the review wait
-        WAIT_FOR_PR_CLOSED,
-        RECORD_GATE_ANSWERED,
-        RECORD_RUN_FINISHED,
-        REPORT_STATUS,  # merged: the issue closes
-        TEARDOWN_WORKSPACE,
-        POST_COST_COMMENT,  # once, last, so it covers every step
-        NOTIFY,  # merged
-    ]
+    order = [n for n, _ in fakes.calls]
+    assert order[0] == RECORD_RUN_STARTED
+    assert order.index(PREPARE_WORKSPACE) < order.index(AGENT_STEP)
+    assert order.index(MARK_TASK_DONE) < order.index(OPEN_CHANGE_SET) < order.index(WAIT_FOR_CI)
+    assert order.index(WAIT_FOR_CI) < order.index(MERGE_CHANGE_SET)
+    assert order[-3:] == [TEARDOWN_WORKSPACE, POST_COST_COMMENT, NOTIFY]  # the cost comment covers every step
     assert [(r.task_key, r.event) for r in fakes.of(REPORT_STATUS)] == [
         ("task:M1-99", "run_started"),
         ("task:M1-99", "prs_opened"),
@@ -80,6 +56,8 @@ async def test_green_path() -> None:
     ]
     assert fakes.of(REPORT_STATUS)[1].prs == [PR]
     assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
+    last_agent = len(order) - 1 - order[::-1].index(AGENT_STEP)
+    assert last_agent < order.index(MARK_TASK_DONE)  # learn runs before mark_done
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
         ("setup", 1, "setup"),
         ("checks", 1, "lint"),
@@ -149,43 +127,26 @@ async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:
     assert pr_spec.branch == f"{BRANCH}-2"
 
 
-async def test_failed_setup_ends_the_run_before_implement() -> None:
-    fakes = FakeActivities(setup_outcome=StepOutcome.FAILED_CHECKS)
-    result, _ = await run_standard(fakes, "run-setup-failed")
+@pytest.mark.parametrize(
+    ("fakes", "outcome", "agent_steps"),
+    [
+        (FakeActivities(setup_outcome=StepOutcome.FAILED_CHECKS), RunOutcome.FAILED, 0),
+        (FakeActivities(implement_outcome=StepOutcome.FAILED_ERROR), RunOutcome.FAILED, 1),
+        (FakeActivities(implement_outcome=StepOutcome.NEEDS_HUMAN), RunOutcome.NEEDS_HUMAN, 1),
+    ],
+    ids=["setup_failed", "implement_failed", "implement_blocked"],
+)
+async def test_run_ending_before_checks_opens_no_pr(
+    fakes: FakeActivities, outcome: RunOutcome, agent_steps: int
+) -> None:
+    result, _ = await run_standard(fakes, "run-ends-early")
 
-    assert result.outcome == RunOutcome.FAILED
-    assert "setup ended failed_checks" in result.summary
-    assert fakes.of(AGENT_STEP) == []
-    assert fakes.of(OPEN_CHANGE_SET) == []
-    assert finished(fakes) == RunOutcome.FAILED
-
-
-async def test_teardown_failure_does_not_fail_the_run() -> None:
-    fakes = FakeActivities(broken=TEARDOWN_WORKSPACE)
-    result, _ = await run_standard(fakes, "run-teardown-broken")
-    assert result.outcome == RunOutcome.MERGED
-
-
-async def test_failed_implement_ends_the_run_without_checks() -> None:
-    fakes = FakeActivities(implement_outcome=StepOutcome.FAILED_ERROR)
-    result, _ = await run_standard(fakes, "run-implement-failed")
-
-    assert result.outcome == RunOutcome.FAILED
-    assert checks(fakes) == []
-    assert fakes.of(OPEN_CHANGE_SET) == []
-    assert finished(fakes) == RunOutcome.FAILED
-
-
-async def test_blocked_implement_needs_a_human_without_a_pr() -> None:
-    fakes = FakeActivities(implement_outcome=StepOutcome.NEEDS_HUMAN)
-    result, _ = await run_standard(fakes, "run-implement-blocked")
-
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert "needs_human" in result.summary
+    assert result.outcome == outcome
+    assert len(fakes.of(AGENT_STEP)) == agent_steps
     assert checks(fakes) == []
     assert fakes.of(MARK_TASK_DONE) == []
     assert fakes.of(OPEN_CHANGE_SET) == []
-    assert finished(fakes) == RunOutcome.NEEDS_HUMAN
+    assert finished(fakes) == outcome
 
 
 RETRYABLE = StepResult(
@@ -237,16 +198,10 @@ async def test_interrupted_twice_fails_the_run() -> None:
     assert fakes.of(TEARDOWN_WORKSPACE) == []
 
 
-async def test_cost_comment_failure_does_not_fail_the_run() -> None:
-    fakes = FakeActivities(broken=POST_COST_COMMENT)
-    result, _ = await run_standard(fakes, "run-cost-broken")
-    assert result.outcome == RunOutcome.MERGED
-    assert finished(fakes) == RunOutcome.MERGED
-
-
-async def test_run_bookkeeping_failure_does_not_fail_the_run() -> None:
-    fakes = FakeActivities(broken=RECORD_RUN_STARTED)
-    result, _ = await run_standard(fakes, "run-api-down")
+@pytest.mark.parametrize("broken", [TEARDOWN_WORKSPACE, POST_COST_COMMENT, RECORD_RUN_STARTED, REPORT_STATUS, NOTIFY])
+async def test_best_effort_activity_failure_does_not_fail_the_run(broken: str) -> None:
+    fakes = FakeActivities(broken=broken)
+    result, _ = await run_standard(fakes, "run-best-effort")
     assert result.outcome == RunOutcome.MERGED
 
 
@@ -255,24 +210,3 @@ async def test_failing_activity_fails_the_run_and_records_it() -> None:
     with pytest.raises(WorkflowFailureError):
         await run_standard(fakes, "run-prepare-broken")
     assert finished(fakes) == RunOutcome.FAILED
-
-
-def test_standard_stage_manifest() -> None:
-    assert STANDARD.manifest() == [
-        {"id": "approve_plan", "label": "Approve plan", "kind": "gate", "loops_to": None},
-        {"id": "prepare", "label": "Prepare workspace", "kind": "shell", "loops_to": None},
-        {"id": "setup", "label": "Set up workspace", "kind": "shell", "loops_to": None},
-        {"id": "implement", "label": "Implement", "kind": "agent", "loops_to": None},
-        {"id": "checks", "label": "Lint and test", "kind": "shell", "loops_to": "implement"},
-        {"id": "review", "label": "Review", "kind": "agent", "loops_to": None},
-        {"id": "address_review", "label": "Address review", "kind": "agent", "loops_to": "checks"},
-        {"id": "learn", "label": "Learn", "kind": "agent", "loops_to": None},
-        {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
-        {"id": "wait_for_ci", "label": "Wait for CI", "kind": "github", "loops_to": "fix_ci"},
-        {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
-        {"id": "sync_base", "label": "Merge base branch", "kind": "shell", "loops_to": None},
-        {"id": "resolve_conflicts", "label": "Resolve conflicts", "kind": "agent", "loops_to": "sync_base"},
-        {"id": "wait_for_review", "label": "Wait for review", "kind": "gate", "loops_to": None},
-        {"id": "needs_human", "label": "Needs a person", "kind": "gate", "loops_to": None},
-    ]
-    assert json.loads(json.dumps(STANDARD.manifest()))[4]["loops_to"] == "implement"

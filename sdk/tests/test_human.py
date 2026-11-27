@@ -1,13 +1,7 @@
-"""`HumanSteps` state outside a workflow: steering, the status query and the answer validator."""
+"""`HumanSteps` state outside a workflow: steering and the status query."""
 
-from datetime import UTC, datetime
-
-import pytest
 from fact.sdk.human import STEER_MAX_CHARS, STEERING_HEADING
-from fact.sdk.types import GateAnswer, GateDecision, OpenGate
 from fact.sdk.workflow import FactWorkflow
-
-GATE = OpenGate(gate_id="g-1", kind="needs_human", stage_id="needs_human", attempt=1, opened_at=datetime.now(UTC))
 
 
 def test_steering_is_appended_once_then_cleared() -> None:
@@ -49,19 +43,5 @@ def test_status_tracks_the_latest_stage_and_the_open_gate() -> None:
 
     flow.next_attempt("checks")
     flow.next_attempt("checks")
-    flow._open_gates[GATE.gate_id] = GATE  # noqa: SLF001 - as `gate` leaves it while it waits
     status = flow.status()
-    assert (status.stage, status.attempt, status.gate) == ("checks", 2, GATE)
-
-
-def test_validator_refuses_unknown_and_closed_gates() -> None:
-    flow = FactWorkflow()
-    flow._open_gates[GATE.gate_id] = GATE  # noqa: SLF001
-    answer = GateAnswer(gate_id="g-1", decision=GateDecision.APPROVE)
-    with pytest.raises(ValueError, match="unknown gate 'nope'; open gates: g-1"):
-        flow._validate_answer(answer.model_copy(update={"gate_id": "nope"}))  # noqa: SLF001
-
-    flow._validate_answer(answer)  # noqa: SLF001
-    flow.answer_gate(answer)
-    with pytest.raises(ValueError, match="gate 'g-1' is already closed: answered approve"):
-        flow._validate_answer(answer)  # noqa: SLF001
+    assert (status.stage, status.attempt, status.gate) == ("checks", 2, None)

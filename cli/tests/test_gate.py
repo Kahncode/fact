@@ -1,139 +1,97 @@
-"""`fact gate`, `fact steer` and the gate in `fact status`: end to end through the API to a time-skipping Temporal."""
+"""`fact gate`, `fact steer` and `fact stop` against a mocked API; the real handlers are tested in api/tests."""
 
-from collections.abc import AsyncIterator, Iterator
-from datetime import timedelta
-from pathlib import Path
+import json
 
 import httpx
 import pytest
-from api_bridge import TemporalStub, fact, serve_api
-from fact.core.gates import ANSWER_GATE, STATUS, STEER, GateAnswer, OpenGate, WorkflowStatus
-from fact.core.settings import CONFIG_VAR, Settings, reset_settings
-from fastapi import FastAPI
-from temporalio import workflow
-from temporalio.client import WorkflowFailureError
-from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.exceptions import CancelledError
-from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Worker
+from fact.cli import projects
+from fact.cli.main import app
+from fact.core.settings import Settings
+from typer.testing import CliRunner
 
-QUEUE = "wf-acme"
-WF_ID = "run-task-M9-01-1"
-GATE_ID = "g-1"
-
-
-@workflow.defn(name="one_gate", sandboxed=False)
-class OneGate:
-    """Opens gate `g-1` and returns its decision, note and steering once answered."""
-
-    def __init__(self) -> None:
-        self._gate: OpenGate | None = None
-        self._answer: GateAnswer | None = None
-        self._steering: list[str] = []
-
-    @workflow.run
-    async def run(self) -> list[str]:
-        self._gate = OpenGate(
-            gate_id=GATE_ID, kind="needs_human", stage_id="needs_human", attempt=1, opened_at=workflow.now()
-        )
-        await workflow.wait_condition(lambda: self._answer is not None)
-        self._gate = None
-        await workflow.sleep(timedelta(hours=1))
-        assert self._answer is not None
-        return [self._answer.decision, self._answer.note, *self._steering]
-
-    @workflow.update(name=ANSWER_GATE)
-    def answer_gate(self, answer: GateAnswer) -> None:
-        self._answer = answer
-
-    @answer_gate.validator
-    def _validate(self, answer: GateAnswer) -> None:
-        if self._gate is None or answer.gate_id != self._gate.gate_id:
-            msg = f"gate {answer.gate_id!r} is not open"
-            raise ValueError(msg)
-
-    @workflow.query(name=STATUS)
-    def status(self) -> WorkflowStatus:
-        return WorkflowStatus(stage="needs_human", attempt=1, gate=self._gate)
-
-    @workflow.signal(name=STEER)
-    def steer(self, text: str) -> None:
-        self._steering.append(text)
+LIVE = {"stage": "checks", "attempt": 1, "gate": None, "outcomes": []}
+OPEN_GATE = {
+    "gate_id": "g-1",
+    "kind": "needs_human",
+    "stage_id": "checks",
+    "attempt": 1,
+    "opened_at": "2026-01-01T00:00:00Z",
+}
 
 
-@pytest.fixture
-def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:
-    config = tmp_path / "fact.yaml"
-    config.write_text(
-        f"data_dir: {(tmp_path / 'data').as_posix()}\nprojects:\n  - name: acme\n    home: acme/home\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(CONFIG_VAR, str(config))
-    reset_settings()
-    yield Settings()
-    reset_settings()
+def _api(monkeypatch: pytest.MonkeyPatch, settings: Settings, *, gate: dict | None) -> list[tuple[str, str, object]]:
+    """Fake a run `abc123` whose live status shows `gate`; return the POSTs received as (method, path, body)."""
+    posts: list[tuple[str, str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST":
+            posts.append((request.method, path, json.loads(request.content)))
+            return httpx.Response(200, json={})
+        if path == "/api/v1/runs":  # lookup by workflow id
+            return httpx.Response(200, json=[])
+        if path.endswith("/status"):
+            return httpx.Response(200, json={**LIVE, "gate": gate})
+        return httpx.Response(200, json={"id": "abc123"})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(projects, "make_client", lambda: httpx.Client(base_url=settings.api_url, transport=transport))
+    return posts
 
 
-@pytest.fixture
-async def api(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[FastAPI]:
-    async with serve_api(settings, monkeypatch) as application:
-        yield application
+def test_gate_answers_the_open_gate(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=OPEN_GATE)
+
+    result = CliRunner().invoke(app, ["gate", "abc123", "reject", "--note", "not yet"])
+
+    assert result.exit_code == 0, result.output
+    assert posts == [("POST", "/api/v1/runs/abc123/gates/g-1", {"decision": "reject", "note": "not yet"})]
 
 
-async def test_gate_moves_the_run_on_and_a_second_answer_is_refused(api: FastAPI) -> None:
-    async with (
-        await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env,
-        Worker(env.client, task_queue=QUEUE, workflows=[OneGate]),
-    ):
-        api.state.temporal = TemporalStub(env.client)
-        body = {"workflow_id": WF_ID, "project": "acme", "task_key": "task:M9-01", "workflow_type": "one_gate"}
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
-            assert (await client.post("/api/v1/runs", json=body)).status_code == httpx.codes.CREATED
-        handle = await env.client.start_workflow(OneGate.run, id=WF_ID, task_queue=QUEUE)
+def test_gate_with_an_explicit_id_skips_the_status_query(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
 
-        shown = await fact("status", WF_ID)
-        assert shown.exit_code == 0, shown.output
-        assert f"Gate:     {GATE_ID} (needs_human, needs_human #1) open since" in shown.output
+    result = CliRunner().invoke(app, ["gate", "abc123", "approve", "--gate", "g-7"])
 
-        steered = await fact("steer", WF_ID, "use the fixture")
-        assert steered.exit_code == 0, steered.output
-
-        first = await fact("gate", WF_ID, "approve", "--note", "ship it")
-        assert first.exit_code == 0, first.output
-        assert f"Answered gate {GATE_ID} of {WF_ID}: approve" in first.output
-
-        again = await fact("gate", WF_ID, "approve", "--gate", GATE_ID)  # as if it raced the first answer
-        assert again.exit_code == 1
-        assert f"API answered 409: gate '{GATE_ID}' is not open" in again.output
-        no_gate = await fact("gate", WF_ID, "approve")
-        assert no_gate.exit_code == 1
-        assert f"{WF_ID} has no open gate" in no_gate.output
-        assert "Gate:     none open" in (await fact("status", WF_ID)).output
-
-        assert await handle.result() == ["approve", "ship it", "use the fixture"]
+    assert result.exit_code == 0, result.output
+    assert [path for _, path, _ in posts] == ["/api/v1/runs/abc123/gates/g-7"]
 
 
-async def test_stop_cancels_the_run_with_the_reason(api: FastAPI) -> None:
-    async with (
-        await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as env,
-        Worker(env.client, task_queue=QUEUE, workflows=[OneGate]),
-    ):
-        api.state.temporal = TemporalStub(env.client)
-        body = {"workflow_id": WF_ID, "project": "acme", "task_key": "task:M9-01", "workflow_type": "one_gate"}
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=api), base_url="http://test") as client:
-            assert (await client.post("/api/v1/runs", json=body)).status_code == httpx.codes.CREATED
-        handle = await env.client.start_workflow(OneGate.run, id=WF_ID, task_queue=QUEUE)
+def test_gate_without_an_open_gate_fails_and_answers_nothing(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
 
-        stopped = await fact("stop", WF_ID, "--reason", "newer workflow")
-        assert stopped.exit_code == 0, stopped.output
-        assert f"Stopping {WF_ID}" in stopped.output
-        with pytest.raises(WorkflowFailureError) as info:
-            await handle.result()
-        assert isinstance(info.value.cause, CancelledError)
-        history = await handle.fetch_history()
-        (requested,) = [e for e in history.events if e.HasField("workflow_execution_cancel_requested_event_attributes")]
-        assert requested.workflow_execution_cancel_requested_event_attributes.cause == "newer workflow"
+    result = CliRunner().invoke(app, ["gate", "abc123", "approve"])
 
-    unknown = await fact("stop", "run-nope-1")
-    assert unknown.exit_code == 1
-    assert "no run with workflow id run-nope-1" in unknown.output
+    assert result.exit_code == 1
+    assert "no open gate" in result.output
+    assert posts == []
+
+
+def test_steer_sends_the_text(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
+
+    result = CliRunner().invoke(app, ["steer", "abc123", "use the fixture"])
+
+    assert result.exit_code == 0, result.output
+    assert posts == [("POST", "/api/v1/runs/abc123/instructions", {"text": "use the fixture"})]
+
+
+def test_stop_sends_the_reason(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
+
+    result = CliRunner().invoke(app, ["stop", "abc123", "--reason", "newer workflow"])
+
+    assert result.exit_code == 0, result.output
+    assert posts == [("POST", "/api/v1/runs/abc123/stop", {"reason": "newer workflow"})]
+
+
+def test_stop_of_an_unknown_workflow_id_fails(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
+
+    result = CliRunner().invoke(app, ["stop", "run-nope-1"])
+
+    assert result.exit_code == 1
+    assert "run-nope-1" in result.output
+    assert posts == []

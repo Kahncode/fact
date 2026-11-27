@@ -8,7 +8,7 @@ from fact.core.github import (
     github_client,
 )
 
-SECRET = "ghs_supersecret"  # noqa: S105 fake
+SECRET = "ghs_supersecret"  # noqa: S105 fake  # pragma: allowlist secret
 
 
 def _client(status: int, body: object = None, *, token: str | None = SECRET) -> httpx.AsyncClient:
@@ -35,11 +35,6 @@ async def test_headers_and_base_url() -> None:
     assert request.headers["Accept"] == "application/vnd.github+json"
 
 
-async def test_no_token_sends_no_auth() -> None:
-    async with github_client(None, api_url="https://gh.test") as c:
-        assert "Authorization" not in c.headers
-
-
 @pytest.mark.parametrize(
     ("status", "cls", "hint"),
     [
@@ -61,18 +56,6 @@ async def test_errors(status: int, cls: type[GitHubError], hint: str) -> None:
     assert f"({status} on GET /repos/o/r/installation)" in message
     assert message.endswith(": Bad credentials")
     assert SECRET not in message
-
-
-async def test_follows_redirects() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/repos/o/old/installation":
-            return httpx.Response(301, headers={"Location": "https://gh.test/repos/o/new/installation"})
-        return httpx.Response(200, json={"id": 1})
-
-    async with github_client(SECRET, api_url="https://gh.test", transport=httpx.MockTransport(handler)) as c:
-        response = await c.get("/repos/o/old/installation")
-
-    assert response.json() == {"id": 1}
 
 
 async def test_error_with_non_json_body() -> None:

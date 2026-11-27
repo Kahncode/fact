@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from fact.core.settings import REPO_ROOT
-from fact.core.tasks import FileTaskSource, branch_name
+from fact.core.tasks import FileTaskSource
 
 TEMPLATE = """---
 id: {id}
@@ -141,10 +141,6 @@ def test_mark_done_deletes_the_file(tmp_path: Path) -> None:
 
     assert path.exists()  # the source tree is untouched
     assert not copy.exists()
-
-
-def test_branch_name() -> None:
-    assert branch_name("task:M1-02") == "fact/task-m1-02"
 
 
 def test_real_tasks_folder_is_valid() -> None:

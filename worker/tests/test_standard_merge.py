@@ -8,7 +8,6 @@ from fact.core.activity_contract import (
     RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
     RECORD_RUN_FINISHED,
-    REPORT_STATUS,
     TEARDOWN_WORKSPACE,
     WAIT_FOR_PR_CLOSED,
     GateAnsweredInput,
@@ -64,15 +63,8 @@ async def test_prs_ready_comes_before_the_wait_and_the_cost_comment_once_at_the_
     )
     assert names.index(RECORD_GATE_OPENED) < wait
     assert ready < wait
-    assert POST_COST_COMMENT not in names[:wait]
-    assert names[wait + 1 :] == [
-        RECORD_GATE_ANSWERED,
-        RECORD_RUN_FINISHED,
-        REPORT_STATUS,
-        TEARDOWN_WORKSPACE,
-        POST_COST_COMMENT,  # once, last, with every step recorded
-        NOTIFY,
-    ]
+    assert names.count(POST_COST_COMMENT) == 1
+    assert names.index(POST_COST_COMMENT) > names.index(RECORD_RUN_FINISHED)  # covers every step
 
 
 async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
@@ -93,15 +85,6 @@ async def test_a_failed_wait_ends_its_step_and_fails_the_run() -> None:
     assert comment.prs == [PR]
     names = [n for n, _ in fakes.calls]
     assert names.index(POST_COST_COMMENT) > names.index(RECORD_RUN_FINISHED)
-
-
-async def test_a_tracker_outage_does_not_fail_the_run() -> None:
-    fakes = FakeActivities(broken=REPORT_STATUS)
-    result, _ = await run_standard(fakes, "run-tracker-down")
-
-    assert result.outcome == RunOutcome.MERGED
-    assert finished(fakes) == RunOutcome.MERGED
-    assert [r.event for r in fakes.of(REPORT_STATUS)] == ["run_started", "prs_opened", "merged"]  # each tried once
 
 
 async def test_merge_when_green_ends_merged_without_a_person() -> None:

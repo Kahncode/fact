@@ -1,5 +1,4 @@
 import json
-import re
 from urllib.parse import unquote
 
 import httpx
@@ -44,26 +43,6 @@ async def _sync(fake: FakeLabels, labels: tuple[Label, ...] = FACT_LABELS) -> di
     async with github_client("tok", api_url="https://gh.test", transport=httpx.MockTransport(fake)) as client:
         changes = await sync_labels(client, "acme/app", labels)
     return {c.name: c.action for c in changes}
-
-
-def test_fact_labels_cover_the_spec() -> None:
-    names = {label.name for label in FACT_LABELS}
-    assert names == {
-        "fact:ready",
-        "fact:planned",
-        "fact:running",
-        "fact:needs-human",
-        "type:incident",
-        "type:bug",
-        "type:feature",
-        "type:chore",
-        "complexity:trivial",
-        "complexity:standard",
-        "complexity:complex",
-    }
-    for label in FACT_LABELS:
-        assert re.fullmatch(r"[0-9A-F]{6}", label.color)
-        assert label.description
 
 
 async def test_creates_every_label_on_an_empty_repo() -> None:

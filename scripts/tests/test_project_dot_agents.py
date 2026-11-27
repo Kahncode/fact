@@ -41,12 +41,15 @@ def test_copy_mode_projects_skills_and_agents(root: Path, capsys: pytest.Capture
     assert "PROJECTION_AGENTS=copy" in out
 
 
-def test_copy_mode_is_idempotent(root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_copy_mode_is_idempotent(root: Path) -> None:
     hook.project(root, "copy", force=False)
-    capsys.readouterr()
+    projected = root / ".claude" / "agents" / "core" / "reviewer.md"
+    before = projected.stat().st_mtime_ns
 
     assert hook.project(root, "copy", force=False) == 0
-    assert "agents copy already up to date" in capsys.readouterr().out
+
+    assert projected.stat().st_mtime_ns == before  # not rewritten
+    assert list((root / ".claude").glob("agents.bak-*")) == []  # and nothing was backed up
 
 
 def test_auto_mode_exposes_agents(root: Path, capsys: pytest.CaptureFixture[str]) -> None:

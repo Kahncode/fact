@@ -14,13 +14,19 @@ from httpx import ASGITransport, AsyncClient
 if str(Path(__file__).parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent))
 
-from task_repo import make_checkout
+from task_repo import copy_checkout, make_checkout
+
+
+@pytest.fixture(scope="session")
+def checkout_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Built once: git subprocesses cost about a second per test on Windows."""
+    return make_checkout(tmp_path_factory.mktemp("checkout"))
 
 
 @pytest.fixture
-def checkout(tmp_path: Path) -> Path:
-    """Clone a bare origin; origin/main holds M1-01 (done), M1-02 (needs M1-01) and M1-03 (needs M1-02)."""
-    return make_checkout(tmp_path)
+def checkout(tmp_path: Path, checkout_template: Path) -> Path:
+    """Copy the template privately: origin/main holds M1-01 (done), M1-02 (needs M1-01) and M1-03 (needs M1-02)."""
+    return copy_checkout(checkout_template, tmp_path)
 
 
 @pytest.fixture

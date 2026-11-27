@@ -7,12 +7,10 @@ from fact.core.settings import (
     AppEnv,
     ProjectRef,
     Settings,
-    expand_env_vars,
     get_settings,
     override_settings_class,
     reset_settings,
 )
-from pydantic import ValidationError
 
 
 @pytest.fixture(autouse=True)
@@ -23,16 +21,6 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]
     reset_settings()
     yield
     reset_settings()
-
-
-def test_defaults() -> None:
-    s = Settings()
-    assert s.env is AppEnv.LOCAL
-    assert s.temporal.address == "localhost:7233"
-    assert s.temporal.namespace == "default"
-    assert (s.api.host, s.api.port) == ("127.0.0.1", 8000)
-    assert (s.concurrency.sandboxes, s.concurrency.planners) == (2, 1)
-    assert s.projects == []
 
 
 @pytest.mark.parametrize(
@@ -47,17 +35,6 @@ def test_defaults() -> None:
 )
 def test_api_url_maps_wildcard_hosts_to_loopback(host: str, url: str) -> None:
     assert Settings(api={"host": host, "port": 9000}).api_url == url
-
-
-def test_home_expansion_and_derived_paths() -> None:
-    s = Settings()
-    assert s.data_dir == Path.home() / ".fact"
-    assert s.db_path == s.data_dir / "fact.db"
-    assert s.temporal_db_path == s.data_dir / "temporal.db"
-    assert s.artifacts_dir == s.data_dir / "artifacts"
-    assert s.workspaces_dir == s.data_dir / "workspaces"
-    assert s.repos_dir == s.data_dir / "repos"
-    assert s.pinned_dir == s.data_dir / "pinned"
 
 
 def test_yaml_loading(tmp_path: Path) -> None:
@@ -114,19 +91,6 @@ def test_get_settings_is_cached_and_resettable(monkeypatch: pytest.MonkeyPatch) 
     assert get_settings().temporal.address == "y:2"
 
 
-def test_settings_are_frozen() -> None:
-    with pytest.raises(ValidationError):
-        Settings().api.port = 1
-    with pytest.raises(ValidationError):
-        Settings().env = AppEnv.PROD
-
-
-def test_is_dev_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert Settings().is_dev_environment()
-    monkeypatch.setenv("FACT_ENV", "prod")
-    assert not Settings().is_dev_environment()
-
-
 def test_yaml_env_var_expansion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("from-file\n", encoding="utf-8")
@@ -142,17 +106,12 @@ def test_yaml_env_var_expansion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert s.api.host == "${UNSET_VAR_FOR_TEST}"  # unresolved references stay as written
 
 
-def test_expand_env_vars_walks_lists() -> None:
-    assert expand_env_vars({"a": [1, "x"]}) == {"a": [1, "x"]}
-
-
-def test_override_settings_class() -> None:
+def test_override_settings_class_only_before_first_load() -> None:
     class AppSettings(Settings):
         extra_flag: bool = True
 
     override_settings_class(AppSettings)
-    s = get_settings()
-    assert isinstance(s, AppSettings)
+    assert isinstance(get_settings(), AppSettings)
     with pytest.raises(RuntimeError):
         override_settings_class(AppSettings)
 

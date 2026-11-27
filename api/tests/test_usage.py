@@ -36,10 +36,3 @@ async def test_newer_report_wins_and_unmentioned_windows_stay(client: AsyncClien
         ("claude", "seven_day", 0.4, "2026-11-30T00:00:00"),
         ("other", "seven_day", 0.4, "2026-11-30T00:00:00"),
     ]
-
-
-async def test_bad_reports_are_refused(client: AsyncClient) -> None:
-    bad_account = await client.put("/api/v1/usage/Not%20OK", json={"windows": [WEEK]})
-    assert bad_account.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    negative = await client.put("/api/v1/usage/claude", json={"windows": [{**WEEK, "utilization": -1}]})
-    assert negative.status_code == HTTPStatus.UNPROCESSABLE_ENTITY

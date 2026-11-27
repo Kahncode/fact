@@ -68,6 +68,8 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests", "scripts/tests"]
 addopts = "--import-mode=importlib" # same test file names across packages
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+# One event loop for the run, so a Temporal test server started once can serve a whole module (`temporal_env`).
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 # A deadlocked test fails with every thread's stack instead of hanging the run; the slowest test takes about 5 s.
 timeout = 60

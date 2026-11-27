@@ -76,10 +76,9 @@ async def _report(github: FakeGitHub, event: TaskEvent, **kw: object) -> list[tu
 async def test_run_started_labels_running_and_links_the_run() -> None:
     github = FakeGitHub()
     writes = await _report(github, "run_started", run_url="http://ui/runs/r1")
-    assert writes == [
-        ("POST", f"{ISSUE}/labels", {"labels": [RUNNING]}),
-        ("POST", f"{ISSUE}/comments", {"body": "fact started run [r1](http://ui/runs/r1)."}),
-    ]
+    assert writes[0] == ("POST", f"{ISSUE}/labels", {"labels": [RUNNING]})
+    assert writes[1][:2] == ("POST", f"{ISSUE}/comments")
+    assert "http://ui/runs/r1" in writes[1][2]["body"]  # type: ignore[index]
 
 
 async def test_gate_opened_asks_for_a_person_and_gate_answered_clears_it() -> None:

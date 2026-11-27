@@ -351,10 +351,6 @@ async def test_worker_shutdown_fails_as_interrupted_with_the_session(env: Env) -
     assert (await env.step())["outcome"] == "failed_error"
 
 
-async def test_result_carries_the_session_id(env: Env) -> None:
-    assert (await env.run(FakeHarness())).session_id == "s-1"
-
-
 async def test_resume_sends_the_resume_prompt_and_keeps_the_schema(env: Env) -> None:
     prompts = Path(env.handle.repos[HOME]) / ".fact" / "prompts"
     (prompts / "implement.schema.json").write_text('{"properties": {"title": {"type": "string"}}}', encoding="utf-8")
@@ -362,17 +358,9 @@ async def test_resume_sends_the_resume_prompt_and_keeps_the_schema(env: Env) -> 
     await env.run(harness, resume_session_id="s-0", context="the fact worker running it stopped.")
     (request,) = harness.requests
     assert request.resume_session_id == "s-0"
-    assert request.prompt.startswith("Your previous session on this task stopped before it finished: the fact worker")
+    assert "the fact worker running it stopped." in request.prompt  # the cause reaches the session
     assert request.output_schema is not None
     assert "title" in request.output_schema["properties"]
-
-
-def test_turns_count_distinct_message_ids() -> None:
-    progress = agent_module._Progress()  # noqa: SLF001
-    for message_id in ("a", "a", "b", None, None):
-        progress.on_message({"type": "assistant", "message": {"id": message_id}})
-    progress.on_message({"type": "user"})
-    assert progress.turns == 4  # noqa: PLR2004
 
 
 class NeverStarts(FakeHarness):

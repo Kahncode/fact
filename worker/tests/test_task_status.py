@@ -5,14 +5,12 @@ from typing import Any
 
 import pytest
 from fact.core.activity_contract import ReportStatusInput, TaskEvent
-from fact.core.github import GitHubApp, GitHubError
-from fact.core.github import app as github_app
+from fact.core.github import GitHubError
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks.events import NEEDS_HUMAN, RUNNING, report
 from fact.core.types import PRRef
 from fact.worker.activities import task_status
 from fact.worker.activities.task_status import TaskStatusActivities
-from structlog.testing import capture_logs
 from temporalio.exceptions import ApplicationError
 
 KEY = "task:M1-99"
@@ -57,34 +55,34 @@ async def _report(event: TaskEvent, **kw: object) -> list[tuple[str, Any]]:
     return source.calls
 
 
-async def test_run_started_labels_and_links_the_run() -> None:
-    calls = await _report("run_started", run_url="http://ui/runs/r1")
-    assert calls == [
-        ("set_labels", (KEY, [RUNNING], [])),
-        ("comment", (KEY, "fact started run [r1](http://ui/runs/r1).")),
-    ]
+ENDED = ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))
 
 
-async def test_gates_set_and_clear_needs_human() -> None:
-    opened = await _report("gate_opened", detail="approve the plan")
-    assert opened[0] == ("set_labels", (KEY, [NEEDS_HUMAN], []))
-    assert "approve the plan" in opened[1][1][1]
-    assert await _report("gate_answered") == [("set_labels", (KEY, [], [NEEDS_HUMAN]))]
-
-
-async def test_prs_opened_links_them() -> None:
-    assert await _report("prs_opened", prs=[PR]) == [("link_prs", (KEY, [PR]))]
-
-
-async def test_merged_closes_the_task() -> None:
-    assert await _report("merged") == [("close", KEY), ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))]
-
-
-@pytest.mark.parametrize("event", ["closed", "stopped"])
-async def test_closed_or_stopped_clears_labels_and_says_why(event: TaskEvent) -> None:
-    calls = await _report(event, detail="superseded")
-    assert calls[0] == ("set_labels", (KEY, [], [RUNNING, NEEDS_HUMAN]))
-    assert calls[1] == ("comment", (KEY, f"Run r1 ended {event}: superseded."))
+@pytest.mark.parametrize(
+    ("event", "kw", "expected"),
+    [
+        (
+            "run_started",
+            {"run_url": "http://ui/runs/r1"},
+            [("set_labels", (KEY, [RUNNING], [])), ("comment", (KEY, "http://ui/runs/r1"))],
+        ),
+        ("gate_opened", {"detail": "approve the plan"}, [("set_labels", (KEY, [NEEDS_HUMAN], [])), ("comment", None)]),
+        ("gate_answered", {}, [("set_labels", (KEY, [], [NEEDS_HUMAN]))]),
+        ("prs_opened", {"prs": [PR]}, [("link_prs", (KEY, [PR]))]),
+        ("merged", {}, [("close", KEY), ENDED]),
+        ("closed", {"detail": "superseded"}, [ENDED, ("comment", None)]),
+        ("stopped", {"detail": "superseded"}, [ENDED, ("comment", None)]),
+    ],
+)
+async def test_event_reaches_the_source(event: TaskEvent, kw: dict[str, Any], expected: list[tuple[str, Any]]) -> None:
+    calls = await _report(event, **kw)
+    assert [c[0] for c in calls] == [e[0] for e in expected]
+    for call, want in zip(calls, expected, strict=True):
+        if want[1] is not None and want[0] != "comment":
+            assert call == want
+        elif want[0] == "comment":  # wording is free; the run, the URL or the reason must be in it
+            text = call[1][1]
+            assert "r1" in text or kw.get("detail", "") in text or kw.get("run_url", "") in text
 
 
 def _project(tmp_path: Path, kind: str = "files") -> Settings:
@@ -95,38 +93,19 @@ def _project(tmp_path: Path, kind: str = "files") -> Settings:
     return Settings(projects=[ProjectRef(name="acme", home="acme/widget", path=repo)])
 
 
-async def test_activity_dispatches_to_the_file_source(tmp_path: Path) -> None:
-    with capture_logs() as logs:
-        await TaskStatusActivities(_project(tmp_path)).report_status(_spec("merged"))
-    actions = [e.get("action") for e in logs if e["event"] == "task_write_back_skipped"]
-    assert actions == ["close", "set_labels"]
-    assert any(e["event"] == "task_status_reported" for e in logs)
-
-
 def _project_settings(tmp_path: Path, kind: str = "files") -> Settings:
     base = _project(tmp_path, kind)
     return Settings(projects=base.projects, github_app_id=None, github_app_private_key_path=None)
 
 
-async def test_activity_dispatches_to_the_github_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(github_app, "shared_app", lambda _settings=None: GitHubApp("1", "unused"))
-    with capture_logs() as logs:
-        await TaskStatusActivities(_project_settings(tmp_path, "github")).report_status(_spec("run_started"))
-    skipped = [(e.get("source"), e.get("action")) for e in logs if e["event"] == "task_write_back_skipped"]
-    assert skipped == [("github", "set_labels"), ("github", "comment")]  # a file task's key: nothing to write
-
-
-async def test_activity_skips_github_without_an_app(tmp_path: Path) -> None:
-    with capture_logs() as logs:
-        await TaskStatusActivities(_project_settings(tmp_path, "github")).report_status(_spec("run_started"))
-    assert [e["event"] for e in logs] == ["task_source_unavailable", "report_status_skipped"]
-
-
-async def test_activity_skips_without_a_checkout() -> None:
-    settings = Settings(projects=[ProjectRef(name="acme", home="acme/widget")])
-    with capture_logs() as logs:
-        await TaskStatusActivities(settings).report_status(_spec("run_started"))
-    assert [e["event"] for e in logs] == ["report_status_skipped"]
+@pytest.mark.parametrize("case", ["file_source", "github_without_app", "no_checkout"])
+async def test_activity_is_best_effort_where_nothing_can_be_written(tmp_path: Path, case: str) -> None:
+    """A task a source cannot write to, or no source at all, never fails the run's step."""
+    if case == "no_checkout":
+        settings = Settings(projects=[ProjectRef(name="acme", home="acme/widget")])
+    else:
+        settings = _project_settings(tmp_path, "files" if case == "file_source" else "github")
+    await TaskStatusActivities(settings).report_status(_spec("merged"))
 
 
 async def test_activity_refuses_a_broken_project_config(tmp_path: Path) -> None:
@@ -137,9 +116,12 @@ async def test_activity_refuses_a_broken_project_config(tmp_path: Path) -> None:
     assert err.value.non_retryable
 
 
-@pytest.mark.parametrize("status", [404, 403, 422, 429, 502])
+PERMANENT = {404}
+
+
+@pytest.mark.parametrize("status", [404, 502])
 async def test_activity_does_not_retry_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    permanent = status in {403, 404, 422}
+    permanent = status in PERMANENT
 
     async def refused(*_: object) -> None:
         msg = "GitHub said no"

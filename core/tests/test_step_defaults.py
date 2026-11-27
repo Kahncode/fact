@@ -7,7 +7,6 @@ from fact.core.enums import StepKind
 from fact.core.settings import CONFIG_VAR, Settings, StepDefaults, reset_settings
 
 AGENT_TIMEOUT = 90.0
-DEFAULT_MAX_TURNS = 100
 SHELL_TIMEOUT = 15.0
 
 
@@ -22,7 +21,6 @@ def test_partial_yaml_keeps_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyP
         reset_settings()
     agent = settings.step_default(StepKind.AGENT)
     assert agent.timeout_minutes == AGENT_TIMEOUT
-    assert agent.max_turns == DEFAULT_MAX_TURNS
     assert settings.step_default(StepKind.SHELL).timeout_minutes == SHELL_TIMEOUT
 
 

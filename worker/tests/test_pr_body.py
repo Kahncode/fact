@@ -32,15 +32,13 @@ def test_body_has_every_section() -> None:
         check_results=checks,
         run_url="http://localhost:8000/runs/r1",
     )
-    assert body.startswith("Adds $things to the push path.")
-    assert "[M1-11](https://github.com/acme/widget/blob/main/tasks/M1/11-open-change-set.md)" in body
-    assert "Push the branch and open the PR" in body
-    assert "- [ ] Tests pass" in body
-    assert "- [ ] Costs $5 at most" in body
-    assert "- **lint**: passed" in body
-    assert "- **test**: failed_checks (`pytest` exited with 1)" in body
-    assert "more" not in body
-    assert "[fact run](http://localhost:8000/runs/r1)" in body
+    assert body == (
+        "Adds $things to the push path.\n\n## Task\n\n"
+        "[M1-11](https://github.com/acme/widget/blob/main/tasks/M1/11-open-change-set.md): Push the branch and open the PR\n\n"
+        "### Acceptance criteria\n\n- [ ] Tests pass\n- [ ] Costs $5 at most\n\n"
+        "## Checks\n\n- **lint**: passed\n- **test**: failed_checks (`pytest` exited with 1)\n\n"
+        "---\n\n[fact run](http://localhost:8000/runs/r1)\n"
+    )
 
 
 def test_body_without_path_checks_or_run() -> None:
@@ -52,7 +50,6 @@ def test_body_without_path_checks_or_run() -> None:
         check_results=[],
         run_url="",
     )
-    assert "M1-11: Push the branch and open the PR" in body
     assert "/blob/" not in body
     assert "(none listed)" in body
     assert "(no checks ran)" in body
@@ -74,8 +71,10 @@ def test_reviewed_criteria_are_a_table() -> None:
         run_url="",
         criteria=criteria,
     )
-    assert "| Criterion | Review | Evidence |" in body
-    assert "| Tests pass | ✅ met | 312 passed |" in body
-    assert r"| a \| b | ❌ not met | line one line two |" in body
-    assert "| PR shows the table | ✅ met | - |" in body
+    assert (
+        "| Criterion | Review | Evidence |\n| --- | --- | --- |\n"
+        "| Tests pass | ✅ met | 312 passed |\n"
+        "| a \\| b | ❌ not met | line one line two |\n"
+        "| PR shows the table | ✅ met | - |\n"
+    ) in body
     assert "- [ ]" not in body

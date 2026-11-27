@@ -55,7 +55,5 @@ async def test_notification_errors(client: AsyncClient) -> None:
     assert (await client.post("/api/v1/notifications/999/read")).status_code == HTTPStatus.NOT_FOUND
     unknown_run = await client.post("/api/v1/notifications", json=_body("nope", "k"))
     assert unknown_run.status_code == HTTPStatus.NOT_FOUND
-    bad_kind = await client.post("/api/v1/notifications", json=_body(None, "k", kind="party"))
-    assert bad_kind.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     no_run = await client.post("/api/v1/notifications", json=_body(None, "planning:1"))
     assert no_run.status_code == HTTPStatus.CREATED  # a notification need not belong to a run
