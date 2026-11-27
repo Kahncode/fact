@@ -9,18 +9,24 @@ does not count. Tasks under an ancestor not marked ready are listed held with `H
 dependencies are not done with `Hold.DEPENDENCY`, for the preview. Only the tick's read (`close_epics`) closes the
 ready epics with nothing left to wait on; the preview never writes.
 
+`run_tick` is the scheduler's tick, in this process: `find_ready`, `plan_starts`, the usage gate only when something
+is chosen, then each start through `start_task` (`POST /runs/start` with `scheduled: true`, called directly). It
+touches Temporal only to start a run. `SchedulerRuntime.lock` keeps two ticks of this process from overlapping: a tick
+that finds it held returns at once. Callers: `POST /scheduler/tick` everywhere, and the dev loop
+(`fact.api.scheduler_loop`).
+
 `preview` is `fact scheduler status`: `plan` over the same `find_ready`, with the usage gate's last answer.
 """
 
 import asyncio
-from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from fact.api.run_start import counts_as_run
+from fact.api.routers.run_start import RunStart, start_task
+from fact.api.run_counts import active_by_project, run_histories
 from fact.api.task_ref import TaskReadError, project_tasks
-from fact.core.enums import RunOutcome, RunStatus, RunTrigger
+from fact.api.usage_gate import UsageGate
 from fact.core.logging import get_logger
-from fact.core.models import Project, Run
 from fact.core.project_config import ConfigError
 from fact.core.scheduler import (
     Hold,
@@ -29,18 +35,31 @@ from fact.core.scheduler import (
     ReadyTask,
     ReadyTasks,
     RunRecord,
+    TickResult,
     plan,
+    plan_starts,
     run_history_hold,
 )
 from fact.core.settings import ProjectRef, Settings
 from fact.core.tasks import ReadyItem
-from fact.core.usage_gate import UsageCheck
+from fact.core.usage_gate import GateState, UsageCheck
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.datastructures import State
 
 log = get_logger(__name__)
-ACTIVE = (RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING)
+
+
+@dataclass
+class SchedulerRuntime:
+    """The scheduler's state in the API process (`app.state.scheduler`); losing it on a restart changes nothing else."""
+
+    gate: UsageGate
+    on: bool = True  # dev only: whether the loop ticks (`fact scheduler on|off`); on at every API start
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_tick_at: datetime | None = None
+    last_tick: TickResult | None = None
 
 
 class SchedulerPreview(BaseModel):
@@ -78,46 +97,12 @@ async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = 
     ]
 
 
-def _record(status: str, outcome: str | None, trigger: str) -> RunRecord:
-    return RunRecord(
-        status=RunStatus(status), outcome=RunOutcome(outcome) if outcome else None, trigger=RunTrigger(trigger)
-    )
-
-
-async def run_histories(
-    session: AsyncSession, project: str | None = None, task_key: str | None = None
-) -> dict[tuple[str, str], list[RunRecord]]:
-    """Read the counted runs of every task (or one), newest first, by (project, task key)."""
-    query = (
-        select(Project.name, Run.task_key, Run.status, Run.outcome, Run.trigger)
-        .join(Project, Project.id == Run.project_id)
-        .where(counts_as_run())
-        .order_by(Run.created_at.desc(), Run.id.desc())
-    )
-    if project is not None and task_key is not None:
-        query = query.where(Project.name == project, Run.task_key == task_key)
-    histories: dict[tuple[str, str], list[RunRecord]] = defaultdict(list)
-    for name, key, status, outcome, trigger in (await session.execute(query)).all():
-        histories[name, key].append(_record(status, outcome, trigger))
-    return histories
-
-
 def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) -> ReadyTask | None:
     """Return the task as the scheduler sees it after its runs; None when it is not offered."""
     offered, failed, hold = run_history_hold(history, max_failed)
     if not offered:
         return None
     return task.model_copy(update={"failed_runs": failed, "hold": task.hold or hold})
-
-
-async def active_by_project(session: AsyncSession) -> dict[str, int]:
-    query = (
-        select(Project.name, func.count(Run.id))
-        .join(Project, Project.id == Run.project_id)
-        .where(Run.status.in_(ACTIVE))
-        .group_by(Project.name)
-    )
-    return {name: int(count) for name, count in (await session.execute(query)).all()}
 
 
 async def find_ready(settings: Settings, session: AsyncSession, *, close_epics: bool = False) -> ReadyTasks:
@@ -151,3 +136,57 @@ def preview(ready: ReadyTasks, usage: UsageCheck | None, now: datetime | None = 
         active=ready.active,
         max_runs=ready.max_runs,
     )
+
+
+async def run_tick(state: State) -> TickResult:
+    """Run one tick, unless another is running in this process: then return at once, `skipped`."""
+    runtime: SchedulerRuntime = state.scheduler
+    if runtime.lock.locked():
+        return TickResult(skipped=True)
+    async with runtime.lock:
+        result = await _tick(state, runtime.gate)
+        runtime.last_tick_at, runtime.last_tick = datetime.now(UTC), result
+        return result
+
+
+async def _tick(state: State, gate: UsageGate) -> TickResult:
+    async with state.sessions() as session:
+        ready = await find_ready(state.settings, session, close_epics=True)  # the tick: closes finished epics
+    chosen = plan_starts(ready)
+    if not chosen:
+        return TickResult()
+    if reason := await _usage_full(gate):
+        return TickResult(usage_full=reason)
+    started: list[str] = []
+    failed: list[str] = []
+    for task in chosen:
+        body = RunStart(task_key=task.task_key, project=task.project, scheduled=True)
+        try:
+            async with state.sessions() as session:
+                run = await start_task(state, body, session)
+        except HTTPException as exc:  # refused (the task changed or a cap filled since the read), or Temporal down
+            log.warning("scheduled_start_refused", task_key=task.task_key, status=exc.status_code, detail=exc.detail)
+            failed.append(task.task_key)
+            continue
+        except Exception:
+            log.exception("scheduled_start_failed", task_key=task.task_key, project=task.project)
+            failed.append(task.task_key)
+            continue
+        log.info("scheduled_run_started", task_key=task.task_key, project=task.project, workflow_id=run.workflow_id)
+        started.append(run.workflow_id)
+    return TickResult(started=started, failed=failed)
+
+
+async def _usage_full(gate: UsageGate) -> str:
+    """Why a full usage window holds every start; "" to start (unreadable usage is an error, not a block)."""
+    try:
+        check = await gate.check(datetime.now(UTC))
+    except Exception:
+        log.exception("usage_gate_failed")
+        return ""
+    if check.state == GateState.UNAVAILABLE:
+        log.error("claude_usage_unavailable", error=check.error)
+    elif check.state == GateState.FULL:
+        log.info("claude_usage_full", windows=check.reason, next_call_at=check.next_call_at)
+        return check.reason
+    return ""

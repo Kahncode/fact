@@ -1,13 +1,14 @@
 """
-The scheduler's contract: the `fact-scheduler` Temporal Schedule, its `SchedulerTick` workflow and activities.
+The scheduler's contract: what a tick reads, plans and returns.
 
-Every tick (30 s by default) asks the API which tasks are ready (`find_ready_tasks`), picks the ones to start with
-`plan_starts`, checks the Claude usage gate (`check_claude_usage`, only when something would start) and starts each
-through `POST /runs/start` (`start_scheduled_run`). The worker owns the Schedule (`fact.worker.scheduler`); the API and
-the CLI pause, unpause and describe it by `SCHEDULE_ID`.
+A tick (`fact.api.scheduler.run_tick`, in the API process) reads which tasks are ready (`find_ready`), picks the
+ones to start with `plan_starts`, checks the Claude usage gate only when something would start, and starts each
+through the same code as `POST /runs/start` with `scheduled: true`. No Temporal workflow or activity is involved:
+Temporal runs only project workflows. `SCHEDULE_ID` names the Temporal Schedule that ran the tick before; the worker
+deletes it at start when a dev Temporal database still has it.
 
 `plan` orders every candidate and says why each one waits, if it does; `plan_starts` is what the tick starts and
-`fact scheduler status` previews the same `plan`. Both are pure and deterministic: the tick workflow calls them.
+`fact scheduler status` previews the same `plan`. Both are pure and deterministic.
 """
 
 import re
@@ -17,13 +18,7 @@ from enum import StrEnum
 from fact.core.enums import RunOutcome, RunStatus, RunTrigger
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEDULE_ID = "fact-scheduler"
-SCHEDULER_TICK = "SchedulerTick"  # workflow type, on the control queue
-TICK_WORKFLOW_ID = "fact-scheduler-tick"  # Temporal appends the scheduled time to each tick's id
-
-FIND_READY_TASKS = "find_ready_tasks"
-START_SCHEDULED_RUN = "start_scheduled_run"
-CHECK_CLAUDE_USAGE = "check_claude_usage"
+SCHEDULE_ID = "fact-scheduler"  # the retired Temporal Schedule, deleted by the worker at start
 
 _ID_RE = re.compile(r"^M(\d+)-(\d+)$")
 
@@ -52,7 +47,7 @@ class ReadyTask(_Model):
     waiting_on: list[str] = Field(default_factory=list)  # dependencies not done yet
     gated_by: str | None = None  # the nearest ancestor not marked ready
     failed_runs: int = 0  # failed runs in a row, counted since the last run a person started
-    hold: Hold | None = None  # PARENT, DEPENDENCY or FAILURE_CAP, set by `find_ready_tasks`
+    hold: Hold | None = None  # PARENT, DEPENDENCY or FAILURE_CAP, set by `find_ready`
 
 
 class ProjectLoad(_Model):
@@ -62,7 +57,7 @@ class ProjectLoad(_Model):
 
 
 class ReadyTasks(_Model):
-    """What `find_ready_tasks` returns: the candidates, and how many runs are active against each cap."""
+    """What `find_ready` returns: the candidates, and how many runs are active against each cap."""
 
     tasks: list[ReadyTask] = Field(default_factory=list)
     projects: list[ProjectLoad] = Field(default_factory=list)
@@ -76,15 +71,11 @@ class PlannedTask(_Model):
     detail: str = ""
 
 
-class StartScheduledRunInput(_Model):
-    project: str
-    task_key: str
-
-
 class TickResult(_Model):
     started: list[str] = Field(default_factory=list)  # workflow ids
     failed: list[str] = Field(default_factory=list)  # task keys the API refused or that failed to start
     usage_full: str = ""  # why the usage gate held every start, if it did
+    skipped: bool = False  # another tick was still running in this API process: this one did nothing
 
 
 class RunRecord(_Model):

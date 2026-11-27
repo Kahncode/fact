@@ -31,7 +31,11 @@ class TemporalConnection:
 
 async def temporal_client(request: Request) -> Client:
     """Return the app's client (tests replace `app.state.temporal`); 503 while Temporal cannot be reached."""
-    connection: TemporalConnection = request.app.state.temporal
+    return await connect_temporal(request.app.state.temporal)
+
+
+async def connect_temporal(connection: TemporalConnection) -> Client:
+    """Return the connection's client; 503 while Temporal cannot be reached."""
     try:
         return await connection.client()
     except (RuntimeError, OSError) as exc:

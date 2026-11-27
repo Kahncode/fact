@@ -1,90 +1,70 @@
 """
-The scheduler: what it may start (`GET /scheduler/ready`, for its tick) and its Schedule's state, paused or not.
+The scheduler: run a tick, preview the next one, and (dev only) turn the in-process loop on and off.
 
+- `POST /scheduler/tick`: run one tick now and return its `TickResult`, in every environment. Outside dev it is the
+  only trigger: an outside cron or a webhook calls it. While the dev loop is off it still ticks (an explicit request).
+- `GET /scheduler`: whether this API ticks by itself, whether it is on, and the last tick.
 - `GET /scheduler/preview`: what the next tick would start and why the others wait, with the usage gate's last answer.
-- `PUT /scheduler/usage`: the worker reports that answer after each usage check; it is kept in this process only.
 - `GET /scheduler/active`: runs queued, running or waiting, for the worker's keep-awake.
-
-The worker creates the `fact-scheduler` Schedule; this only describes, pauses and unpauses it.
+- `POST /scheduler/on|off` (`dev_router`, mounted only in dev): flip the loop; the state lives in this process and
+  is on at every API start.
 """
 
 from datetime import datetime
 from typing import Annotated
 
 from fact.api.deps import get_session
-from fact.api.scheduler import SchedulerPreview, active_by_project, find_ready, preview
-from fact.api.temporal import temporal_client
-from fact.core.scheduler import SCHEDULE_ID, ReadyTasks
+from fact.api.run_counts import active_by_project
+from fact.api.scheduler import SchedulerPreview, SchedulerRuntime, find_ready, preview, run_tick
+from fact.core.scheduler import TickResult
 from fact.core.settings import Settings
-from fact.core.usage_gate import UsageCheck
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from temporalio.client import ScheduleDescription, ScheduleHandle
-from temporalio.service import RPCError, RPCStatusCode
 
 router = APIRouter(prefix="/api/v1")
+dev_router = APIRouter(prefix="/api/v1")
 
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
 class SchedulerState(BaseModel):
-    schedule_id: str
-    paused: bool
-    note: str | None = None
-    interval_seconds: float | None = None
-    next_ticks: list[datetime] = []
-    recent_ticks: list[datetime] = []
-
-
-def _state(desc: ScheduleDescription) -> SchedulerState:
-    intervals = desc.schedule.spec.intervals
-    return SchedulerState(
-        schedule_id=desc.id,
-        paused=desc.schedule.state.paused,
-        note=desc.schedule.state.note or None,
-        interval_seconds=intervals[0].every.total_seconds() if intervals else None,
-        next_ticks=desc.info.next_action_times[:3],
-        recent_ticks=[a.started_at for a in desc.info.recent_actions[-3:]],
-    )
-
-
-async def _describe(handle: ScheduleHandle) -> ScheduleDescription:
-    try:
-        return await handle.describe()
-    except RPCError as exc:
-        if exc.status == RPCStatusCode.NOT_FOUND:
-            detail = f"No Temporal schedule {SCHEDULE_ID}: the worker creates it when it starts"
-            raise HTTPException(status.HTTP_404_NOT_FOUND, detail) from exc
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Temporal refused: {exc}") from exc
-
-
-async def _handle(request: Request) -> ScheduleHandle:
-    return (await temporal_client(request)).get_schedule_handle(SCHEDULE_ID)
-
-
-@router.get("/scheduler/ready")
-async def ready(request: Request, session: Session) -> ReadyTasks:
-    """Tasks the scheduler may start, read from each project's default branch, and the runs counted against the caps."""
-    settings: Settings = request.app.state.settings
-    return await find_ready(settings, session, close_epics=True)  # the tick: closes finished epics
+    in_process: bool  # dev: this API ticks every `interval_seconds` while `on`; else only `POST /scheduler/tick` ticks
+    on: bool | None = None  # dev only: the `fact scheduler on|off` switch; None where there is no switch
+    interval_seconds: float | None = None  # dev only
+    last_tick_at: datetime | None = None  # since this API started
+    last_tick: TickResult | None = None
 
 
 class ActiveRuns(BaseModel):
     active: int
 
 
+def _state(request: Request) -> SchedulerState:
+    settings: Settings = request.app.state.settings
+    runtime: SchedulerRuntime = request.app.state.scheduler
+    dev = settings.is_dev_environment()
+    return SchedulerState(
+        in_process=dev,
+        on=runtime.on if dev else None,
+        interval_seconds=settings.concurrency.scheduler_interval_seconds if dev else None,
+        last_tick_at=runtime.last_tick_at,
+        last_tick=runtime.last_tick,
+    )
+
+
+@router.post("/scheduler/tick")
+async def scheduler_tick(request: Request) -> TickResult:
+    """Run one tick now: start the ready tasks the caps and the usage gate allow; `skipped` if one was running."""
+    return await run_tick(request.app.state)
+
+
 @router.get("/scheduler/preview")
 async def scheduler_preview(request: Request, session: Session) -> SchedulerPreview:
     """List the ready tasks in the order the next tick would start them, and why each one waits, if it does."""
     settings: Settings = request.app.state.settings
-    usage: UsageCheck | None = getattr(request.app.state, "scheduler_usage", None)
-    return preview(await find_ready(settings, session), usage)
-
-
-@router.put("/scheduler/usage", status_code=status.HTTP_204_NO_CONTENT)
-async def put_scheduler_usage(body: UsageCheck, request: Request) -> None:
-    request.app.state.scheduler_usage = body
+    runtime: SchedulerRuntime = request.app.state.scheduler
+    return preview(await find_ready(settings, session), runtime.gate.last)
 
 
 @router.get("/scheduler/active")
@@ -94,27 +74,16 @@ async def active_runs(session: Session) -> ActiveRuns:
 
 @router.get("/scheduler")
 async def scheduler_state(request: Request) -> SchedulerState:
-    return _state(await _describe(await _handle(request)))
+    return _state(request)
 
 
-async def _set_paused(request: Request, *, paused: bool) -> SchedulerState:
-    handle = await _handle(request)
-    await _describe(handle)  # 404 before acting on a schedule that is not there
-    try:
-        if paused:
-            await handle.pause(note="paused with `fact scheduler off`")
-        else:
-            await handle.unpause(note="unpaused with `fact scheduler on`")
-    except RPCError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Temporal refused: {exc}") from exc
-    return _state(await _describe(handle))
-
-
-@router.post("/scheduler/on")
+@dev_router.post("/scheduler/on")
 async def scheduler_on(request: Request) -> SchedulerState:
-    return await _set_paused(request, paused=False)
+    request.app.state.scheduler.on = True
+    return _state(request)
 
 
-@router.post("/scheduler/off")
+@dev_router.post("/scheduler/off")
 async def scheduler_off(request: Request) -> SchedulerState:
-    return await _set_paused(request, paused=True)
+    request.app.state.scheduler.on = False
+    return _state(request)

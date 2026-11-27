@@ -1,5 +1,7 @@
 """
-`fact scheduler on|off|status`: unpause, pause and describe the `fact-scheduler` Temporal Schedule.
+`fact scheduler on|off|status`: switch the API's tick loop on and off (dev only), and describe the scheduler.
+
+Outside dev the API has no loop and no switch (`on`/`off` answer 404): an outside cron calls `POST /scheduler/tick`.
 
 `status` also previews the next tick (`GET /scheduler/preview`): the ready tasks in start order, why each one waits,
 and the usage gate's last answer. The preview never calls the usage endpoint itself.
@@ -15,16 +17,17 @@ app = typer.Typer(help="The scheduler: starts ready tasks by itself while it is 
 
 
 def _show(state: dict[str, Any]) -> None:
-    every = state.get("interval_seconds")
-    typer.echo(f"Scheduler {state['schedule_id']}: {'off (paused)' if state['paused'] else 'on'}")
-    if every is not None:
-        typer.echo(f"Every:     {every:g} s")
-    if state.get("note"):
-        typer.echo(f"Note:      {state['note']}")
-    if state.get("next_ticks") and not state["paused"]:
-        typer.echo(f"Next tick: {state['next_ticks'][0][:19]}")
-    if state.get("recent_ticks"):
-        typer.echo(f"Last tick: {state['recent_ticks'][-1][:19]}")
+    if state["in_process"]:
+        typer.echo(f"Scheduler: {'on' if state['on'] else 'off'} (ticks in the API)")
+        typer.echo(f"Every:     {state['interval_seconds']:g} s")
+    else:
+        typer.echo("Scheduler: ticks only on POST /api/v1/scheduler/tick (an outside cron or webhook)")
+    last = state.get("last_tick")
+    if state.get("last_tick_at") and last:
+        what = f"{len(last['started'])} started, {len(last['failed'])} failed"
+        if last.get("usage_full"):
+            what = f"usage full: {last['usage_full']}"
+        typer.echo(f"Last tick: {state['last_tick_at'][:19]} ({what})")
 
 
 def _call(method: str, path: str) -> dict[str, Any]:
@@ -67,18 +70,18 @@ def _show_preview(preview: dict[str, Any]) -> None:
 
 @app.command("on")
 def on() -> None:
-    """Unpause the scheduler: ready tasks start by themselves."""
+    """Turn the API's tick loop on (dev only): ready tasks start by themselves."""
     _show(_call("POST", "/on"))
 
 
 @app.command("off")
 def off() -> None:
-    """Pause the scheduler: no new run starts by itself; runs in progress go on."""
+    """Turn the API's tick loop off (dev only, until the API restarts): no new run starts by itself."""
     _show(_call("POST", "/off"))
 
 
 @app.command("status")
 def status() -> None:
-    """Show whether the scheduler is on, its next tick, what it would start next and the Claude usage it last saw."""
+    """Show whether the scheduler is on, its last tick, what it would start next and the Claude usage it last saw."""
     _show(_call("GET", ""))
     _show_preview(_call("GET", "/preview"))

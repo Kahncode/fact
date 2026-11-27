@@ -390,29 +390,6 @@
         "title": "PlannedTask",
         "type": "object"
       },
-      "ProjectLoad": {
-        "properties": {
-          "active": {
-            "title": "Active",
-            "type": "integer"
-          },
-          "max_runs": {
-            "title": "Max Runs",
-            "type": "integer"
-          },
-          "project": {
-            "title": "Project",
-            "type": "string"
-          }
-        },
-        "required": [
-          "project",
-          "active",
-          "max_runs"
-        ],
-        "title": "ProjectLoad",
-        "type": "object"
-      },
       "ProjectOut": {
         "properties": {
           "home_repo": {
@@ -504,37 +481,6 @@
           "task_id"
         ],
         "title": "ReadyTask",
-        "type": "object"
-      },
-      "ReadyTasks": {
-        "description": "What `find_ready_tasks` returns: the candidates, and how many runs are active against each cap.",
-        "properties": {
-          "active": {
-            "default": 0,
-            "title": "Active",
-            "type": "integer"
-          },
-          "max_runs": {
-            "default": 2,
-            "title": "Max Runs",
-            "type": "integer"
-          },
-          "projects": {
-            "items": {
-              "$ref": "#/components/schemas/ProjectLoad"
-            },
-            "title": "Projects",
-            "type": "array"
-          },
-          "tasks": {
-            "items": {
-              "$ref": "#/components/schemas/ReadyTask"
-            },
-            "title": "Tasks",
-            "type": "array"
-          }
-        },
-        "title": "ReadyTasks",
         "type": "object"
       },
       "RepositoryOut": {
@@ -1200,6 +1146,10 @@
       },
       "SchedulerState": {
         "properties": {
+          "in_process": {
+            "title": "In Process",
+            "type": "boolean"
+          },
           "interval_seconds": {
             "anyOf": [
               {
@@ -1211,47 +1161,42 @@
             ],
             "title": "Interval Seconds"
           },
-          "next_ticks": {
-            "default": [],
-            "items": {
-              "format": "date-time",
-              "type": "string"
-            },
-            "title": "Next Ticks",
-            "type": "array"
-          },
-          "note": {
+          "last_tick": {
             "anyOf": [
               {
+                "$ref": "#/components/schemas/TickResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_tick_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Note"
+            "title": "Last Tick At"
           },
-          "paused": {
-            "title": "Paused",
-            "type": "boolean"
-          },
-          "recent_ticks": {
-            "default": [],
-            "items": {
-              "format": "date-time",
-              "type": "string"
-            },
-            "title": "Recent Ticks",
-            "type": "array"
-          },
-          "schedule_id": {
-            "title": "Schedule Id",
-            "type": "string"
+          "on": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On"
           }
         },
         "required": [
-          "schedule_id",
-          "paused"
+          "in_process"
         ],
         "title": "SchedulerState",
         "type": "object"
@@ -1778,6 +1723,36 @@
           }
         },
         "title": "StopIn",
+        "type": "object"
+      },
+      "TickResult": {
+        "properties": {
+          "failed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed",
+            "type": "array"
+          },
+          "skipped": {
+            "default": false,
+            "title": "Skipped",
+            "type": "boolean"
+          },
+          "started": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Started",
+            "type": "array"
+          },
+          "usage_full": {
+            "default": "",
+            "title": "Usage Full",
+            "type": "string"
+          }
+        },
+        "title": "TickResult",
         "type": "object"
       },
       "Touched": {
@@ -2907,54 +2882,23 @@
         "summary": "Scheduler Preview"
       }
     },
-    "/api/v1/scheduler/ready": {
-      "get": {
-        "description": "Tasks the scheduler may start, read from each project's default branch, and the runs counted against the caps.",
-        "operationId": "ready_api_v1_scheduler_ready_get",
+    "/api/v1/scheduler/tick": {
+      "post": {
+        "description": "Run one tick now: start the ready tasks the caps and the usage gate allow; `skipped` if one was running.",
+        "operationId": "scheduler_tick_api_v1_scheduler_tick_post",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadyTasks"
+                  "$ref": "#/components/schemas/TickResult"
                 }
               }
             },
             "description": "Successful Response"
           }
         },
-        "summary": "Ready"
-      }
-    },
-    "/api/v1/scheduler/usage": {
-      "put": {
-        "operationId": "put_scheduler_usage_api_v1_scheduler_usage_put",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UsageCheck"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Put Scheduler Usage"
+        "summary": "Scheduler Tick"
       }
     },
     "/api/v1/steps/{step_id}": {

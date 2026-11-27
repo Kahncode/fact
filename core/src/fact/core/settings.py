@@ -61,8 +61,7 @@ class ConcurrencySettings(_Section):
     sandboxes: int = 2
     planners: int = 1
     max_runs: int = Field(default=2, ge=1)  # runs queued, running or waiting at once, all projects together
-    scheduler_enabled: bool = False  # create `fact-scheduler` unpaused; then `fact scheduler on|off` decides
-    scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # applied to the Schedule at worker start
+    scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # dev only: the API's tick loop runs this often
     max_failed_runs: int = Field(default=3, ge=1)  # the scheduler stops restarting a task after this many failed runs
 
 
