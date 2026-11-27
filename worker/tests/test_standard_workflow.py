@@ -127,8 +127,7 @@ async def test_exhausted_checks_need_a_human() -> None:
     assert fakes.of(POST_COST_COMMENT) == []  # no PR to comment on
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(TEARDOWN_WORKSPACE) == []  # left on disk, holding its branch and commits
-    (gate,) = fakes.gates(RECORD_GATE_OPENED)  # a person was asked first, and rejected
-    assert (gate.gate_id, gate.kind) == ("checks-1", "needs_human")
+    assert fakes.gates(RECORD_GATE_OPENED) == []  # no gate: the run-end hold asks the person on the task
 
 
 async def test_pr_goes_on_the_branch_the_workspace_checked_out() -> None:

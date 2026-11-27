@@ -2,8 +2,8 @@
 `converse`, a library step as a mixin of `FactWorkflow`: answer people's comments on a PR or an issue.
 
 Collect the people's comments since a point (`collect_comments`, a control activity), run a read-only agent session
-with a prompt whose schema adds `decision`, `replies` (`{comment_id, body}`) and `instructions`, post the replies it
-wrote as `fact[bot]` (`post_replies`: in their thread for an inline review comment, a PR or issue comment otherwise)
+with a prompt whose schema adds `decision`, `replies` (`{comment_id, body}`) or one `reply` (to the latest comment),
+and `instructions`, post the replies it wrote as `fact[bot]` (`post_replies`: in their thread for an inline review comment, a PR or issue comment otherwise)
 and return its decision. The session holds no GitHub token: it only reads the workspace; fact posts for it. Threads
 are never resolved. A session that does not pass, or whose answer does not parse or names a decision not offered,
 posts nothing; replies that cannot be posted are logged, and the decision stands.
@@ -45,7 +45,14 @@ class ConverseAnswer(BaseModel):
 
     decision: str
     replies: list[Reply] = Field(default_factory=list)
+    reply: str = ""  # one reply, to the latest comment, for a prompt that answers a thread as a whole
     instructions: str = ""
+
+    def to_post(self, comments: Sequence[Comment]) -> list[Reply]:
+        """Return the replies to post: `replies`, else `reply` to the latest comment read (none if it read none)."""
+        if self.replies or not self.reply.strip() or not comments:
+            return list(self.replies)
+        return [Reply(comment_id=comments[-1].id, body=self.reply)]
 
 
 class Conversation(BaseModel):
@@ -80,7 +87,7 @@ def parse_conversation(result: StepResult, decisions: Sequence[str]) -> tuple[St
     if result.outcome != StepOutcome.PASSED:
         return result, None
     try:
-        keys = ("decision", "replies", "instructions")
+        keys = ("decision", "replies", "reply", "instructions")
         answer = ConverseAnswer.model_validate({k: result.outputs[k] for k in keys if k in result.outputs})
     except ValidationError as exc:
         problem = f"the session ended without a valid structured answer: {exc.error_count()} errors"
@@ -106,26 +113,33 @@ class ConverseSteps:
         pull_request: bool = True,
         since: datetime | None = None,
         review_id: int | None = None,
+        mentioning_app: bool = False,
         context: str = "",
     ) -> Conversation:
         """
         Read the people's comments on PR (or issue) `number` since `since`, answer them in one session, post its replies.
 
         `context` goes before the comments in the session's `$context`. With `review_id`, that review's body and
-        comments are read whatever `since` says.
+        comments are read whatever `since` says. With `mentioning_app`, only the comments that mention the App.
         """
         run_id = self.input.run_id
         spec = CollectCommentsInput(
-            run_id=run_id, repo=repo, number=number, pull_request=pull_request, since=since, review_id=review_id
+            run_id=run_id,
+            repo=repo,
+            number=number,
+            pull_request=pull_request,
+            since=since,
+            review_id=review_id,
+            mentioning_app=mentioning_app,
         )
         comments = await self._activity(COLLECT_COMMENTS, spec, list[Comment])
         brief = "\n\n".join(p for p in (context, f"## Comments\n\n{comments_text(comments)}") if p)
-        step = await self.agent(stage_id, prompt, limit_text(brief, CONTEXT_MAX_BYTES), pr_text=False)
+        step = await self.agent(stage_id, prompt, limit_text(brief, CONTEXT_MAX_BYTES), pr_text=False, ask=False)
         step, answer = parse_conversation(step, decisions)
-        if answer is not None and answer.replies:
+        if answer is not None and (replies := answer.to_post(comments)):
             key = f"{run_id}:{stage_id}-{self._attempts.get(stage_id, 0)}"
             post = PostRepliesInput(
-                run_id=run_id, repo=repo, number=number, comments=comments, replies=answer.replies, key=key
+                run_id=run_id, repo=repo, number=number, comments=comments, replies=replies, key=key
             )
             try:
                 await self._activity(POST_REPLIES, post, int)

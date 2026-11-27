@@ -5,8 +5,8 @@ When to resume is decided in `fact.sdk.sessions`. A session the usage limit refu
 durable timer until its `resume_at`, however far away (a full weekly window means days), with the run marked
 `waiting` and the `status` query saying `usage limit until <time>`; then the same session is resumed.
 
-`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `_record`, `_activity`,
-`_remember_pr_text` and `_remember_assumptions`.
+`AgentSteps` uses the workflow's `input`, `handle`, `next_attempt`, `with_steering`, `note_*`, `ask_person`, `_record`,
+`_activity`, `_remember_pr_text` and `_remember_assumptions`.
 """
 
 from datetime import UTC, timedelta
@@ -23,7 +23,9 @@ with workflow.unsafe.imports_passed_through():
         RunWaitingInput,
     )
     from fact.core.enums import StepOutcome
+    from fact.core.gates import GateDecision
     from fact.core.types import StepResult
+    from fact.sdk.asking import question_of, resume_context, stopped_by
     from fact.sdk.sessions import (
         INTERRUPTED,
         LIMIT_PAUSED,
@@ -48,19 +50,39 @@ def _limit_exhausted(result: StepResult) -> StepResult:
 
 class AgentSteps:
     async def agent(
-        self: FactWorkflow, stage_id: str, prompt: str, context: str = "", *, pr_text: bool = True
+        self: FactWorkflow, stage_id: str, prompt: str, context: str = "", *, pr_text: bool = True, ask: bool = True
     ) -> StepResult:
         """
         Run an agent session on `.fact/prompts/<prompt>.md` and return its last step's result: branch on its outcome.
 
         The session is resumed once (a new attempt of the stage) if the worker stopped during it, or if the agent
         answered `blocked` with `retryable: true`; see `fact.sdk.sessions`. A session the usage limit refused waits
-        for the reset and is resumed, up to `MAX_LIMIT_PAUSES` times, then ends `needs_human`. Nothing else is
-        retried. With `pr_text`, a passed session's `title` and `summary` replace earlier ones for the PR (off for a
-        review: it changes nothing); its `assumptions` and `spec_ambiguous` are always kept. Instructions queued by the `steer` signal go at the end of the next session's
-        context, then are cleared.
+        for the reset and is resumed, up to `MAX_LIMIT_PAUSES` times, then ends `needs_human`. With `ask`, a session
+        answering `blocked` with a `question` asks a person on the task (`fact.sdk.asking`) and is resumed with the
+        answer, as many times as it asks; one the person stops stays `needs_human`. Nothing else is retried. With
+        `pr_text`, a passed session's `title` and `summary` replace earlier ones for the PR (off for a review: it
+        changes nothing); its `assumptions` and `spec_ambiguous` are always kept. Instructions queued by the `steer`
+        signal go at the end of the next session's context, then are cleared.
         """
-        first_context, resume = context, None
+        result = await self._resumed(stage_id, prompt, context, None)
+        while ask and (question := question_of(result)) is not None:
+            answered = await self.ask_person(stage_id, question)
+            if answered.answer.decision != GateDecision.APPROVE:
+                result = stopped_by(result, question, answered)
+                break
+            reply = resume_context(question, answered)
+            session = result.session_id
+            again = reply if session else f"{context}\n\n{reply}"  # no session to resume: start it over, answered
+            result = await self._resumed(stage_id, prompt, again, session)
+        if result.outcome == StepOutcome.PASSED:
+            self._remember_assumptions(result)
+            if pr_text:
+                self._remember_pr_text(result)
+        return result
+
+    async def _resumed(self: FactWorkflow, stage_id: str, prompt: str, context: str, resume: str | None) -> StepResult:
+        """Run (or resume) a session, resuming it as `fact.sdk.sessions` says; return its last step's result."""
+        first_context = context
         resumes = pauses = 0
         while True:
             try:
@@ -75,24 +97,18 @@ class AgentSteps:
                 continue
             if result.outcome == StepOutcome.RATE_LIMITED:
                 if pauses == MAX_LIMIT_PAUSES:
-                    result = _limit_exhausted(result)
-                    break
+                    return _limit_exhausted(result)
                 pauses += 1
                 resume = await self.wait_out_limit(stage_id, result)
                 context = LIMIT_PAUSED if resume else first_context  # no session to resume: start it over
                 continue
             reason = retry_reason(result)
             if reason is None or resumes == MAX_RESUMES:
-                break
+                return result
             resumes += 1
             workflow.logger.info("%s: agent reported a temporary problem; resuming after %s", stage_id, RESUME_DELAY)
             await workflow.sleep(RESUME_DELAY)
             resume, context = result.session_id, f"you reported a temporary problem: {reason}"
-        if result.outcome == StepOutcome.PASSED:
-            self._remember_assumptions(result)
-            if pr_text:
-                self._remember_pr_text(result)
-        return result
 
     async def wait_out_limit(self: FactWorkflow, stage_id: str, result: StepResult) -> str | None:
         """Sleep until a `rate_limited` step's `resume_at`, the run marked waiting; return the session to resume."""

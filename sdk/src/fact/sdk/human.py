@@ -65,6 +65,19 @@ class HumanSteps:
 
         `gate_id` is unique within the run. The gate's step is stage `kind`, numbered like any other stage.
         """
+        gate, step_id = await self.open_gate(gate_id, kind, details)
+        await workflow.wait_condition(lambda: gate_id in self._answers)
+        return await self.close_gate(gate, step_id)
+
+    async def open_gate(
+        self: FactWorkflow, gate_id: str, kind: str, details: dict[str, Any] | None = None, need: str = ""
+    ) -> tuple[OpenGate, str | None]:
+        """
+        Open a gate without waiting: record its step, notify, report `gate_opened`; return it and its step id.
+
+        `need` is the task comment's text (by default the summary and how to answer with `fact gate`). Wait until
+        `gate_answered(gate_id)`, then call `close_gate`.
+        """
         if gate_id in self._open_gates or gate_id in self._answers:
             msg = f"gate {gate_id!r} was already opened in this run"
             raise ValueError(msg)
@@ -80,9 +93,20 @@ class HumanSteps:
         workflow.logger.info("gate %s (%s) is open", gate_id, kind)
         step_id = await self._record_gate(RECORD_GATE_OPENED, self._opened_input(gate), str)
         await self._notify_gate(gate)
-        await self.report_task("gate_opened", detail=self._gate_need(gate))
-        await workflow.wait_condition(lambda: gate_id in self._answers)
-        answer = self._answers[gate_id]
+        await self.report_task("gate_opened", detail=need or self._gate_need(gate))
+        return gate, step_id
+
+    def gate_answered(self, gate_id: str) -> bool:
+        return gate_id in self._answers
+
+    def answer_own_gate(self, answer: GateAnswer) -> None:
+        """Answer an open gate from the workflow itself (a person answered elsewhere, such as on the issue)."""
+        if self._open_gates.pop(answer.gate_id, None) is not None:
+            self._answers[answer.gate_id] = answer
+
+    async def close_gate(self: FactWorkflow, gate: OpenGate, step_id: str | None) -> GateAnswer:
+        """Record the answer of an answered gate and report `gate_answered`; return the answer."""
+        answer = self._answers[gate.gate_id]
         outcome = StepOutcome.PASSED if answer.decision == GateDecision.APPROVE else StepOutcome.NEEDS_HUMAN
         self.note_outcome(gate.stage_id, gate.attempt, outcome)
         await self._record_gate(RECORD_GATE_ANSWERED, self._answered_input(gate, answer, step_id, outcome), type(None))

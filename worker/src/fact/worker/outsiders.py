@@ -2,10 +2,10 @@
 Tell an outsider, once, that fact did not take their review or comment into account.
 
 Only maintainers steer fact (`fact.worker.reviews.Maintainers`). Each review or comment a person without write access
-left on a PR a run waits on gets one fixed reply from `fact[bot]`, written by no agent: a review or a conversation
-comment gets a PR comment linking it, an inline review comment a reply in its thread. Each reply carries
-`<!-- fact:ignored <id> -->`, and one whose marker is already on the PR is not posted again, so polls, retries and
-restarts post it once. A failed reply is logged and skipped: it never stops the wait.
+left on a PR a run waits on, or each comment mentioning the App on an issue whose question a run waits on, gets one
+fixed reply from `fact[bot]`, written by no agent: a review or a conversation comment gets a PR or issue comment
+linking it, an inline review comment a reply in its thread. Each reply carries `<!-- fact:ignored <id> -->`, and one
+whose marker is already on the PR or issue is not posted again, so polls, retries and restarts post it once. A failed reply is logged and skipped: it never stops the wait.
 """
 
 from dataclasses import dataclass
@@ -15,7 +15,6 @@ from typing import Any, Literal
 import httpx
 from fact.core.github import GitHubError
 from fact.core.logging import get_logger
-from fact.core.types import PRRef
 from fact.worker.reviews import by_person, login_of
 
 log = get_logger(__name__)
@@ -70,33 +69,34 @@ def candidates(
     return found
 
 
-async def reply_once(client: httpx.AsyncClient, pr: PRRef, ignored: list[Action], posted: str) -> int:
-    """Reply to each of `ignored` whose marker is not in `posted` (the PR's comment bodies); return how many."""
+async def reply_once(client: httpx.AsyncClient, repo: str, number: int, ignored: list[Action], posted: str) -> int:
+    """Reply to each of `ignored` whose marker is not in `posted` (the PR's or issue's comment bodies); return how many."""
+    where = f"{repo}#{number}"
     count = 0
     for item in ignored:
         marker = ignored_marker(item.id)
         if marker in posted:
             continue
         event = "review_ignored" if item.kind == "review" else "comment_ignored"
-        log.info(event, pr=pr.url, login=item.login, id=item.id, kind=item.kind, reason="not_maintainer")
+        log.info(event, on=where, login=item.login, id=item.id, kind=item.kind, reason="not_maintainer")
         try:
-            await _post(client, pr, item, marker)
+            await _post(client, repo, number, item, marker)
         except (GitHubError, httpx.HTTPError) as exc:
-            log.warning("ignored_reply_failed", pr=pr.url, id=item.id, error=f"{type(exc).__name__}: {exc}")
+            log.warning("ignored_reply_failed", on=where, id=item.id, error=f"{type(exc).__name__}: {exc}")
             continue
         count += 1
     return count
 
 
-async def _post(client: httpx.AsyncClient, pr: PRRef, item: Action, marker: str) -> None:
+async def _post(client: httpx.AsyncClient, repo: str, number: int, item: Action, marker: str) -> None:
     if item.kind == "review_comment":
-        path = f"/repos/{pr.repo}/pulls/{pr.number}/comments/{item.thread}/replies"
+        path = f"/repos/{repo}/pulls/{number}/comments/{item.thread}/replies"
         await client.post(path, json={"body": f"@{item.login}, this comment: {STEER}\n\n{marker}"})
         return
     noun = "review" if item.kind == "review" else "comment"
     what = f"[{noun}]({item.url})" if item.url else noun
     body = f"@{item.login}, your {what}: {STEER}\n\n{marker}"
-    await client.post(f"/repos/{pr.repo}/issues/{pr.number}/comments", json={"body": body})
+    await client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
 
 
 def _since(value: object, since: datetime | None) -> bool:

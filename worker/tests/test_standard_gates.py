@@ -1,130 +1,150 @@
-"""`Standard` with a person in the loop: `needs_human` gates on exhausted check loops, the status query, steering."""
+"""
+`Standard` with a person in the loop on a file task: a blocked agent's question opens a gate only `fact gate` answers.
+
+Also the status query and steering. Asking on an issue is in `test_standard_questions.py`.
+"""
 
 from datetime import timedelta
 
 import pytest
-from fact.core.activity_contract import AGENT_STEP, OPEN_CHANGE_SET, RECORD_GATE_ANSWERED, RECORD_GATE_OPENED
+from fact.core.activity_contract import (
+    AGENT_STEP,
+    APP_SLUG,
+    OPEN_CHANGE_SET,
+    RECORD_GATE_ANSWERED,
+    RECORD_GATE_OPENED,
+    WAIT_FOR_ANSWER,
+)
 from fact.core.enums import RunOutcome, StepOutcome
 from fact.core.gates import STATUS, STEER, GateDecision, WorkflowStatus
 from fact.core.types import RunResult
 from fact.sdk.human import STEERING_HEADING
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer, open_gate
-from standard_harness import (
-    MAX_FIX_ATTEMPTS,
-    STANDARD,
-    FakeActivities,
-    checks,
-    finished,
-    run_standard,
-    started_standard,
-)
+from standard_harness import STANDARD, FakeActivities, finished, run_standard, started_standard
+from standard_question_fakes import blocked
 from temporalio.api.enums.v1 import EventType
 from temporalio.client import WorkflowHistory, WorkflowUpdateFailedError
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Replayer
 
-ROUNDS = MAX_FIX_ATTEMPTS + 1  # check rounds in one `until_green`
+QUESTION = "Use the v1 or the v2 widget API?"
 DAYS = 3
 
 
-async def test_approve_runs_the_checks_loop_once_more() -> None:
-    fakes = FakeActivities(test_failures=ROUNDS, gate_decisions=[GateDecision.APPROVE])
-    result, history = await run_standard(fakes, "run-gate-approve")
+def _implements(fakes: FakeActivities) -> list:
+    return [s for s in fakes.of(AGENT_STEP) if s.prompt_name == "implement"]
+
+
+async def test_approve_resumes_the_blocked_session_with_the_note() -> None:
+    fakes = FakeActivities(implement_script=[blocked(QUESTION)], gate_decisions=None)
+    async with started_standard(fakes, "run-question-approve") as (_, handle):
+        gate = await open_gate(handle)
+        assert (gate.gate_id, gate.kind, gate.stage_id, gate.attempt) == (
+            "implement-question-1",
+            "needs_human",
+            "needs_human",
+            1,
+        )
+        assert gate.details["question"] == QUESTION
+        await answer(handle, gate.gate_id, GateDecision.APPROVE, "v2")
+        result: RunResult = await handle.result()
+        history = await handle.fetch_history()
 
     assert result.outcome == RunOutcome.MERGED
-    (opened,) = fakes.gates(RECORD_GATE_OPENED)
-    assert (opened.gate_id, opened.kind, opened.stage_id, opened.attempt) == (
-        "checks-1",
-        "needs_human",
-        "needs_human",
-        1,
-    )
-    assert opened.details["loop"] == "checks"
-    assert "test" in opened.details["summary"]
+    first, resumed = _implements(fakes)
+    assert (first.resume_session_id, resumed.resume_session_id) == (None, "s-1")
+    assert QUESTION in resumed.context
+    assert "v2" in resumed.context
     (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
-    assert (answered.step_id, answered.decision, answered.outcome) == ("step-checks-1", "approve", StepOutcome.PASSED)
-    assert answered.wait_seconds >= 0
-    assert len(checks(fakes)) == 2 * (ROUNDS + 1)  # one more round, green
-    assert len(fakes.of(OPEN_CHANGE_SET)) == 1
+    assert (answered.decision, answered.note, answered.outcome) == ("approve", "v2", StepOutcome.PASSED)
+    assert fakes.of(APP_SLUG) == fakes.of(WAIT_FOR_ANSWER) == []  # a file task has no issue to watch
+    opened = next(r for r in fakes.of("report_status") if r.event == "gate_opened")
+    assert QUESTION in opened.detail
+    assert "fact gate run-1 approve|reject" in opened.detail
 
-    # The new shape replays: the gate, its update and its two control activities are deterministic.
-    replayed = WorkflowHistory.from_json("run-gate-approve", history.to_json())
+    # The new shape replays: the gate, its update and its control activities are deterministic.
+    replayed = WorkflowHistory.from_json("run-question-approve", history.to_json())
     replayer = Replayer(workflows=[STANDARD], data_converter=pydantic_data_converter, workflow_runner=sandbox_runner())
     await replayer.replay_workflow(replayed)
 
 
 async def test_reject_ends_the_run_needing_a_human() -> None:
-    fakes = FakeActivities(test_failures=100, gate_decisions=None)
-    async with started_standard(fakes, "run-gate-reject") as (_, handle):
+    fakes = FakeActivities(implement_script=[blocked(QUESTION)], gate_decisions=None)
+    async with started_standard(fakes, "run-question-reject") as (_, handle):
         gate = await open_gate(handle)
         status = await handle.query(STATUS, result_type=WorkflowStatus)
         assert (status.stage, status.attempt) == ("needs_human", 1)
         assert status.gate == gate
-        assert (gate.gate_id, gate.kind) == ("checks-1", "needs_human")
-        assert status.outcomes[0].stage_id == "setup"
-        assert status.outcomes[-1].outcome == StepOutcome.FAILED_CHECKS
-        assert len(status.outcomes) == 1 + 1 + 2 * ROUNDS + MAX_FIX_ATTEMPTS  # setup, implement, checks, fixes
+        assert status.outcomes[-1].model_dump() == {"stage_id": "implement", "attempt": 1, "outcome": "needs_human"}
 
         await answer(handle, gate.gate_id, GateDecision.REJECT, "not worth it")
         result: RunResult = await handle.result()
         status = await handle.query(STATUS, result_type=WorkflowStatus)
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert result.summary.endswith("rejected: not worth it")
-    assert result.prs == []
-    (answered,) = fakes.gates(RECORD_GATE_ANSWERED)
-    assert (answered.decision, answered.note, answered.outcome) == ("reject", "not worth it", StepOutcome.NEEDS_HUMAN)
+    assert QUESTION in result.summary
+    assert result.summary.endswith("not worth it")
+    assert len(_implements(fakes)) == 1
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert fakes.of(OPEN_CHANGE_SET) == []
     assert status.gate is None
     assert status.outcomes[-1].model_dump() == {"stage_id": "needs_human", "attempt": 1, "outcome": "needs_human"}
 
 
-async def test_answering_an_unknown_or_closed_gate_is_an_error() -> None:
-    fakes = FakeActivities(test_failures=100, gate_decisions=None)
-    async with started_standard(fakes, "run-gate-invalid") as (_, handle):
+async def test_blocked_without_a_question_ends_the_run_with_no_gate() -> None:
+    fakes = FakeActivities(implement_script=[blocked()])
+    result, _ = await run_standard(fakes, "run-question-none")
+
+    assert result.outcome == RunOutcome.NEEDS_HUMAN
+    assert fakes.gates(RECORD_GATE_OPENED) == []
+    assert len(_implements(fakes)) == 1
+
+
+async def test_each_question_has_its_own_gate_and_a_closed_gate_cannot_be_answered() -> None:
+    fakes = FakeActivities(implement_script=[blocked(QUESTION), blocked("And the colour?")], gate_decisions=None)
+    async with started_standard(fakes, "run-question-twice") as (_, handle):
         first = await open_gate(handle)
         with pytest.raises(WorkflowUpdateFailedError) as unknown:
             await answer(handle, "nope", GateDecision.APPROVE)
         assert "nope" in str(unknown.value.cause)
 
-        await answer(handle, first.gate_id, GateDecision.APPROVE)
+        await answer(handle, first.gate_id, GateDecision.APPROVE, "v2")
         second = await open_gate(handle, after=[first.gate_id])
-        assert (second.gate_id, second.attempt) == ("checks-2", 2)  # the next attempt of stage `needs_human`
+        assert (second.gate_id, second.attempt) == ("implement-question-2", 2)  # stage `needs_human` again
         with pytest.raises(WorkflowUpdateFailedError) as closed:
             await answer(handle, first.gate_id, GateDecision.REJECT)
         assert first.gate_id in str(closed.value.cause)
 
-        await answer(handle, second.gate_id, GateDecision.REJECT)
+        await answer(handle, second.gate_id, GateDecision.APPROVE, "blue")
         result: RunResult = await handle.result()
 
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert [a.gate_id for a in fakes.gates(RECORD_GATE_ANSWERED)] == ["checks-1", "checks-2"]
+    assert result.outcome == RunOutcome.MERGED
+    assert [s.resume_session_id for s in _implements(fakes)] == [None, "s-1", "s-1"]
 
 
 async def test_steering_reaches_the_next_agent_session_only() -> None:
-    fakes = FakeActivities(test_failures=ROUNDS + 1, gate_decisions=None)  # the round after the gate fails once more
+    fakes = FakeActivities(implement_script=[blocked(QUESTION)], gate_decisions=None)
     async with started_standard(fakes, "run-gate-steer") as (_, handle):
         gate = await open_gate(handle)
         sessions_before = len(fakes.of(AGENT_STEP))
         await handle.signal(STEER, "  use the widget fixture  ")
-        await answer(handle, gate.gate_id, GateDecision.APPROVE)
+        await answer(handle, gate.gate_id, GateDecision.APPROVE, "v2")
         result: RunResult = await handle.result()
 
     assert result.outcome == RunOutcome.MERGED
     sessions = fakes.of(AGENT_STEP)
     assert all(STEERING_HEADING not in s.context for s in sessions[:sessions_before])
-    fix, *later = sessions[sessions_before:]
-    assert fix.prompt_name == "fix_checks"
-    assert "FAILED test_widget" in fix.context  # its own context first
-    assert fix.context.endswith(f"{STEERING_HEADING}\n\nuse the widget fixture")
+    resumed, *later = sessions[sessions_before:]
+    assert resumed.prompt_name == "implement"
+    assert "v2" in resumed.context  # its own context first
+    assert resumed.context.endswith(f"{STEERING_HEADING}\n\nuse the widget fixture")
     assert later
     assert all(STEERING_HEADING not in s.context for s in later)  # cleared once used
 
 
 async def test_a_gate_open_for_days_costs_nothing() -> None:
-    fakes = FakeActivities(test_failures=100, gate_decisions=None)
+    fakes = FakeActivities(implement_script=[blocked(QUESTION)], gate_decisions=None)
     async with started_standard(fakes, "run-gate-days") as (env, handle):
         gate = await open_gate(handle)
         calls = len(fakes.calls)

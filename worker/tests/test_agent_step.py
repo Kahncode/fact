@@ -306,7 +306,7 @@ async def test_prompt_schema_adds_fields_to_the_answer(env: Env) -> None:
     await env.run(harness)
     schema = harness.requests[0].output_schema
     assert schema is not None
-    assert set(schema["properties"]) == {"status", "summary", "blocker", "retryable", "title"}
+    assert set(schema["properties"]) == {"status", "summary", "blocker", "question", "retryable", "title"}
     assert schema["required"] == ["status", "summary", "title"]
 
 

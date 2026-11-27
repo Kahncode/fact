@@ -9,7 +9,11 @@ A session is resumed at most `MAX_RESUMES` times per `agent` call, and only when
 Separately, a session the subscription's usage limit refused (`rate_limited`) is resumed once the limit resets, at
 its `resume_at`, up to `MAX_LIMIT_PAUSES` times; these pauses do not count against `MAX_RESUMES`.
 
-Everything else (no answer, the turn limit, a timeout, a blocked answer that is not retryable) is final.
+A session that answered `blocked` with a `question` is resumed once a person answered it (`fact.sdk.asking`, through
+`FactWorkflow.agent`), as many times as it asks; this is not a resume these rules count.
+
+Everything else (no answer, the turn limit, a timeout, a blocked answer that is neither retryable nor a question) is
+final.
 """
 
 from datetime import UTC, datetime, timedelta

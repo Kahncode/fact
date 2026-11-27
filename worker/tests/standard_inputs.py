@@ -28,3 +28,13 @@ def run_input(run_id: str = "run-1") -> RunInput:
     task = Task(key="task:M1-99", id="M1-99", title="Add a widget", path="tasks/M1/99-widget.md")
     repo = RepoCheckout(full_name=REPO, default_branch="main", branch=BRANCH)
     return RunInput(run_id=run_id, project="acme", task=task, repos=[repo], run_url=RUN_URL)
+
+
+ISSUE = 5
+
+
+def issue_run_input(run_id: str = "run-1") -> RunInput:
+    """Return a run on issue `acme/widget#5`, where a question is asked."""
+    task = Task(key=f"gh:{REPO}#{ISSUE}", id=str(ISSUE), title="Add a widget")
+    repo = RepoCheckout(full_name=REPO, default_branch="main", branch=f"fact/gh-{ISSUE}")
+    return RunInput(run_id=run_id, project="acme", task=task, repos=[repo], run_url=RUN_URL)

@@ -44,3 +44,5 @@ Each PR of a change set lives its own life: it is merged as soon as it is approv
 - `approve_plan` is unchanged until the planner (M6) designs it.
 
 Mentions of the App that start a session outside a review (a mention on a PR or an issue at any time) come later, with webhooks.
+
+Today (issue 95): built as above for every agent session `FactWorkflow.agent` runs, except `classify` and the `converse` sessions themselves (`fact.sdk.asking`). The issue is polled every 60 s (`wait_for_answer`); each poll that finds new maintainer mentions starts one `answer` session. An `answer` session that does not pass, or gives no usable answer, changes nothing: the run waits for the next mention or `fact gate`. `fact gate approve` resumes the blocked session with its note as the instructions.

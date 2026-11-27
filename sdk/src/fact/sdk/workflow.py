@@ -35,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
     from fact.sdk.activities import call_activity
     from fact.sdk.agents import AgentSteps
+    from fact.sdk.asking import AskSteps
     from fact.sdk.base_sync import BaseSyncSteps
     from fact.sdk.classify import ClassifySteps
     from fact.sdk.converse import ConverseSteps
@@ -56,6 +57,7 @@ PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome
 
 class FactWorkflow(
     AgentSteps,
+    AskSteps,
     PullRequestSteps,
     ReviewWaitSteps,
     ConverseSteps,
