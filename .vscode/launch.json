@@ -7,6 +7,7 @@
       "request": "launch",
       "module": "fact.cli.main",
       "args": ["dev", "--follow", "main"],
+      "preLaunchTask": "fact: pin main",
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
