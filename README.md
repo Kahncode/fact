@@ -87,7 +87,7 @@ uv run fact scheduler off
 uv run fact scheduler on
 ```
 
-Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`concurrency.max_runs` in `fact.yaml`, each project's `max_runs` in its `.fact/project.yaml`).
+Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most `runner_pool.max_concurrent_runs` runs at once per project (default 2, in its `.fact/project.yaml`).
 
 - A sub-issue starts only when it and every parent above it are labelled `fact:ready`, so a plan under a `fact:planned` parent waits until you set the parent `fact:ready`. A parent waits for its open sub-issues; once none is left open, a parent with a work type (`type:feature`, `bug`, `chore`, `incident`) runs as that type and one without is closed as completed without a run (`type:epic` is for people; fact ignores it). `fact run` refuses an issue whose parent is not ready unless you pass `--force-deps`.
 - An issue the scheduler will not start until you act carries `fact:needs-human` (next to `fact:ready`), with a comment and a `task_held` notification (`fact inbox`) saying why: its run stopped, needs you, ended with its PR open, or its PR was closed, or its runs failed 3 times in a row (`concurrency.max_failed_runs`). Remove the label, or start it with `fact run`, which removes it first and resets the failure count. A failed run below the cap is retried. A file task whose last run ended any way but failed is never restarted by the scheduler.
@@ -99,7 +99,7 @@ The scheduler ticks inside the API. In dev (`env` `local`, `test` or `dev`) it t
 
 ## Workspaces
 
-Each run works in its own git worktrees under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run's PR is merged or closed, or the run is stopped; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
+Each run works in its own git clones under `<data_dir>/workspaces/<run_id>` (`data_dir` defaults to `~/.fact`). The workspace is removed once the run's PR is merged or closed, or the run is stopped; a run that fails or needs you (including red CI on an open PR) leaves it in place, with its branch and unpushed commits, until you delete the folder. See `docs/spec/09-runners-and-harnesses.md`.
 
 ## GitHub App
 

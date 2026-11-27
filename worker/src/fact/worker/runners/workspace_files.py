@@ -1,8 +1,8 @@
 """
-Files the local worktree runner keeps on disk: the run and mirror locks, and `WORKSPACE.md`.
+Files the local runner keeps on disk: the run lock and `WORKSPACE.md`.
 
 The locks are OS file locks (`filelock`), so they hold across worker processes and are released when a process dies.
-Their names start with a dot, which no run id or repository name can, so they never collide with a run or a mirror.
+Their names start with a dot, which no run id or repository name can, so they never collide with a run.
 """
 
 import stat
@@ -27,12 +27,6 @@ def run_lock(root: Path) -> AsyncFileLock:
     """
     root.parent.mkdir(parents=True, exist_ok=True)
     return AsyncFileLock(root.with_name(f".{root.name}.lock"))
-
-
-def mirror_lock(mirror: Path) -> AsyncFileLock:
-    """Return the lock of a bare mirror, beside it: held to clone, fetch, and pick a free branch and add a worktree."""
-    mirror.parent.mkdir(parents=True, exist_ok=True)
-    return AsyncFileLock(mirror.with_name(f".{mirror.name}.lock"))
 
 
 def make_writable_and_retry(func: Callable[[str], object], path: str, _exc: BaseException) -> None:

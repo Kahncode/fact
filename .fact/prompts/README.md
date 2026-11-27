@@ -1,13 +1,13 @@
 # Prompts
 
-Prompt templates for this project's agent steps. `agent_step` renders `.fact/prompts/<prompt_name>.md` from the home repository's worktree with Python's `string.Template`:
+Prompt templates for this project's agent steps. `agent_step` renders `.fact/prompts/<prompt_name>.md` from the home repository's clone in the workspace with Python's `string.Template`:
 
 | Placeholder | Value |
 | --- | --- |
 | `$task_id`, `$task_title`, `$task_body` | The task |
 | `$acceptance_criteria` | The task's criteria, one `- ` line each |
 | `$context` | Text the workflow passes, such as failing check output |
-| `$workspace` | The workspace root, which holds `WORKSPACE.md` and every repository's worktree |
+| `$workspace` | The workspace root, which holds `WORKSPACE.md` and every repository's clone |
 | `$stage_id` | The step's stage, such as `implement` |
 | `$handoff` | After a stopped run of the task: its handoff note (a `## Handoff from a stopped run` section with the reason, the last stage reached, the open PRs and each agent step's summary); empty otherwise |
 

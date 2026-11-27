@@ -3,8 +3,8 @@
 
 One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), and for
 each the `control` and workspace activity workers of the same version (`activity_workers.py`): every activity on the
-queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`), at most `concurrency.sandboxes` at once
-across every project version (one shared `PoolSlots`). Every activity heartbeats through `heartbeats.HeartbeatInterceptor`.
+queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). Every activity heartbeats through
+`heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
 are active the worker keeps Windows awake (`keep_awake.py`).
 """
@@ -34,14 +34,14 @@ from fact.worker.activities.review_wait import ReviewWaitActivities
 from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
-from fact.worker.activity_workers import Activity, PoolSlots, activity_workers
+from fact.worker.activity_workers import Activity, activity_workers
 from fact.worker.client import connect
 from fact.worker.deployments import deployment_config, set_current_version
 from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
 from fact.worker.loader import ProjectWorkflows, WorkflowLoadError, factory_sha, load_project, sandbox_runner
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalWorktreeRunner, RunnerError
+from fact.worker.runners import LocalRunner, RunnerError
 from fact.worker.scheduler import delete_leftover_schedule
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -72,7 +72,7 @@ def _github_app(settings: Settings) -> GitHubApp | None:
         return None
 
 
-async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list[ProjectWorkflows]:
+async def load_projects(settings: Settings, runner: LocalRunner) -> list[ProjectWorkflows]:
     """
     Load every registered project's workflows; a project that fails to load is logged and skipped.
 
@@ -83,7 +83,7 @@ async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list
     loaded: list[ProjectWorkflows] = []
     for ref in settings.projects:
         try:
-            project = await load_project(ref.name, ref.home, runner.sync_mirror, settings.pinned_dir, factory)
+            project = await load_project(ref.name, ref.home, runner.remote_url, settings.pinned_dir, factory)
         except (WorkflowLoadError, RunnerError) as exc:
             log.error("workflow_load_failed", project=ref.name, error=str(exc))  # noqa: TRY400 - the message is enough
             continue
@@ -109,7 +109,7 @@ def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
 
 
 def factory_activities(
-    settings: Settings, http: httpx.AsyncClient, runner: LocalWorktreeRunner, github: GitHubApp | None
+    settings: Settings, http: httpx.AsyncClient, runner: LocalRunner, github: GitHubApp | None
 ) -> list[Activity]:
     """Every activity the worker registers; `activity_workers` puts each on the queue of its spec's zone."""
     reporter = StepReporter(settings.api_url, http, log_dir=settings.data_dir / "step-logs")
@@ -152,12 +152,9 @@ def _project_workers(
     client: Client,
     project: ProjectWorkflows,
     activities: list[Activity],
-    runner: LocalWorktreeRunner,
-    sandboxes: PoolSlots,
+    runner: LocalRunner,
 ) -> list[Worker]:
-    workers = activity_workers(
-        client, project, activities, workspace_queue=runner.task_queue, workspace_slots=sandboxes
-    )
+    workers = activity_workers(client, project, activities, workspace_queue=runner.task_queue)
     return [*workers, workflow_worker(client, project)]
 
 
@@ -168,12 +165,11 @@ async def run() -> None:
     client = await connect(settings)
     log = get_logger("fact.worker")
     github = _github_app(settings)
-    runner = LocalWorktreeRunner(settings, github=github)
+    runner = LocalRunner(settings, github=github)
     projects = await load_projects(settings, runner)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)
-        sandboxes = PoolSlots(settings.concurrency.sandboxes)  # the runner pool's cap, shared by every version
-        workers = [w for p in projects for w in _project_workers(client, p, activities, runner, sandboxes)]
+        workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
         for worker in workers:
             await stack.enter_async_context(worker)
         for project in projects:

@@ -20,8 +20,8 @@ def _task(task_id: str, **extra: object) -> ReadyTask:
     return ReadyTask(project="a", task_key=f"task:{task_id}", task_id=task_id, **extra)
 
 
-def _ready(tasks: list[ReadyTask], max_runs: int = 2) -> ReadyTasks:
-    return ReadyTasks(tasks=tasks, projects=[ProjectLoad(project="a", active=0, max_runs=5)], max_runs=max_runs)
+def _ready(tasks: list[ReadyTask]) -> ReadyTasks:
+    return ReadyTasks(tasks=tasks, projects=[ProjectLoad(project="a", active=0, max_concurrent_runs=2)])
 
 
 def test_plan_gives_each_task_its_reason() -> None:
@@ -51,7 +51,7 @@ def test_usage_holds_only_what_the_caps_let_start() -> None:
     assert [(p.hold, p.detail) for p in planned] == [
         (Hold.USAGE, "five_hour 95%"),
         (Hold.USAGE, "five_hour 95%"),
-        (Hold.CAP, "max_runs 2 reached"),
+        (Hold.CAP, "project a max_concurrent_runs 2 reached"),
     ]
 
 

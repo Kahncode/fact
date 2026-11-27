@@ -21,9 +21,9 @@ def _task(
     )
 
 
-def _ready(tasks: list[ReadyTask], *, max_runs: int = 10, active: int = 0, **projects: tuple[int, int]) -> ReadyTasks:
-    loads = [ProjectLoad(project=p, active=a, max_runs=m) for p, (a, m) in projects.items()]
-    return ReadyTasks(tasks=tasks, projects=loads, active=active, max_runs=max_runs)
+def _ready(tasks: list[ReadyTask], **projects: tuple[int, int]) -> ReadyTasks:
+    loads = [ProjectLoad(project=p, active=a, max_concurrent_runs=m) for p, (a, m) in projects.items()]
+    return ReadyTasks(tasks=tasks, projects=loads)
 
 
 def _ids(chosen: list[ReadyTask]) -> list[str]:
@@ -63,25 +63,16 @@ def test_effective_priority_follows_waits_within_the_project() -> None:
     }
 
 
-def test_projects_take_turns_for_the_overall_cap() -> None:
-    tasks = [
-        *(_task(f"M1-0{n}", project="a", priority="urgent") for n in (1, 2, 3)),
-        *(_task(f"M2-0{n}", project="b", priority="low") for n in (1, 2)),
-    ]
-    chosen = plan_starts(_ready(tasks, max_runs=4, a=(0, 5), b=(0, 5)))
-    assert _ids(chosen) == ["M1-01", "M2-01", "M1-02", "M2-02"]
-
-
-def test_overall_cap_counts_active_runs() -> None:
+def test_pool_cap_counts_active_runs() -> None:
     tasks = [_task("M1-01"), _task("M1-02"), _task("M1-03")]
-    assert _ids(plan_starts(_ready(tasks, max_runs=2, a=(0, 5)))) == ["M1-01", "M1-02"]
-    assert _ids(plan_starts(_ready(tasks, max_runs=2, active=1, a=(1, 5)))) == ["M1-01"]
-    assert plan_starts(_ready(tasks, max_runs=2, active=2, a=(0, 5))) == []
+    assert _ids(plan_starts(_ready(tasks, a=(0, 2)))) == ["M1-01", "M1-02"]
+    assert _ids(plan_starts(_ready(tasks, a=(1, 2)))) == ["M1-01"]
+    assert plan_starts(_ready(tasks, a=(2, 2))) == []
 
 
-def test_project_cap_skips_to_other_projects() -> None:
+def test_a_full_pool_leaves_other_projects_free() -> None:
     tasks = [_task("M1-01", project="a"), _task("M1-02", project="a"), _task("M1-03", project="b")]
-    chosen = plan_starts(_ready(tasks, max_runs=5, active=1, a=(1, 2), b=(0, 2)))
+    chosen = plan_starts(_ready(tasks, a=(1, 2), b=(0, 2)))
     assert [(t.project, t.task_id) for t in chosen] == [("a", "M1-01"), ("b", "M1-03")]
 
 

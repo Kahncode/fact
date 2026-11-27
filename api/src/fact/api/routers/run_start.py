@@ -84,9 +84,9 @@ async def scheduler_refusal(session: AsyncSession, settings: Settings, found: Fo
     """
     Why the scheduler may no longer start this task; "" if it may.
 
-    An issue carrying `fact:needs-human`, a run in progress (or, for a file task, ended), the failure cap, or
-    `concurrency.max_runs` or the project's `max_runs` reached: the API stays the authority even when the tick's
-    snapshot is stale.
+    An issue carrying `fact:needs-human`, a run in progress (or, for a file task, ended), the failure cap, or the
+    project's runner pool at its `max_concurrent_runs`: the API stays the authority even when the tick's snapshot is
+    stale.
     """
     key = found.check.task.key
     if found.check.task.needs_human:
@@ -97,11 +97,9 @@ async def scheduler_refusal(session: AsyncSession, settings: Settings, found: Fo
         return f"{key} already has a run"
     if hold and not (is_issue(key) and history[0].run_id in await held_runs(session, [history[0].run_id])):
         return f"{key} failed {failed} runs in a row: start it with `fact run`"  # unless a person removed its label
-    active = await active_by_project(session)
-    if sum(active.values()) >= settings.concurrency.max_runs:
-        return f"max_runs {settings.concurrency.max_runs} reached"
-    if active.get(found.ref.name, 0) >= found.config.max_runs:
-        return f"project {found.ref.name} max_runs {found.config.max_runs} reached"
+    cap = found.config.runner_pool.max_concurrent_runs
+    if (await active_by_project(session)).get(found.ref.name, 0) >= cap:
+        return f"project {found.ref.name} max_concurrent_runs {cap} reached"
     return ""
 
 

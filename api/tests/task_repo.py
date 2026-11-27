@@ -14,6 +14,8 @@ task_source:
   path: tasks
 workflows:
   default: standard
+runner_pool:
+  max_concurrent_runs: 1
 """
 
 
