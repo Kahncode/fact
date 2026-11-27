@@ -94,6 +94,8 @@ class ChangeSetActivities:
                 check_results=spec.check_results,
                 run_url=spec.run_url,
                 criteria=spec.criteria,
+                assumptions=spec.assumptions,
+                spec_ambiguous=spec.spec_ambiguous,
                 pr_count=1,  # single-repo in v0: one PR is the whole change set
             )
             pr = await open_or_update_pr(client, repo, branch=branch, title=spec.title, body=body)

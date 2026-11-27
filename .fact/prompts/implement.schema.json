@@ -3,6 +3,16 @@
     "title": {
       "type": "string",
       "description": "Pull request title: a conventional commit subject for the whole change."
+    },
+    "spec_ambiguous": {
+      "type": "boolean",
+      "description": "true when the task left a choice that changes what gets built open, so you had to assume an answer."
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Each assumption you made where the task or the docs did not say, one sentence each; empty when none."
     }
-  }
+  },
+  "required": ["spec_ambiguous", "assumptions"]
 }

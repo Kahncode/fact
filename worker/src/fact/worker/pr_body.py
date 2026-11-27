@@ -66,6 +66,16 @@ def _criteria(task: Task, reviewed: list[CriterionResult]) -> str:
     return "\n".join(["| Criterion | Review | Evidence |", "| --- | --- | --- |", *rows])
 
 
+def _assumptions(assumptions: list[str], *, spec_ambiguous: bool) -> str:
+    """Return the `## Assumptions` section, between blank lines; empty when there is nothing to say."""
+    if not assumptions and not spec_ambiguous:
+        return ""
+    lines = ["The implementation found the spec ambiguous."] if spec_ambiguous else []
+    if assumptions:
+        lines.append("\n".join(f"- {' '.join(a.split())}" for a in assumptions))
+    return "\n## Assumptions\n\n" + "\n\n".join(lines) + "\n"
+
+
 def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     *,
     summary: str,
@@ -75,14 +85,23 @@ def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     check_results: list[CheckResult],
     run_url: str,
     criteria: list[CriterionResult] | None = None,
+    assumptions: list[str] | None = None,
+    spec_ambiguous: bool = False,
     pr_count: int = 1,
 ) -> str:
-    """`pr_count`: how many PRs the change set has, which decides between closing and only linking an issue."""
+    """
+    Render the PR description.
+
+    `pr_count`: how many PRs the change set has, which decides between closing and only linking an issue.
+    `assumptions` and `spec_ambiguous`, from the agent sessions, make an `## Assumptions` section after the summary,
+    absent when there are none; the description becomes the squash commit's body, so they stay in git history.
+    """
     task_line = task_link(task, repo_url, default_branch)
     if reference := issue_reference(task, pr_count):
         task_line = f"{task_line}\n\n{reference}"
     values = {
         "summary": summary.strip() or "(no summary)",
+        "assumptions": _assumptions(assumptions or [], spec_ambiguous=spec_ambiguous),
         "task": task_line,
         "acceptance_criteria": _criteria(task, criteria or []),
         "checks": _checks(check_results),

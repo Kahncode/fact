@@ -54,3 +54,13 @@ async def test_task_title_is_the_last_fallback() -> None:
 
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert (pr_spec.title, pr_spec.summary) == ("feat: Add a widget", "implemented")
+
+
+async def test_implement_assumptions_reach_the_pr() -> None:
+    outputs = {"title": IMPLEMENT_TITLE, "spec_ambiguous": True, "assumptions": ["Retries default to 3."]}
+    implement = StepResult(outcome=StepOutcome.PASSED, summary="implemented", outputs=outputs)
+    fakes = FakeActivities(implement_script=[implement])
+    await run_standard(fakes, "run-assumptions")
+
+    (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
+    assert (pr_spec.assumptions, pr_spec.spec_ambiguous) == (["Retries default to 3."], True)

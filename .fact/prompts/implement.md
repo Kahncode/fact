@@ -40,5 +40,7 @@ End with the structured answer:
 - `status`: `done` only when the work is committed and the checks pass; `blocked` when you could not finish, for any reason.
 - `title`: the pull request title, a conventional commit subject for the whole change such as `feat(worker): <what it adds>`, scoped by the same rule.
 - `summary`: a few lines of markdown for the pull request: what changed, why, and anything a reviewer should check.
+- `spec_ambiguous`: `true` when the task or the docs left open a choice that changes what gets built, so you had to pick an answer yourself; `false` when they said everything you needed.
+- `assumptions`: each assumption you made where the task or the docs did not say, one sentence each, such as a default value, a name or a behaviour you chose; `[]` when you made none. They are listed in the PR description and stay in git history, so a person can review them later.
 - `blocker`: when blocked, what stopped you and what would unblock it.
 - `retryable`: when blocked, `true` only if the cause was temporary and outside your control (network, rate limit, a flaky service) and trying again later, with nothing changed by a person, would likely succeed. Permissions, a missing tool, an unclear or too large task are never retryable.

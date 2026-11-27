@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Each assumption you made where the task or the docs did not say, one sentence each; empty when none."
+    }
+  }
+}

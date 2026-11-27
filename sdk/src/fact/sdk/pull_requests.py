@@ -3,7 +3,8 @@ The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait fo
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
 `next_attempt`, `note_outcome`, `agent`, `report_task`, `_control`, `_record`, the gate recording
-helpers of `HumanSteps`, and the `pr_title`, `pr_summary`, `prs` and `_change_set` its `__init__` sets.
+helpers of `HumanSteps`, and the `pr_title`, `pr_summary`, `assumptions`, `spec_ambiguous`, `prs` and `_change_set`
+its `__init__` sets.
 """
 
 from collections.abc import Sequence
@@ -36,7 +37,13 @@ with workflow.unsafe.imports_passed_through():
     from fact.core.enums import RunOutcome, StepOutcome
     from fact.core.gates import NOTE_MAX_CHARS, GateAnswer, GateDecision, OpenGate
     from fact.core.types import PRRef, StepResult
-    from fact.sdk.change_set import change_set_input, default_title, text_output
+    from fact.sdk.change_set import (
+        assumptions_output,
+        change_set_input,
+        default_title,
+        spec_ambiguous_output,
+        text_output,
+    )
     from fact.sdk.failures import ci_failure_context
     from fact.sdk.policies import HEARTBEAT_TIMEOUT, INFRA_RETRY, LONG_WAIT_RETRY
 
@@ -57,6 +64,8 @@ REVIEW_TIMEOUT = timedelta(days=30)  # a PR still open after this long fails the
 class PullRequestSteps:
     pr_title: str | None  # from the last agent session whose structured answer had a `title`
     pr_summary: str | None  # likewise, `summary`
+    assumptions: list[str]  # every passed agent session's `assumptions`, in order, without repeats
+    spec_ambiguous: bool  # an agent session answered `spec_ambiguous: true`
     prs: list[PRRef]  # from the last push, with the head SHA it pushed
     _change_set: OpenChangeSetInput | None  # the last `open_change_set` input, to push again after a CI fix
 
@@ -69,22 +78,41 @@ class PullRequestSteps:
         self.pr_title = text_output(result, "title") or self.pr_title
         self.pr_summary = text_output(result, "summary") or self.pr_summary
 
+    def _remember_assumptions(self, result: StepResult) -> None:
+        """Add a passed session's `assumptions` (fix sessions may add some too) and its `spec_ambiguous` verdict."""
+        self.assumptions += [a for a in assumptions_output(result) if a not in self.assumptions]
+        self.spec_ambiguous = self.spec_ambiguous or spec_ambiguous_output(result)
+
     async def open_change_set(
         self: FactWorkflow, title: str, summary: str, criteria: Sequence[CriterionResult] = ()
     ) -> list[PRRef]:
         """Push and open the PR, and post its link on the task; `criteria`, from a review, replace the task's list."""
-        spec = change_set_input(self.input, self.handle, title, summary, self.check_results, criteria=list(criteria))
+        spec = change_set_input(
+            self.input,
+            self.handle,
+            title,
+            summary,
+            self.check_results,
+            criteria=list(criteria),
+            assumptions=self.assumptions,
+            spec_ambiguous=self.spec_ambiguous,
+        )
         self._change_set = spec
         prs = await self.push_change_set()
         await self.report_task("prs_opened", prs=prs)
         return prs
 
     async def push_change_set(self: FactWorkflow) -> list[PRRef]:
-        """Push the branch again and update its PR, as the next attempt of stage `open_pr`; sets `prs`."""
+        """Push the branch again and update its PR (new assumptions too), as the next attempt of `open_pr`; sets `prs`."""
         if self._change_set is None:
             msg = "no change set: call `open_change_set` first"
             raise RuntimeError(msg)
-        spec = self._change_set.model_copy(update={"attempt": self.next_attempt(OPEN_PR_STAGE)})
+        update = {
+            "attempt": self.next_attempt(OPEN_PR_STAGE),
+            "assumptions": list(self.assumptions),  # a CI fix session may have added some
+            "spec_ambiguous": self.spec_ambiguous,
+        }
+        spec = self._change_set.model_copy(update=update)
         self.prs = await self._control(OPEN_CHANGE_SET, spec, list[PRRef])
         self.note_outcome(OPEN_PR_STAGE, spec.attempt, StepOutcome.PASSED)
         return self.prs
