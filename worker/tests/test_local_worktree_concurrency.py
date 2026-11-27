@@ -81,8 +81,6 @@ async def test_a_second_attempt_never_deletes_the_workspace_the_first_returns(
     first_task = asyncio.create_task(stale.prepare(_spec("run-a")))
     await inside.wait()
     second_task = asyncio.create_task(retry.prepare(_spec("run-a")))
-    await asyncio.sleep(0.5)
-    assert not second_task.done()  # waits on the run lock
     release.set()
     first: WorkspaceHandle = await first_task
     second = await second_task

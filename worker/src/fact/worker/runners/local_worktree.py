@@ -12,7 +12,7 @@ from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT, Settings
 from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
 from fact.worker.runners.base import ExecLine, ExecOutput, RunnerCapabilities, RunnerError
-from fact.worker.runners.branches import free_branch
+from fact.worker.runners.mirror import Mirror
 from fact.worker.runners.process import build_env, spawn, stream
 from fact.worker.runners.workspace_files import (
     WORKSPACE_MD,
@@ -28,8 +28,7 @@ log = get_logger(__name__)
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PROFILE = "local-worktree"
 GIT_TIMEOUT = 600.0
-# git refusing `worktree add -B` on a branch another worktree holds (wording before and since git 2.42)
-_CHECKED_OUT = re.compile(r"is already (checked out|used by worktree) at")
+_GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C"}  # LC_ALL=C: `Mirror` reads git's English messages
 
 
 def github_url(full_name: str) -> str:
@@ -164,44 +163,12 @@ class LocalWorktreeRunner:
         """Clone or fetch the bare mirror of `owner/repo` (remote branches under `origin/*`) and return its path."""
         mirror = self._mirror_path(full_name)
         async with mirror_lock(mirror):
-            await self._sync_mirror(full_name, mirror)
+            await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(full_name))
         return mirror
 
     async def fetch(self, full_name: str) -> None:
         """Fetch the mirror: its worktrees share its `origin/*` refs."""
         await self.sync_mirror(full_name)
-
-    async def _sync_mirror(self, full_name: str, mirror: Path) -> None:
-        """Clone the mirror if there is none, then fetch it; the caller holds the mirror lock."""
-        if not (mirror / "HEAD").exists():
-            await self._clone(full_name, mirror)
-        await self._keep_bare_out_of_worktrees(mirror)
-        await self._git("fetch", "--prune", "origin", cwd=mirror)
-        await self._git_ok("remote", "set-head", "origin", "--auto", cwd=mirror)  # follow default-branch renames
-
-    async def _clone(self, full_name: str, mirror: Path) -> None:
-        """Clone into a scratch folder and rename it into place, so a clone cut short is never taken for a mirror."""
-        partial = mirror.with_name(f".{mirror.name}.clone")  # a leading dot: never a repository's name
-        for stale in (partial, mirror):  # a clone cut short, or a mirror folder that holds no repository
-            if stale.exists():
-                log.warning("mirror_discarded", path=str(stale))
-                await asyncio.to_thread(shutil.rmtree, stale, onexc=make_writable_and_retry)
-        await self._git("clone", "--bare", self._remote_url(full_name), str(partial), cwd=mirror.parent)
-        # A bare clone maps no remote branches; keep them under origin/* so local branches are never overwritten.
-        await self._git("config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*", cwd=partial)
-        partial.rename(mirror)
-
-    async def _keep_bare_out_of_worktrees(self, mirror: Path) -> None:
-        """
-        Keep `core.bare = true` in the mirror's own `config.worktree`, never in the shared config.
-
-        With `extensions.worktreeConfig`, a shared `core.bare` also applies to every worktree, so git refuses
-        work-tree commands there (`add`, `commit`). This also repairs mirrors cloned before the fix.
-        """
-        await self._git("config", "extensions.worktreeConfig", "true", cwd=mirror)  # before any --worktree write
-        if await self._git_ok("config", "--file", "config", "--get", "core.bare", cwd=mirror):
-            await self._git("config", "--worktree", "core.bare", "true", cwd=mirror)
-            await self._git("config", "--file", "config", "--unset", "core.bare", cwd=mirror)
 
     async def _add_worktree(self, repo: RepoCheckout, worktree: Path) -> str:
         """
@@ -211,11 +178,11 @@ class LocalWorktreeRunner:
         """
         mirror = self._mirror_path(repo.full_name)
         async with mirror_lock(mirror):  # runs on one mirror, in any process, must not pick the same free branch
-            await self._sync_mirror(repo.full_name, mirror)
+            await Mirror(self._git, self._git_ok, mirror).sync(self._remote_url(repo.full_name))
             remote_branch = f"refs/remotes/origin/{repo.branch}"
             resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=mirror)
             start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
-            branch = await self._add_on_free_branch(mirror, repo.branch, worktree, start)
+            branch = await Mirror(self._git, self._git_ok, mirror).add_on_free_branch(repo.branch, worktree, start)
         if branch != repo.branch:
             log.warning("branch_taken", repo=repo.full_name, wanted=repo.branch, branch=branch)
         name, email = await self._commit_identity()
@@ -223,21 +190,6 @@ class LocalWorktreeRunner:
         await self._git("config", "--worktree", "user.email", email, cwd=worktree)
         log.info("worktree_added", repo=repo.full_name, branch=branch, resumed=resumed)
         return branch
-
-    async def _add_on_free_branch(self, mirror: Path, wanted: str, worktree: Path, start: str) -> str:
-        """Add the worktree on a free branch; a branch git finds checked out elsewhere means pick again."""
-        refused: set[str] = set()
-        while True:  # `free_branch` raises once every name is held or refused
-            branch = await free_branch(self._git, self._git_ok, mirror, wanted, skip=refused)
-            try:
-                await self._git("worktree", "add", "--no-track", "-B", branch, str(worktree), start, cwd=mirror)
-            except RunnerError as exc:
-                if not _CHECKED_OUT.search(str(exc)):
-                    raise
-                log.warning("branch_checked_out_elsewhere", branch=branch)
-                refused.add(branch)
-            else:
-                return branch
 
     async def _commit_identity(self) -> tuple[str, str]:
         if self._github is not None:
@@ -306,7 +258,7 @@ class LocalWorktreeRunner:
         return True
 
     async def _git(self, *args: str, cwd: Path) -> str:
-        proc = await spawn(["git", *args], cwd, build_env({"GIT_TERMINAL_PROMPT": "0"}))
+        proc = await spawn(["git", *args], cwd, build_env(_GIT_ENV))
         lines = [item.text async for item in stream(proc, GIT_TIMEOUT) if isinstance(item, ExecLine)]
         out = "\n".join(lines)
         if proc.returncode != 0:
