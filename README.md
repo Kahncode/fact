@@ -87,7 +87,7 @@ uv run fact scheduler off
 uv run fact scheduler on
 ```
 
-Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`max_runs` in `fact.yaml`).
+Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a project using task files, the tasks marked `status: ready` on the default branch) whose dependencies are done, shallowest dependencies first, at most 2 runs at once overall and 1 per project (`concurrency.max_runs` in `fact.yaml`, each project's `max_runs` in its `.fact/project.yaml`).
 
 - A sub-issue starts only when it and every parent above it are labelled `fact:ready`, so a plan under a `fact:planned` parent waits until you set the parent `fact:ready`. A parent waits for its open sub-issues; a `type:epic` parent with none left open is closed as completed without a run. `fact run` refuses an issue whose parent is not ready unless you pass `--force-deps`.
 - An issue the scheduler will not start until you act carries `fact:needs-human` (next to `fact:ready`), with a comment and a `task_held` notification (`fact inbox`) saying why: its run stopped, needs you, ended with its PR open, or its PR was closed, or its runs failed 3 times in a row (`concurrency.max_failed_runs`). Remove the label, or start it with `fact run`, which removes it first and resets the failure count. A failed run below the cap is retried. A file task whose last run ended any way but failed is never restarted by the scheduler.

@@ -114,7 +114,7 @@ def factory_activities(
     reporter = StepReporter(settings.api_url, http, log_dir=settings.data_dir / "step-logs")
     workspace = WorkspaceActivities(runner, reporter)
     harness = ClaudeCodeHarness()
-    agent = AgentActivities({harness.name: harness}, reporter, settings)
+    agent = AgentActivities({harness.name: harness}, reporter)
     change_set = ChangeSetActivities(github, reporter)
     control = ControlActivities(settings.api_url, http, settings)
     gates = GateActivities(settings.api_url, http)

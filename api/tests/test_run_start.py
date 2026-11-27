@@ -102,10 +102,10 @@ def test_plan_approval_from_task_else_project(project: bool, task: bool | None, 
         config,
         TaskCheck(Task(key="task:M1-01", id="M1-01", title="t", require_plan_approval=task), []),
     )
-    assert run_input(Settings(), found, "run-1").require_plan_approval is expected
+    assert run_input(found, "run-1").require_plan_approval is expected
 
 
-def test_merge_policy_comes_from_the_project() -> None:
+def test_merge_policy_routing_and_step_limits_come_from_the_project() -> None:
     config = ProjectConfig.model_validate(
         {
             "name": PROJECT,
@@ -113,13 +113,16 @@ def test_merge_policy_comes_from_the_project() -> None:
             "workflows": {"default": "standard"},
             "auto_merge": False,
             "merge_method": "rebase",
+            "routing": {"default": {"harness": "claude-code", "model": "haiku"}},
+            "step_defaults": {"agent": {"max_turns": 7}},
         }
     )
     found = FoundTask(
         ProjectRef(name=PROJECT, home="acme/home"), config, TaskCheck(Task(key="task:M1-01", id="M1-01", title="t"), [])
     )
-    run = run_input(Settings(), found, "run-1")
+    run = run_input(found, "run-1")
     assert (run.auto_merge, run.merge_method) == (False, "rebase")
+    assert (run.routing, run.step_defaults) == (config.routing, config.step_defaults)
 
 
 def test_workflow_id_safe_form() -> None:

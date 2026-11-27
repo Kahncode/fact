@@ -31,7 +31,7 @@ from fact.api.run_counts import active_by_project, run_histories
 from fact.api.task_ref import TaskReadError, project_tasks
 from fact.api.usage_gate import UsageGate
 from fact.core.logging import get_logger
-from fact.core.project_config import ConfigError
+from fact.core.project_config import DEFAULT_MAX_RUNS, ConfigError
 from fact.core.scheduler import (
     Hold,
     PlannedTask,
@@ -82,18 +82,23 @@ def _hold(item: ReadyItem) -> Hold | None:
     return Hold.DEPENDENCY if item.waiting_on else None
 
 
-async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = False) -> list[ReadyTask]:
+async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = False) -> tuple[list[ReadyTask], int]:
     """
-    Read the project's ready tasks from its task source (`files`: on `origin/<default>`); none without one.
+    Read the project's ready tasks from its task source (`files`: on `origin/<default>`), and its `max_runs`.
 
+    A project without a checkout or with a broken config or task source offers no task (and keeps the default cap).
     A task's effective priority is raised by the project's listed tasks that wait on it (`effective_priorities`).
     """
+    max_runs = DEFAULT_MAX_RUNS
     try:
         async with project_tasks(settings, ref) as tasks:
-            found = await tasks.source.list_ready(include_waiting=True, close_epics=close_epics) if tasks else []
+            if tasks is None:
+                return [], max_runs
+            max_runs = tasks.config.max_runs
+            found = await tasks.source.list_ready(include_waiting=True, close_epics=close_epics)
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
-        return []
+        return [], max_runs
     ready = [
         ReadyTask(
             project=ref.name,
@@ -107,7 +112,7 @@ async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = 
         )
         for r in found
     ]
-    return effective_priorities(ready)
+    return effective_priorities(ready), max_runs
 
 
 def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) -> ReadyTask | None:
@@ -129,13 +134,14 @@ async def find_ready(settings: Settings, session: AsyncSession, *, close_epics: 
     found = await asyncio.gather(*(_ready_in(settings, ref, close_epics=close_epics) for ref in settings.projects))
     histories = await run_histories(session)
     max_failed = settings.concurrency.max_failed_runs
-    offered = (apply_history(t, histories.get((t.project, t.task_key), []), max_failed) for ts in found for t in ts)
+    offered = (apply_history(t, histories.get((t.project, t.task_key), []), max_failed) for ts, _ in found for t in ts)
     tasks = await released(session, [t for t in offered if t is not None])
     active = await active_by_project(session)
     return ReadyTasks(
         tasks=tasks,
         projects=[
-            ProjectLoad(project=r.name, active=active.get(r.name, 0), max_runs=r.max_runs) for r in settings.projects
+            ProjectLoad(project=r.name, active=active.get(r.name, 0), max_runs=cap)
+            for r, (_, cap) in zip(settings.projects, found, strict=True)
         ],
         active=sum(active.values()),
         max_runs=settings.concurrency.max_runs,

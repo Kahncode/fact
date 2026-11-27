@@ -16,3 +16,17 @@ classify:
   review_spec_ambiguous: false
 auto_merge: true
 merge_method: squash
+max_runs: 1 # one run per repository while git hooks are shared by every worktree (docs/decisions-2.md)
+# Harness and model per agent step: rules are "<complexity>.<stage>" with "*" wildcards. Most specific wins:
+# a step override, then <complexity>.<stage>, <complexity>.*, *.<stage>, then default. Unset fields fall through.
+routing:
+  default:
+    harness: claude-code
+    model: opus # temporarily opus for every step; set back to sonnet to restore the rules below
+  rules:
+    complex.implement:
+      model: opus
+    "*.review":
+      model: opus
+# Step limits (timeout_minutes, max_turns, permission_mode per step kind) keep the SDK's defaults
+# (fact.sdk.step_defaults); set `step_defaults.<kind>.<field>` here to override one.

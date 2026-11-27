@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from fact.core.activity_contract import AGENT_INTERRUPTED
 from fact.core.enums import StepOutcome
-from fact.core.settings import RoutingSettings, Settings
-from fact.core.types import Route, RouteOverride, StepResult, Task, Usage, WorkspaceHandle
+from fact.core.project_config import load_project_config
+from fact.core.types import Route, RouteOverride, RoutingConfig, StepResult, Task, Usage, WorkspaceHandle
 from fact.sdk.sessions import interrupted_session
 from fact.worker.activities import agent as agent_module
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
@@ -119,26 +119,23 @@ def handle(tmp_path: Path, run_id: str) -> WorkspaceHandle:
     return WorkspaceHandle(run_id=run_id, root=str(root), task_queue="sandbox", repos={HOME: str(root / "widget")})
 
 
-@pytest.fixture
-def agent_settings(settings: Settings) -> Settings:
-    routing = RoutingSettings(
-        default=Route(harness="fake", model="sonnet"), rules={"complex.implement": RouteOverride(model="opus")}
-    )
-    return settings.model_copy(update={"routing": routing})
+# the run's project routing, as `FactWorkflow.agent` passes it
+ROUTING = RoutingConfig(
+    default=Route(harness="fake", model="sonnet"), rules={"complex.implement": RouteOverride(model="opus")}
+)
 
 
 @dataclass
 class Env:
-    """One agent_step test: the API client, settings and a workspace whose home repo has `implement.md`."""
+    """One agent_step test: the API client and a workspace whose home repo has `implement.md`."""
 
     client: AsyncClient
     tmp_path: Path
-    settings: Settings
     handle: WorkspaceHandle
 
-    def activities(self, harness: FakeHarness, settings: Settings | None = None) -> AgentActivities:
+    def activities(self, harness: FakeHarness) -> AgentActivities:
         reporter = StepReporter("http://test", self.client, log_dir=self.tmp_path / "logs")
-        return AgentActivities({harness.name: harness}, reporter, settings or self.settings)
+        return AgentActivities({harness.name: harness}, reporter)
 
     def input(self, **extra: Any) -> AgentStepInput:  # noqa: ANN401
         values = {
@@ -150,11 +147,14 @@ class Env:
             "prompt_name": "implement",
             "context": "ctx here",
             "complexity": "complex",
+            "routing": ROUTING,
+            "max_turns": 100,
+            "permission_mode": "auto",
         }
         return AgentStepInput.model_validate(values | extra)
 
-    async def run(self, harness: FakeHarness, settings: Settings | None = None, **extra: object) -> StepResult:
-        return await ActivityEnvironment().run(self.activities(harness, settings).agent_step, self.input(**extra))
+    async def run(self, harness: FakeHarness, **extra: object) -> StepResult:
+        return await ActivityEnvironment().run(self.activities(harness).agent_step, self.input(**extra))
 
     async def step(self) -> dict[str, Any]:
         (step,) = (await self.client.get(f"/api/v1/runs/{self.handle.run_id}")).json()["steps"]
@@ -162,8 +162,8 @@ class Env:
 
 
 @pytest.fixture
-def env(client: AsyncClient, tmp_path: Path, agent_settings: Settings, handle: WorkspaceHandle) -> Env:
-    return Env(client, tmp_path, agent_settings, handle)
+def env(client: AsyncClient, tmp_path: Path, handle: WorkspaceHandle) -> Env:
+    return Env(client, tmp_path, handle)
 
 
 async def test_success_records_harness_model_usage_and_transcript(env: Env) -> None:
@@ -178,8 +178,7 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     (request,) = harness.requests
     assert request.cwd == Path(env.handle.root)
     assert request.model == "opus"
-    assert request.max_turns == env.settings.step_defaults.agent.max_turns
-    assert request.permission_mode == "auto"
+    assert (request.max_turns, request.permission_mode) == (100, "auto")  # the step's limits, from its input
     assert request.output_schema == BASE_OUTPUT_SCHEMA
     assert request.prompt == f"Implement T-1: Add a thing in {env.handle.root}\nctx here"
 
@@ -196,6 +195,19 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     assert result.transcript_ref == step["transcript_ref"]
     transcript = (await env.client.get(f"/api/v1/artifacts/{step['transcript_ref']}")).text
     assert [json.loads(line) for line in transcript.splitlines()] == MESSAGES
+
+
+async def test_the_projects_routing_picks_the_model(env: Env) -> None:
+    home = Path(env.handle.repos[HOME])
+    project = (
+        f"name: widget\nrepositories:\n  - full_name: {HOME}\n    role: app\nworkflows:\n  default: standard\n"
+        "routing:\n  default:\n    harness: fake\n    model: haiku\n"
+    )
+    (home / ".fact" / "project.yaml").write_text(project, encoding="utf-8")
+    harness = FakeHarness()
+    await env.run(harness, routing=load_project_config(home).routing)
+    assert harness.requests[0].model == "haiku"
+    assert (await env.step())["model"] == "haiku"
 
 
 async def test_step_is_named_after_its_prompt(env: Env) -> None:
@@ -220,11 +232,8 @@ async def test_harness_that_cannot_start_is_failed_error(env: Env) -> None:
 
 
 async def test_max_turns_is_stopped_by_monitor(env: Env) -> None:
-    defaults = env.settings.step_defaults
-    agent = defaults.agent.model_copy(update={"max_turns": MAX_TURNS})
-    settings = env.settings.model_copy(update={"step_defaults": defaults.model_copy(update={"agent": agent})})
     harness = FakeHarness(_result("error_max_turns", is_error=True))
-    result = await env.run(harness, settings)
+    result = await env.run(harness, max_turns=MAX_TURNS)
     assert result.outcome == StepOutcome.STOPPED_BY_MONITOR
     assert harness.requests[0].max_turns == MAX_TURNS
     assert (await env.step())["outcome"] == "stopped_by_monitor"

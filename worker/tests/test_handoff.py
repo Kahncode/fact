@@ -6,8 +6,7 @@ import pytest
 from fact.core.activity_contract import HandoffInput, HandoffStep
 from fact.core.artifacts import handoff_key
 from fact.core.enums import StepOutcome
-from fact.core.settings import RoutingSettings, Settings
-from fact.core.types import PRRef, Route, Task, WorkspaceHandle
+from fact.core.types import PRRef, Route, RoutingConfig, Task, WorkspaceHandle
 from fact.worker.activities.agent import AgentActivities, AgentStepInput
 from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.handoff import HANDOFF_HEADING, render_handoff
@@ -65,9 +64,9 @@ def workspace(tmp_path: Path, run_id: str) -> WorkspaceHandle:
     )
 
 
-def _agent(client: AsyncClient, tmp_path: Path, settings: Settings, harness: FakeHarness) -> AgentActivities:
+def _agent(client: AsyncClient, tmp_path: Path, harness: FakeHarness) -> AgentActivities:
     reporter = StepReporter("http://test", client, log_dir=tmp_path / "logs")
-    return AgentActivities({harness.name: harness}, reporter, settings)
+    return AgentActivities({harness.name: harness}, reporter)
 
 
 def _input(workspace: WorkspaceHandle, handoff_ref: str | None) -> AgentStepInput:
@@ -78,32 +77,28 @@ def _input(workspace: WorkspaceHandle, handoff_ref: str | None) -> AgentStepInpu
         handle=workspace,
         task=TASK,
         prompt_name="implement",
+        routing=RoutingConfig(default=Route(harness="fake", model="sonnet")),
         handoff_ref=handoff_ref,
     )
 
 
-@pytest.fixture
-def fake_settings(settings: Settings) -> Settings:
-    return settings.model_copy(update={"routing": RoutingSettings(default=Route(harness="fake", model="sonnet"))})
-
-
 async def test_the_note_reaches_the_implement_prompt(
-    client: AsyncClient, tmp_path: Path, fake_settings: Settings, workspace: WorkspaceHandle
+    client: AsyncClient, tmp_path: Path, workspace: WorkspaceHandle
 ) -> None:
     key = await ActivityEnvironment().run(HandoffActivities("http://test", client).write_handoff, _note())
     assert key == handoff_key("run-0")
     harness = FakeHarness()
-    await ActivityEnvironment().run(_agent(client, tmp_path, fake_settings, harness).agent_step, _input(workspace, key))
+    await ActivityEnvironment().run(_agent(client, tmp_path, harness).agent_step, _input(workspace, key))
     (request,) = harness.requests
     assert request.prompt.startswith("Implement M2-99.\n\n" + HANDOFF_HEADING)
     assert "Built the widget." in request.prompt
 
 
 async def test_no_note_or_a_missing_one_leaves_handoff_empty(
-    client: AsyncClient, tmp_path: Path, fake_settings: Settings, workspace: WorkspaceHandle
+    client: AsyncClient, tmp_path: Path, workspace: WorkspaceHandle
 ) -> None:
     harness = FakeHarness()
-    agent = _agent(client, tmp_path, fake_settings, harness)
+    agent = _agent(client, tmp_path, harness)
     await ActivityEnvironment().run(agent.agent_step, _input(workspace, None))
     await ActivityEnvironment().run(
         agent.agent_step, _input(workspace, handoff_key("gone")).model_copy(update={"attempt": 2})

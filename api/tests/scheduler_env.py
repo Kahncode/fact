@@ -12,8 +12,10 @@ def write_config(tmp_path: Path, checkout: Path, *, max_runs: int = 4, project_m
     """
     `acme` on origin/main: M1-02 (depth 1), M1-03 (waits on M1-02), M2-01 and M2-02 (depth 0); `broken` is skipped.
 
-    `remote` has no checkout: its task source cannot be read without GitHub, so it offers nothing.
+    `remote` has no checkout: its task source cannot be read without GitHub, so it offers nothing. `acme`'s cap is
+    its `.fact/project.yaml` `max_runs` (read from the working tree, like its config); the factory's is `fact.yaml`.
     """
+    write(checkout, {".fact/project.yaml": f"{PROJECT_YAML}max_runs: {project_max_runs}\n"})
     write(checkout, {"tasks/M2/01-next.md": task_file("M2-01", []), "tasks/M2/02-later.md": task_file("M2-02", [])})
     git(checkout, "add", "tasks/M2")  # M1-04 stays in the working tree only
     git(checkout, "commit", "-m", "more tasks")
@@ -24,7 +26,6 @@ def write_config(tmp_path: Path, checkout: Path, *, max_runs: int = 4, project_m
     config.write_text(
         f"data_dir: {(tmp_path / 'data').as_posix()}\nconcurrency:\n  max_runs: {max_runs}\n"
         f"projects:\n  - name: {PROJECT}\n    home: acme/home\n    path: {checkout.as_posix()}\n"
-        f"    max_runs: {project_max_runs}\n"
         f"  - name: remote\n    home: acme/remote\n  - name: broken\n    home: acme/b\n    path: {broken.as_posix()}\n",
         encoding="utf-8",
     )

@@ -5,9 +5,10 @@ Models are small and JSON-serializable. Large data (logs, transcripts, diffs) ne
 `ArtifactRef` into the artifact store instead. Workflow authors import these from `fact.sdk.types`.
 """
 
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from fact.core.enums import RunOutcome, StepOutcome
+from fact.core.step_defaults import StepDefaultsConfig
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ArtifactRef = str  # key in the artifact store
@@ -122,18 +123,37 @@ class Route(_Model):
     model: str
 
 
+DEFAULT_ROUTE = Route(harness="claude-code", model="sonnet")
+
+
+class RoutingConfig(_Model):
+    """
+    Harness and model per `<complexity>.<stage>`; either side may be `*`. Resolution is in `fact.worker.routing`.
+
+    A project's `routing` in `.fact/project.yaml`; `default` is used for any field no rule sets.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    default: Route = DEFAULT_ROUTE
+    rules: dict[str, RouteOverride] = Field(default_factory=dict)
+
+    @field_validator("rules")
+    @classmethod
+    def _rule_keys(cls, v: dict[str, RouteOverride]) -> dict[str, RouteOverride]:
+        for key in v:
+            complexity, dot, stage = key.partition(".")
+            if not dot or not stage or "." in stage or complexity not in {*get_args(Complexity), "*"}:
+                msg = f"routing rule {key!r} must be '<complexity>.<stage>' (either may be '*')"
+                raise ValueError(msg)
+        return v
+
+
 class PRRef(_Model):
     repo: str
     number: int
     url: str
     head_sha: str
-
-
-class RunLimits(_Model):
-    """Activity timeouts for a run, set by whoever starts it (from `step_defaults`): workflow code reads no settings."""
-
-    agent_timeout_s: float = Field(default=3600.0, gt=0)
-    shell_timeout_s: float = Field(default=900.0, gt=0)
 
 
 MergeMethod = Literal["squash", "merge", "rebase"]
@@ -146,7 +166,8 @@ class RunInput(_Model):
     repos: list[RepoCheckout] = Field(default_factory=list)
     complexity: Complexity = "standard"
     home_repo: str | None = None  # full name in `repos` holding `.fact/`; None: the first repository
-    limits: RunLimits = Field(default_factory=RunLimits)
+    routing: RoutingConfig = Field(default_factory=RoutingConfig)  # the project's `routing`
+    step_defaults: StepDefaultsConfig = Field(default_factory=StepDefaultsConfig)  # the project's overrides
     run_url: str = ""  # where a person follows the run (the Temporal UI for now), linked from the PR
     require_plan_approval: bool = False  # open an `approve_plan` gate before any work (task, else project setting)
     handoff_ref: str | None = None  # artifact key of the handoff note a stopped run of this task left, if any

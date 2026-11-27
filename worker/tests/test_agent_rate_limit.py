@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from fact.core.claude_usage import ClaudeUsage, UsageWindow
 from fact.core.enums import StepOutcome
 from fact.worker.activities.agent import LIMIT_FALLBACK, rate_limited
-from test_agent_step import Env, FakeHarness, _result, agent_settings, env, handle  # noqa: F401 - fixtures
+from test_agent_step import Env, FakeHarness, _result, env, handle  # noqa: F401 - fixtures
 
 RESETS = datetime(2030, 1, 2, 15, 0, tzinfo=UTC)
 FULL = UsageWindow(name="five_hour", utilization=1.0, resets_at=RESETS, rejected=True)

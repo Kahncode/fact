@@ -1,5 +1,7 @@
 """
-Global settings, lowest to highest priority: defaults, fact.yaml, fact.<env>.yaml, .env, FACT_* variables.
+Factory settings, lowest to highest priority: defaults, fact.yaml, fact.<env>.yaml, .env, FACT_* variables.
+
+How a project's tasks run (routing, step limits, its own cap) is project config, `fact.core.project_config`.
 
 As everywhere in pydantic-settings, a real environment variable wins over the same key in `.env`.
 """
@@ -8,12 +10,9 @@ import os
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal, get_args
+from typing import Any, Literal
 
 from dotenv import dotenv_values
-from fact.core.enums import StepKind
-from fact.core.step_defaults import StepDefaults, StepDefaultsSettings
-from fact.core.types import Complexity, Route, RouteOverride
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
@@ -79,32 +78,10 @@ class WorkerSettings(_Section):
     keep_awake: bool = True  # Windows: keep the machine awake while a run is queued, running or waiting
 
 
-class RoutingSettings(_Section):
-    """
-    Harness and model per `<complexity>.<stage>`; either side may be `*`. Resolution is in `fact.worker.routing`.
-
-    `default` is used for any field no rule sets.
-    """
-
-    default: Route = Field(default_factory=lambda: Route(harness="claude-code", model="sonnet"))
-    rules: dict[str, RouteOverride] = Field(default_factory=dict)
-
-    @field_validator("rules")
-    @classmethod
-    def _rule_keys(cls, v: dict[str, RouteOverride]) -> dict[str, RouteOverride]:
-        for key in v:
-            complexity, dot, stage = key.partition(".")
-            if not dot or not stage or "." in stage or complexity not in {*get_args(Complexity), "*"}:
-                msg = f"routing rule {key!r} must be '<complexity>.<stage>' (either may be '*')"
-                raise ValueError(msg)
-        return v
-
-
 class ProjectRef(_Section):
     name: str
     home: str  # GitHub "owner/repo" holding the project's .fact/ folder
     path: Path | None = None  # optional local checkout
-    max_runs: int = Field(default=1, ge=1)  # scheduler cap: runs queued, running or waiting (1: shared git hooks)
 
 
 def config_file() -> Path:
@@ -188,8 +165,6 @@ class Settings(BaseSettings):
     claude: ClaudeSettings = Field(default_factory=ClaudeSettings)
     worker: WorkerSettings = Field(default_factory=WorkerSettings)
     projects: list[ProjectRef] = Field(default_factory=list)
-    routing: RoutingSettings = Field(default_factory=RoutingSettings)
-    step_defaults: StepDefaultsSettings = Field(default_factory=StepDefaultsSettings)
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -200,11 +175,6 @@ class Settings(BaseSettings):
     @classmethod
     def _expand_home(cls, v: Path) -> Path:
         return v.expanduser()
-
-    def step_default(self, kind: StepKind) -> StepDefaults:
-        """Defaults for a step kind; a kind with no field in `step_defaults` gets `StepDefaults()`."""
-        found = getattr(self.step_defaults, StepKind(kind).value, None)
-        return found if isinstance(found, StepDefaults) else StepDefaults()
 
     def is_dev_environment(self) -> bool:
         return self.env in (AppEnv.LOCAL, AppEnv.TEST, AppEnv.DEV)

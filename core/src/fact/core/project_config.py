@@ -4,11 +4,14 @@ from pathlib import Path
 from typing import Any, Literal, Self
 
 import yaml
+from fact.core.step_defaults import StepDefaultsConfig
+from fact.core.types import RoutingConfig
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 FACT_DIR = ".fact"
 PROJECT_FILE = "project.yaml"
 REPO_FILE = "repo.yaml"
+DEFAULT_MAX_RUNS = 1  # a project's runs queued, running or waiting at once, unless its config says otherwise
 
 Command = list[str]  # an argv list, never a shell string
 
@@ -82,6 +85,11 @@ class ProjectConfig(_Model):
     classify: ClassifyConfig = ClassifyConfig()
     auto_merge: bool = True  # merge a change set classified `auto_merge` once CI is green
     merge_method: Literal["squash", "merge", "rebase"] = "squash"
+    max_runs: int = Field(
+        default=DEFAULT_MAX_RUNS, ge=1
+    )  # scheduler cap: this project's runs queued, running or waiting
+    routing: RoutingConfig = RoutingConfig()  # harness and model per agent step
+    step_defaults: StepDefaultsConfig = StepDefaultsConfig()  # overrides of the SDK's step limits
 
 
 class RepoConfig(_Model):
