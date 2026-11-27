@@ -25,6 +25,7 @@ dev = [
     "fact-sdk",
     "fact-cli",
     "pytest-timeout>=2.4.0",
+    "import-linter>=2.17",
 ]
 
 [tool.uv.sources]
@@ -63,6 +64,30 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 ".agents/skills/*/*.py" = ["INP001", "T201", "S603", "S607", "PLW1510"] # standalone skill scripts
 ".fact/workflows/*.py" = ["INP001"] # project workflows are loaded by path, not imported as a package
 "scripts/*.py" = ["INP001", "T201"] # standalone development scripts that print
+
+[tool.importlinter]
+# Package boundaries from AGENTS.md (Key patterns), checked by `uv run lint-imports` in pre-commit and CI.
+# Project workflows (.fact/workflows/) are loaded by path, so sdk/tests/test_workflow_imports.py checks them.
+root_packages = ["fact.core", "fact.sdk", "fact.worker", "fact.api", "fact.cli"]
+
+[[tool.importlinter.contracts]]
+name = "Dependencies point inward: api, cli, worker over sdk over core"
+type = "layers"
+layers = ["fact.api | fact.cli | fact.worker", "fact.sdk", "fact.core"]
+containers = []
+exhaustive = false
+
+[[tool.importlinter.contracts]]
+name = "Clients call workflow handlers by name and never import fact.sdk"
+type = "forbidden"
+source_modules = ["fact.api", "fact.cli"]
+forbidden_modules = ["fact.sdk"]
+
+[[tool.importlinter.contracts]]
+name = "Only fact.core.tasks imports FileTaskSource; others go through source_for"
+type = "protected"
+protected_modules = ["fact.core.tasks.files"]
+allowed_importers = ["fact.core.tasks"]
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests", "scripts/tests"]
