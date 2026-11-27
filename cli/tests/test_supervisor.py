@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from fact.cli import supervisor
-from fact.cli.supervisor import Child, ChildSpec, run_all
+from fact.cli.supervisor import Child, ChildSpec, StopRequestedError, run_all
 
 SLEEPER = [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"]
 # Ignores the interrupt (SIGINT, or Ctrl-Break on Windows), so only terminate/kill end it.
@@ -112,3 +112,12 @@ def test_restarter_replaces_named_children_and_keeps_the_others(
     assert code == 4  # the replacement ran, and its exit ended the supervisor
     assert starts.read_text(encoding="utf-8").splitlines() == ["up"]  # `a` was not restarted
     assert "b    | new" in capsys.readouterr().out.splitlines()
+
+
+def test_a_stop_request_stops_every_child_and_returns_0(capsys: pytest.CaptureFixture[str]) -> None:
+    def restarter() -> None:
+        msg = "shutdown: no run active, stopping"
+        raise StopRequestedError(msg)
+
+    assert run_all([ChildSpec("a", SLEEPER), ChildSpec("b", SLEEPER)], restarter) == 0
+    assert "fact | shutdown: no run active, stopping" in capsys.readouterr().out.splitlines()

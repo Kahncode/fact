@@ -18,7 +18,8 @@ app = typer.Typer(help="The scheduler: starts ready tasks by itself while it is 
 
 def _show(state: dict[str, Any]) -> None:
     if state["in_process"]:
-        typer.echo(f"Scheduler: {'on' if state['on'] else 'off'} (ticks in the API)")
+        shutting = " (shutting down: `fact dev` exits once no run is active)" if state.get("shutdown") else ""
+        typer.echo(f"Scheduler: {'on' if state['on'] else 'off'} (ticks in the API){shutting}")
         typer.echo(f"Every:     {state['interval_seconds']:g} s")
     else:
         typer.echo("Scheduler: ticks only on POST /api/v1/scheduler/tick (an outside cron or webhook)")

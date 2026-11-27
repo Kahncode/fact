@@ -5,6 +5,7 @@ import pytest
 import typer
 from fact.cli import dev
 from fact.cli.main import app
+from fact.cli.shutdown import ShutdownWatch
 from fact.core.settings import Settings
 from typer.testing import CliRunner
 
@@ -37,7 +38,7 @@ def test_dev_creates_data_dir_and_exits_with_the_supervisor_code(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, supervisor_code: int, exit_code: int
 ) -> None:
     monkeypatch.setattr(dev.shutil, "which", lambda _: "temporal")
-    monkeypatch.setattr(dev, "run_all", lambda _: supervisor_code)
+    monkeypatch.setattr(dev, "run_all", lambda _specs, _restarter: supervisor_code)
 
     result = CliRunner().invoke(app, ["dev"])
 
@@ -92,7 +93,8 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     started: list[list[str]] = []
 
-    def fake_run_all(specs: list) -> int:
+    def fake_run_all(specs: list, restarter: object) -> int:
+        assert isinstance(restarter, ShutdownWatch)  # plain and pinned runs exit on `fact shutdown` too
         started.extend(s.argv for s in specs)
         return 130
 
@@ -128,7 +130,7 @@ def test_dev_pinned_without_venv_fails(settings: Settings, monkeypatch: pytest.M
     (settings.pinned_dir / "factory" / sha / "pyproject.toml").write_text("", encoding="utf-8")
     (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
-    monkeypatch.setattr(dev, "run_all", lambda _: 0)
+    monkeypatch.setattr(dev, "run_all", lambda _specs, _restarter: 0)
 
     result = CliRunner().invoke(app, ["dev", "--pinned"])
 

@@ -3,12 +3,13 @@
 import os
 import shutil
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from fact.cli.follow import Follower
+from fact.cli.shutdown import ShutdownWatch
 from fact.cli.supervisor import INTERRUPTED, ChildSpec, emit, run_all
 from fact.cli.use import PinError, current_pin, pin
 from fact.core.settings import Settings, get_settings
@@ -119,7 +120,7 @@ def _follow_pin(settings: Settings, ref: str) -> Path:
         raise typer.Exit(1) from exc
 
 
-def _follower(settings: Settings, ref: str, checkout: Path, width: int) -> Follower:
+def _follower(settings: Settings, ref: str, checkout: Path, log: Callable[[str], None]) -> Follower:
     uv = shutil.which("uv") or "uv"
     return Follower(
         settings,
@@ -127,7 +128,7 @@ def _follower(settings: Settings, ref: str, checkout: Path, width: int) -> Follo
         uv=uv,
         pinned=checkout.name,
         commands=lambda c: factory_commands(settings, c),
-        log=lambda line: emit("fact", width, line),
+        log=log,
     )
 
 
@@ -145,7 +146,7 @@ def dev(
         ),
     ] = None,
 ) -> None:
-    """Start Temporal, the API and the worker; Ctrl-C stops all three."""
+    """Start Temporal, the API and the worker; Ctrl-C stops all three, and so does `fact shutdown` once no run is active."""
     temporal_exe = shutil.which("temporal")
     if temporal_exe is None:
         typer.echo(
@@ -162,10 +163,14 @@ def dev(
         typer.echo(f"Running pinned {checkout.name} from {checkout}")
     typer.echo(f"Temporal UI: http://localhost:{TEMPORAL_UI_PORT}  API: {settings.api_url}")
     commands = build_commands(settings, temporal_exe, checkout)
+    width = max(len(c.name) for c in [*commands, ChildSpec("fact", [])])  # the supervisor's prefix width
+
+    def log(line: str) -> None:
+        emit("fact", width, line)
+
     if follow is not None and checkout is not None:
         typer.echo(f"Following {follow}: upgrading once it moves and no run is active")
-        width = max(len(c.name) for c in commands)  # the supervisor's prefix width
-        code = run_all(commands, _follower(settings, follow, checkout, width))
+        code = run_all(commands, _follower(settings, follow, checkout, log))
     else:
-        code = run_all(commands)
+        code = run_all(commands, ShutdownWatch(log))
     raise typer.Exit(0 if code == INTERRUPTED else code)
