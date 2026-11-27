@@ -244,7 +244,7 @@ Every PR carries the evidence a reviewer needs, built by the factory from run da
 | Item | What it is | Phase |
 | --- | --- | --- |
 | Scripted PR description | Title and summary written by the agent as a step output; the rest (issue, refreshed context, check results, run link, sibling PRs) filled in from run data by a template | v0 |
-| Cost comment | A PR comment with time, tokens (fresh input, cache read, cache write, output) and cost per step and per harness and model (marker `<!-- fact:cost -->`); `FactWorkflow.execute` posts it once, as the run's last step, on every ending that opened a PR (`merged`, `closed`, `failed`, `needs_human`, `stopped`). Only usage the harness reported is shown: an unreported cost reads `unknown` and the totals say how many are missing | v0 |
+| Cost comment | A PR comment with time, turns, peak context, tokens (uncached input, cache read, cache write, output: each summed over every turn of the session, each billed at its own rate) and cost per step and per harness and model (marker `<!-- fact:cost -->`); `FactWorkflow.execute` posts it once, as the run's last step, on every ending that opened a PR (`merged`, `closed`, `failed`, `needs_human`, `stopped`). Only usage the harness reported is shown: an unreported cost reads `unknown` and the totals say how many are missing | v0 |
 | Review checklist per project | `.fact/prompts/review.md` with the project's rules; always includes "does the change meet the issue's acceptance criteria" | v0 |
 | Head-SHA guard | Before an automatic merge, confirm CI passed on exactly the commit being merged | v0 |
 | Screenshots | For UI projects, a Playwright screenshot of every screen the change touches, attached to the PR and stored in object storage | Later |

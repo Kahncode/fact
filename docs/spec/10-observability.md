@@ -19,6 +19,7 @@ The `events` table and `POST /runs/{id}/events` from M0 were never used; M4 remo
 | Human wait time | gate, run | Gate opened to answered; kept apart from machine time |
 | Queue time | step | Scheduled to started; shows a saturated worker |
 | Tokens and cost (USD) | step attempt, run, project, day | From the harness only; a cost the harness did not report is unknown (NULL), never estimated |
+| Turns and peak context | step attempt, run | Agent steps: turns are model calls over the whole session; peak context is the input of its largest turn (a run shows its largest step) |
 | Attempts and loops | step, run | e.g. implement ran 3 times before tests passed |
 | Human touches | run | Gate answers, extra instructions, manual commits; the metric Warp tracks |
 | Outcome | run | Generic, whatever the workflow: succeeded, nothing_to_do (succeeded with nothing to do: no output), failed, needs_human (gave up, such as an exhausted checks loop), stopped (a person stopped the run, or rejected its plan at the `approve_plan` gate). Today's change-set outcomes (pr_opened, merged, closed, abandoned) become states of the change set output |
