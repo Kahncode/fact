@@ -1,0 +1,18 @@
+{
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["continue", "ask", "stop"],
+      "description": "continue: the question is answered, resume the blocked session with `instructions`; ask: post `reply` and wait; stop: end the run."
+    },
+    "reply": {
+      "type": "string",
+      "description": "Markdown posted on the issue, addressed to the people who commented; required with ask, empty when there is nothing to say."
+    },
+    "instructions": {
+      "type": "string",
+      "description": "With continue: the answer and what the resumed session must do, self-contained; empty otherwise."
+    }
+  },
+  "required": ["decision", "reply", "instructions"]
+}

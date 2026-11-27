@@ -6,12 +6,11 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     SYNC_BASE,
     WAIT_FOR_CI,
-    GateOpenedInput,
     NotifyInput,
     SyncBaseInput,
 )
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
-from fact.core.gates import GateDecision
+from fact.core.types import RunResult
 from standard_harness import (
     MAX_BASE_SYNCS,
     MAX_FIX_ATTEMPTS,
@@ -37,9 +36,9 @@ def _resolves(fakes: FakeActivities) -> list[tuple[str, int, str]]:
     return [s for s in agent_sessions(fakes) if s[0] == "resolve_conflicts"]
 
 
-def _gate_loops(fakes: FakeActivities) -> list[str]:
-    gates: list[GateOpenedInput] = fakes.gates("record_gate_opened")
-    return [g.details["loop"] for g in gates]
+def _needs_a_person(fakes: FakeActivities, result: RunResult) -> bool:
+    """Tell whether the run ended `needs_human` with no gate: the run-end hold asks the person on the task."""
+    return result.outcome == RunOutcome.NEEDS_HUMAN and fakes.gates("record_gate_opened") == []
 
 
 async def test_a_pr_github_can_merge_never_merges_the_base() -> None:
@@ -82,55 +81,36 @@ async def test_conflicts_go_to_an_agent_and_the_checks_run_before_the_push() -> 
     assert last_check < second_push
 
 
-async def test_unresolved_conflicts_ask_a_person() -> None:
+async def test_unresolved_conflicts_end_the_run_needing_a_person() -> None:
     fakes = FakeActivities(ci_conflicts=1, sync_script=["conflicted"] * 3, resolve_outcome=StepOutcome.NEEDS_HUMAN)
     result, _ = await run_standard(fakes, "run-sync-stuck")
 
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
+    assert _needs_a_person(fakes, result)
     assert finished(fakes) == RunOutcome.NEEDS_HUMAN
     assert _resolves(fakes) == [RESOLVE]  # a session that does not pass is not tried again
-    assert _gate_loops(fakes) == ["sync_base"]
+    assert "unresolved" in result.summary
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
-async def test_a_resolution_that_breaks_the_checks_goes_to_the_checks_gate_unpushed() -> None:
+async def test_a_resolution_that_breaks_the_checks_ends_the_run_unpushed() -> None:
     fakes = FakeActivities(
         ci_conflicts=1, sync_script=["conflicted", "up_to_date"], test_failures_after_resolve=MAX_FIX_ATTEMPTS + 1
     )
     result, _ = await run_standard(fakes, "run-sync-ci-red")
 
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert _gate_loops(fakes) == ["checks"]
+    assert _needs_a_person(fakes, result)
+    assert "checks still failing" in result.summary
     assert len(fakes.of(OPEN_CHANGE_SET)) == 1
 
 
-async def test_approving_the_checks_gate_fixes_the_resolution_before_it_is_pushed() -> None:
-    fakes = FakeActivities(
-        merges=True,
-        ci_conflicts=1,
-        sync_script=["conflicted", "up_to_date"],
-        test_failures_after_resolve=MAX_FIX_ATTEMPTS + 1,
-        gate_decisions=[GateDecision.APPROVE],
-    )
-    result, _ = await run_standard(fakes, "run-sync-ci-approve")
-
-    assert result.outcome == RunOutcome.MERGED
-    assert _gate_loops(fakes) == ["checks"]
-    assert len(fakes.of(OPEN_CHANGE_SET)) == TWICE  # pushed once, after the checks went green
-    fixes = [s for s in agent_sessions(fakes) if s[2] == "fix_checks"]
-    assert len(fixes) == MAX_FIX_ATTEMPTS  # the approved round needed none: the last failure was used up
-
-
-async def test_a_pr_conflicting_again_after_the_merges_asks_a_person() -> None:
+async def test_a_pr_conflicting_again_after_the_merges_ends_the_run_needing_a_person() -> None:
     fakes = FakeActivities(merges=True, ci_conflicts=MAX_BASE_SYNCS + 1)
     result, _ = await run_standard(fakes, "run-sync-ci-cap")
 
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
+    assert _needs_a_person(fakes, result)
     assert [a for a, _ in _syncs(fakes)] == list(range(1, MAX_BASE_SYNCS + 1))
     assert len(fakes.of(WAIT_FOR_CI)) == MAX_BASE_SYNCS + 1
-    assert _gate_loops(fakes) == ["sync_base"]
-    gates: list[GateOpenedInput] = fakes.gates("record_gate_opened")
-    assert "conflicting with the base branch" in gates[0].details["summary"]
+    assert "conflicting with the base branch" in result.summary
     assert fakes.of(MERGE_CHANGE_SET) == []
 
 
@@ -147,14 +127,13 @@ async def test_an_out_of_date_merge_merges_the_base_and_tries_again() -> None:
     assert ready == []
 
 
-async def test_unresolved_conflicts_on_an_out_of_date_merge_ask_a_person() -> None:
+async def test_unresolved_conflicts_on_an_out_of_date_merge_end_the_run_needing_a_person() -> None:
     fakes = FakeActivities(
         merge_script=["out_of_date"], sync_script=["conflicted"] * 3, resolve_outcome=StepOutcome.NEEDS_HUMAN
     )
     result, _ = await run_standard(fakes, "run-sync-merge-stuck")
 
-    assert result.outcome == RunOutcome.NEEDS_HUMAN
-    assert _gate_loops(fakes) == ["sync_base"]
+    assert _needs_a_person(fakes, result)
 
 
 async def test_a_merge_still_out_of_date_after_the_syncs_waits_for_a_person() -> None:

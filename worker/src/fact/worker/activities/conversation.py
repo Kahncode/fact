@@ -3,12 +3,14 @@ The GitHub side of a conversation (`fact.sdk.converse`) and of a review round, a
 
 - `collect_comments`: maintainers' comments on a PR or an issue since a point, with their ids: review bodies, inline
   review comments and conversation comments (an issue has only the last). Anyone else's are left out
-  (`fact.worker.reviews.Maintainers`); a permission lookup that fails other than with a 404 fails the attempt.
+  (`fact.worker.reviews.Maintainers`); a permission lookup that fails other than with a 404 fails the attempt. With
+  `mentioning_app`, only those that mention the App (`@<slug>`, case-insensitive).
 - `post_replies`: post a session's replies. A reply to an inline review comment goes in its thread; any other is a
   comment on the PR or issue that quotes what it answers. Each carries a hidden key, and a reply whose key is already
   there is skipped, so a retried attempt never posts twice. A reply to a comment the session never read is dropped.
   Threads are never resolved: that is the reviewer's call.
 - `request_review`: ask the reviewers for a review again; GitHub refusing (such as a reviewer without access) is logged.
+- `app_slug`: the App's slug, which people mention to answer fact on an issue.
 
 A transient GitHub error is retried by Temporal; bad credentials or a missing PR or App fail without a retry.
 """
@@ -17,9 +19,11 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 from fact.core.activity_contract import (
+    APP_SLUG,
     COLLECT_COMMENTS,
     POST_REPLIES,
     REQUEST_REVIEW,
+    AppSlugInput,
     CollectCommentsInput,
     Comment,
     PostRepliesInput,
@@ -58,6 +62,11 @@ class ConversationActivities:
     def __init__(self, github: GitHubApp | None) -> None:
         self._github = github
 
+    def _app(self) -> GitHubApp:
+        if self._github is None:
+            raise ApplicationError(NO_APP, non_retryable=True)
+        return self._github
+
     async def _with_client[T](self, repo: str, work: Callable[[httpx.AsyncClient], Awaitable[T]]) -> T:
         if self._github is None:
             raise ApplicationError(NO_APP, non_retryable=True)
@@ -76,6 +85,7 @@ class ConversationActivities:
         with bind_run(spec.run_id):
 
             async def work(client: httpx.AsyncClient) -> list[Comment]:
+                mention = (await self._app().app_info()).slug if spec.mentioning_app else None
                 return await collect(
                     client,
                     spec.repo,
@@ -83,11 +93,24 @@ class ConversationActivities:
                     pull_request=spec.pull_request,
                     since=spec.since,
                     review_id=spec.review_id,
+                    mention=mention,
                 )
 
             comments = await self._with_client(spec.repo, work)
             log.info("comments_collected", repo=spec.repo, number=spec.number, comments=len(comments))
             return comments
+
+    @activity.defn(name=APP_SLUG)
+    async def app_slug(self, spec: AppSlugInput) -> str:
+        with bind_run(spec.run_id):
+            github = self._app()
+            try:
+                return (await github.app_info()).slug
+            except GitHubError as exc:
+                raise ApplicationError(str(exc), non_retryable=exc.status_code in PERMANENT_STATUSES) from exc
+            except httpx.HTTPError as exc:
+                msg = f"GitHub request failed: {type(exc).__name__}: {exc}"
+                raise ApplicationError(msg) from exc
 
     @activity.defn(name=POST_REPLIES)
     async def post_replies(self, spec: PostRepliesInput) -> int:

@@ -12,6 +12,7 @@ not handled yet and newer than every `CHANGES_REQUESTED` review (a reviewer who 
 Reviews submitted before `since` (the run's start) are ignored: on a PR an earlier run opened, that run answered them.
 """
 
+import re
 from collections.abc import Collection, Iterable
 from datetime import datetime
 from typing import Any
@@ -40,6 +41,11 @@ async def paged(client: httpx.AsyncClient, path: str, params: dict[str, str] | N
         if len(batch) < PAGE_SIZE:
             break
     return items
+
+
+def mentions(body: str, slug: str) -> bool:
+    """Whether `body` mentions `@<slug>` (case-insensitive, not as part of a longer login or an email address)."""
+    return re.search(rf"(?<![\w@.-])@{re.escape(slug)}(?![\w-])", body, re.IGNORECASE) is not None
 
 
 def login_of(item: dict[str, Any]) -> str:
@@ -157,8 +163,13 @@ async def collect(  # noqa: PLR0913 - where to read, and from when
     pull_request: bool,
     since: datetime | None,
     review_id: int | None,
+    mention: str | None = None,
 ) -> list[Comment]:
-    """Maintainers' comments on the PR or issue since `since` (with all of review `review_id`), oldest first."""
+    """
+    Maintainers' comments on the PR or issue since `since` (with all of review `review_id`), oldest first.
+
+    With `mention` (the App's slug), only the comments that mention `@<mention>`.
+    """
     found: list[Comment] = []
     if pull_request:
         reviews = await paged(client, f"/repos/{repo}/pulls/{number}/reviews")
@@ -168,6 +179,8 @@ async def collect(  # noqa: PLR0913 - where to read, and from when
     conversation = await paged(client, f"/repos/{repo}/issues/{number}/comments")
     found += [_comment(c, "comment") for c in conversation if by_person(c)]
     wanted = [c for c in found if c.body.strip() and _wanted(c, since, review_id)]
+    if mention is not None:
+        wanted = [c for c in wanted if mentions(c.body, mention)]
     maintainers = await Maintainers(repo).among(client, (c.author for c in wanted))
     kept = [c for c in wanted if c.author in maintainers]
     return sorted(kept, key=lambda c: c.created_at)

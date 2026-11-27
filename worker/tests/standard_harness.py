@@ -41,6 +41,7 @@ from gate_harness import answer
 from standard_env import OPTIONS, RUNNER_QUEUE, WORKFLOW_QUEUE, load_standard
 from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, LOW_RISK, REPLY, run_input
 from standard_pr_fakes import FakePRSteps
+from standard_question_fakes import FakeQuestionSteps
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporal_env import terminate_if_running, time_skipping_env
 from temporalio import activity
@@ -50,7 +51,7 @@ from temporalio.worker import Worker
 
 
 @dataclass
-class FakeActivities(FakePRSteps):
+class FakeActivities(FakePRSteps, FakeQuestionSteps):
     """Scripted step results. `test_failures` is how many `test` checks fail before one passes."""
 
     test_failures: int = 0
@@ -138,7 +139,7 @@ class FakeActivities(FakePRSteps):
             if isinstance(scripted, Exception):
                 raise scripted
             return scripted
-        if spec.prompt_name in {"review", "classify", "review_reply"}:
+        if spec.prompt_name in {"review", "classify", "review_reply", "answer"}:
             return self._judge(spec.prompt_name)
         if spec.prompt_name == "learn":
             if isinstance(self.learn, Exception):
@@ -158,7 +159,9 @@ class FakeActivities(FakePRSteps):
         return StepResult(outcome=outcome, summary=f"{spec.prompt_name} done", outputs=outputs)
 
     def _judge(self, prompt: str) -> StepResult:
-        """Answer the sessions that judge rather than change: the review, classify and review replies."""
+        """Answer the sessions that judge rather than change: the review, classify, review replies and answers."""
+        if prompt == "answer":
+            return self.next_answer()
         if prompt == "review_reply":
             return (
                 self.review_reply.pop(0) if self.review_reply else StepResult(outcome=StepOutcome.PASSED, outputs=REPLY)
@@ -202,6 +205,8 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.collect_comments,
         fakes.post_replies,
         fakes.request_review,
+        fakes.app_slug,
+        fakes.wait_for_answer,
         fakes.merge_change_set,
         fakes.classify_signals,
         fakes.label_change_set,

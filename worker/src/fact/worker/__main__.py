@@ -20,6 +20,7 @@ from fact.core.github import GitHubApp, GitHubAppConfigError, shared_app
 from fact.core.logging import configure_logging, get_logger
 from fact.core.settings import Settings, get_settings
 from fact.worker.activities.agent import AgentActivities
+from fact.worker.activities.answer_wait import AnswerWaitActivities
 from fact.worker.activities.change_set import ChangeSetActivities
 from fact.worker.activities.ci import CIActivities
 from fact.worker.activities.classify import ClassifyActivities
@@ -134,6 +135,8 @@ def factory_activities(
         conversation.collect_comments,
         conversation.post_replies,
         conversation.request_review,
+        conversation.app_slug,
+        AnswerWaitActivities(github).wait_for_answer,
         MergeActivities(github).merge_change_set,
         control.mark_task_done,
         control.record_run_started,

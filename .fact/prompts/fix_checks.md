@@ -37,4 +37,5 @@ End with the structured answer:
 - `summary`: what was wrong and how you fixed it.
 - `assumptions`: each assumption you made where the task or the docs did not say, one sentence each; leave it out or `[]` when you made none. They are added to the PR description.
 - `blocker`: when blocked, what stopped you and what would unblock it.
+- `question`: when blocked because you need information or a decision only a person can give (the task is unclear, two readings change what gets built): the question to ask them, self-contained, as you would ask it on the issue. fact asks it on the task and resumes this session with the answer. Leave it out for any other blocker.
 - `retryable`: when blocked, `true` only if the cause was temporary and outside your control (network, rate limit, a flaky service) and trying again later, with nothing changed by a person, would likely succeed. Permissions, a missing tool, an unclear or too large task are never retryable.
