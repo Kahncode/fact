@@ -207,7 +207,7 @@ async def test_an_outsiders_change_request_is_skipped_as_if_it_were_not_there(pr
     after_approval = FakeGitHub(polls={7: [OPEN]}, reviews={7: reviews})
     (event,) = await _wait(after_approval, private_key, [_pr(7)])
     assert (event.kind, event.review_id) == ("approved", 1)
-    assert after_approval.lookups == ["octo", "mallory"]  # each login once per poll
+    assert after_approval.lookups == ["octo", "mallory"]
 
 
 async def test_each_outsider_action_gets_one_reply_across_polls_and_retries(private_key: str) -> None:
@@ -219,6 +219,7 @@ async def test_each_outsider_action_gets_one_reply_across_polls_and_retries(priv
     }
     fake = FakeGitHub(polls={7: [OPEN, OPEN, CLOSED]}, reviews={7: reviews}, comments=comments)
     assert _kinds(await _wait(fake, private_key, [_pr(7)], (2,))) == [(7, "closed")]
+    assert sorted(fake.lookups) == ["eve", "mallory", "octo"]  # each login once per activity call, not per poll
     fake.polls[7] = [OPEN, CLOSED]
     await _wait(fake, private_key, [_pr(7)], (2,))  # the activity retried, or the worker restarted
 

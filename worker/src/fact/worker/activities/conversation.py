@@ -1,8 +1,9 @@
 """
 The GitHub side of a conversation (`fact.sdk.converse`) and of a review round, all through the GitHub App (`fact[bot]`).
 
-- `collect_comments`: people's comments on a PR or an issue since a point, with their ids: review bodies, inline review
-  comments and conversation comments (an issue has only the last).
+- `collect_comments`: maintainers' comments on a PR or an issue since a point, with their ids: review bodies, inline
+  review comments and conversation comments (an issue has only the last). Anyone else's are left out
+  (`fact.worker.reviews.Maintainers`); a permission lookup that fails other than with a 404 fails the attempt.
 - `post_replies`: post a session's replies. A reply to an inline review comment goes in its thread; any other is a
   comment on the PR or issue that quotes what it answers. Each carries a hidden key, and a reply whose key is already
   there is skipped, so a retried attempt never posts twice. A reply to a comment the session never read is dropped.

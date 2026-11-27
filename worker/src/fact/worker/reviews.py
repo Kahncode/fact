@@ -53,29 +53,28 @@ def by_person(item: dict[str, Any]) -> bool:
 
 class Maintainers:
     """
-    Which logins have write access to one repository, each looked up once per instance (one per activity call or poll).
+    Which logins have write access to one repository, each looked up once per instance (one per activity call).
 
     A 404 (not a collaborator, or no such user) means not a maintainer; any other failure raises, never counting the
     author by default.
     """
 
-    def __init__(self, client: httpx.AsyncClient, repo: str) -> None:
-        self._client = client
+    def __init__(self, repo: str) -> None:
         self._repo = repo
         self._known: dict[str, bool] = {}
 
-    async def check(self, login: str) -> bool:
+    async def check(self, client: httpx.AsyncClient, login: str) -> bool:
         if login not in self._known:
-            self._known[login] = await self._lookup(login)
+            self._known[login] = await self._lookup(client, login)
         return self._known[login]
 
-    async def among(self, logins: Iterable[str]) -> frozenset[str]:
-        """Return the maintainers among `logins`."""
-        return frozenset([login for login in dict.fromkeys(logins) if await self.check(login)])
+    async def among(self, client: httpx.AsyncClient, logins: Iterable[str]) -> frozenset[str]:
+        """Return the maintainers among `logins`, looking up with `client` those not known yet."""
+        return frozenset([login for login in dict.fromkeys(logins) if await self.check(client, login)])
 
-    async def _lookup(self, login: str) -> bool:
+    async def _lookup(self, client: httpx.AsyncClient, login: str) -> bool:
         try:
-            body = (await self._client.get(f"/repos/{self._repo}/collaborators/{login}/permission")).json()
+            body = (await client.get(f"/repos/{self._repo}/collaborators/{login}/permission")).json()
         except GitHubNotFoundError:
             return False
         return body.get("permission") in MAINTAINER_PERMISSIONS
@@ -169,6 +168,6 @@ async def collect(  # noqa: PLR0913 - where to read, and from when
     conversation = await paged(client, f"/repos/{repo}/issues/{number}/comments")
     found += [_comment(c, "comment") for c in conversation if by_person(c)]
     wanted = [c for c in found if c.body.strip() and _wanted(c, since, review_id)]
-    maintainers = await Maintainers(client, repo).among(c.author for c in wanted)
+    maintainers = await Maintainers(repo).among(client, (c.author for c in wanted))
     kept = [c for c in wanted if c.author in maintainers]
     return sorted(kept, key=lambda c: c.created_at)

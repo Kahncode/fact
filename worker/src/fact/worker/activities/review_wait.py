@@ -5,7 +5,7 @@ Every `poll_interval_s` it reads each PR and its reviews; once a round finds an 
 merged, closed, approved on its head, or a review requesting changes the run has not handled, submitted since
 `reviews_since`), it returns that round's
 events, at most one per PR. Only maintainers' reviews count (`fact.worker.reviews.Maintainers`, looked up once per
-login and poll); each review or comment by anyone else since `reviews_since` gets one fixed reply
+login and activity call); each review or comment by anyone else since `reviews_since` gets one fixed reply
 (`fact.worker.outsiders`) and is otherwise ignored. The workflow gives it what is left of the run's 30 days. A transient
 GitHub error reading the PR only skips a poll; a permanent one (bad credentials, PR or App not found) fails the activity
 without a retry. A permission lookup that fails (other than with a 404, which means not a maintainer) fails the
@@ -49,10 +49,13 @@ class ReviewWaitActivities:
         if github is None:
             raise ApplicationError(NO_APP, non_retryable=True)
         handled = frozenset(spec.handled_reviews)
+        lookups = {repo: Maintainers(repo) for repo in dict.fromkeys(pr.repo for pr in spec.prs)}  # one per call
         with bind_run(spec.run_id):
             while True:
                 events = [
-                    e for pr in spec.prs if (e := await self._poll(github, pr, handled, spec.reviews_since)) is not None
+                    e
+                    for pr in spec.prs
+                    if (e := await self._poll(github, pr, handled, spec.reviews_since, lookups[pr.repo])) is not None
                 ]
                 if events:
                     for event in events:
@@ -62,7 +65,7 @@ class ReviewWaitActivities:
 
     @staticmethod
     async def _poll(
-        github: GitHubApp, pr: PRRef, handled: frozenset[int], since: datetime | None
+        github: GitHubApp, pr: PRRef, handled: frozenset[int], since: datetime | None, lookup: Maintainers
     ) -> ReviewEvent | None:
         """Return the PR's event, or None while nothing happened or after a transient error."""
         try:
@@ -74,7 +77,8 @@ class ReviewWaitActivities:
                 reviews = await pr_reviews(client, pr)
                 inline = await paged(client, f"/repos/{pr.repo}/pulls/{pr.number}/comments")
                 conversation = await paged(client, f"/repos/{pr.repo}/issues/{pr.number}/comments")
-                return await _decide(client, pr, body, (reviews, inline, conversation), handled=handled, since=since)
+                read = (reviews, inline, conversation)
+                return await _decide(client, pr, body, read, lookup, handled=handled, since=since)
         except GitHubError as exc:
             if exc.status_code in PERMANENT_STATUSES:
                 raise ApplicationError(str(exc), non_retryable=True) from exc
@@ -93,6 +97,7 @@ async def _decide(  # noqa: PLR0913 - the PR as read, and what the run already h
     pr: PRRef,
     body: dict[str, Any],
     read: tuple[Items, Items, Items],
+    lookup: Maintainers,
     *,
     handled: frozenset[int],
     since: datetime | None,
@@ -101,7 +106,7 @@ async def _decide(  # noqa: PLR0913 - the PR as read, and what the run already h
     reviews, inline, conversation = read
     actions = candidates(reviews, inline, conversation, since)
     try:
-        maintainers = await Maintainers(client, pr.repo).among([a.login for a in actions])
+        maintainers = await lookup.among(client, [a.login for a in actions])
     except (GitHubError, httpx.HTTPError) as exc:
         status = getattr(exc, "status_code", None)
         msg = f"permission lookup failed, no author counted: {type(exc).__name__}: {exc}"
