@@ -35,8 +35,12 @@ def change_set_input(  # noqa: PLR0913 - the PR's parts, each from a different s
 
 
 def default_title(task: Task) -> str:
-    """Return a conventional commit subject for the task, such as `feat(M1-16): <title>`."""
-    return f"{COMMIT_TYPES.get(task.type, 'feat')}({task.id}): {task.title}"
+    """
+    Return a conventional commit subject for the task, such as `feat: <title>`.
+
+    No scope: it names the code area a change touches, which workflow code can't know; the PR body links the task.
+    """
+    return f"{COMMIT_TYPES.get(task.type, 'feat')}: {task.title}"
 
 
 def text_output(result: StepResult, key: str) -> str | None:

@@ -1,5 +1,6 @@
 """The scripted PR description."""
 
+import pytest
 from fact.core.enums import StepOutcome
 from fact.core.types import Task
 from fact.worker.pr_body import CheckResult, CriterionResult, render_pr_body
@@ -78,3 +79,20 @@ def test_reviewed_criteria_are_a_table() -> None:
         "| PR shows the table | ✅ met | - |\n"
     ) in body
     assert "- [ ]" not in body
+
+
+@pytest.mark.parametrize(("pr_count", "reference"), [(1, "Closes acme/tracker#12"), (2, "Part of acme/tracker#12")])
+def test_issue_task_links_its_issue_fully_qualified(pr_count: int, reference: str) -> None:
+    """The issue lives in acme/tracker, the PR in acme/widget: only `owner/repo#n` reaches it."""
+    task = _task(key="gh:acme/tracker#12", id="12", path=None)
+    body = render_pr_body(
+        summary="s",
+        task=task,
+        repo_url=REPO_URL,
+        default_branch="main",
+        check_results=[],
+        run_url="",
+        pr_count=pr_count,
+    )
+    assert f"## Task\n\nacme/tracker#12: Push the branch and open the PR\n\n{reference}\n\n### Acceptance" in body
+    assert ("Closes" in body) == (pr_count == 1)

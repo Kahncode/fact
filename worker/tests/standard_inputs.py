@@ -11,7 +11,7 @@ UNMET = {"text": "The widget is documented", "met": False, "evidence": "README n
 LOW = {"severity": "low", "file": "widget.py", "line": 3, "message": "name could be clearer"}
 HIGH = {"severity": "high", "file": "widget.py", "line": 9, "message": "crashes on empty input"}
 CLEAN_REVIEW = {"status": "done", "summary": "looks good", "criteria": [MET], "findings": [LOW]}
-LEARNED = {"status": "done", "title": "feat(M1-99): widget, documented", "summary": "Adds the widget and its docs."}
+LEARNED = {"status": "done", "title": "feat(widget): widget, documented", "summary": "Adds the widget and its docs."}
 
 
 def run_input(run_id: str = "run-1") -> RunInput:

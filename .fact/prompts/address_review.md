@@ -19,7 +19,7 @@ $acceptance_criteria
 1. Read each unmet criterion and finding above and check it against the code. Fix every unmet criterion and every `high` or `medium` finding; fix `low` ones when it is quick and clearly right.
 2. If a finding is wrong, leave the code as it is and say why in your summary.
 3. Write, update or delete tests with the fixes by the `testing` skill (without it, `.agents/skills/testing/SKILL.md`), then run each repository's own lint and tests and fix what fails.
-4. Commit the fixes locally on the branch you are on, with a clear message such as `fix($task_id): address review`.
+4. Commit the fixes locally on the branch you are on, with a clear message such as `fix(worker): address review`; the scope names the area of the code it touches, never the task id.
 
 ## Rules
 

@@ -8,7 +8,7 @@ from standard_harness import FakeActivities, agent_sessions, finished, run_stand
 from standard_inputs import HIGH, LEARNED, MET
 from temporalio.exceptions import ApplicationError
 
-IMPLEMENT_TITLE = "feat(M1-99): add the widget"  # what the fake implement session answers
+IMPLEMENT_TITLE = "feat(widget): add the widget"  # what the fake implement session answers
 
 
 @pytest.mark.parametrize(
@@ -53,4 +53,4 @@ async def test_task_title_is_the_last_fallback() -> None:
     await run_standard(fakes, "run-learn-task-title")
 
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
-    assert (pr_spec.title, pr_spec.summary) == ("feat(M1-99): Add a widget", "implemented")
+    assert (pr_spec.title, pr_spec.summary) == ("feat: Add a widget", "implemented")
