@@ -36,7 +36,8 @@ losing the change over, so the PR still opens with the implement session's title
 conventional title).
 
 A person is notified when a gate opens, when the PRs need a review (CI green, not merged by fact), and when the
-run ends `failed` or `needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`).
+run ends `failed` or `needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`). A change set
+fact merged itself notifies no one: its run ends `merged` with no notification at all.
 """
 
 from temporalio import workflow

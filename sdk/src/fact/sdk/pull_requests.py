@@ -67,6 +67,7 @@ class PullRequestSteps:
     assumptions: list[str]  # every passed agent session's `assumptions`, in order, without repeats
     spec_ambiguous: bool  # an agent session answered `spec_ambiguous: true`
     prs: list[PRRef]  # from the last push, with the head SHA it pushed
+    merged_by_fact: bool  # `merge_change_set` merged the change set, so no person needs telling
     _change_set: OpenChangeSetInput | None  # the last `open_change_set` input, to push again after a CI fix
 
     def pr_text(self: FactWorkflow, fallback_summary: str = "") -> tuple[str, str]:
@@ -193,12 +194,15 @@ class PullRequestSteps:
         Merge the PRs (each at its pushed head SHA) without a person: `merged`, or why GitHub refused one.
 
         `out_of_date`: the PR conflicts with or is behind its base, which `sync_with_base` fixes; `refused`: anything
-        else (branch protection, the head moved on), so wait for a person.
+        else (branch protection, the head moved on), so wait for a person. Once merged, `merged_by_fact` is set and
+        the run's end notifies no one.
         """
         if not prs:
             return "refused"
         spec = MergeChangeSetInput(run_id=self.input.run_id, prs=list(prs), method=method)
-        return await self._control(MERGE_CHANGE_SET, spec, str)  # type: ignore[return-value] - a `MergeResult`
+        merged: MergeResult = await self._control(MERGE_CHANGE_SET, spec, str)  # type: ignore[assignment]
+        self.merged_by_fact = self.merged_by_fact or merged == "merged"
+        return merged
 
     async def wait_for_pr_closed(self: FactWorkflow, prs: Sequence[PRRef], stage_id: str = REVIEW_STAGE) -> RunOutcome:
         """

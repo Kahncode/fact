@@ -68,6 +68,7 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
         self.assumptions: list[str] = []  # every passed agent session's `assumptions`, for the PR description
         self.spec_ambiguous = False  # an agent session found the spec ambiguous
         self.prs: list[PRRef] = []  # from the last `open_change_set`, with the head SHA it pushed
+        self.merged_by_fact = False  # `merge_change_set` merged the change set: its end notifies no one
         self._change_set: OpenChangeSetInput | None = None  # its input, to push again after a CI fix
 
     @classmethod
