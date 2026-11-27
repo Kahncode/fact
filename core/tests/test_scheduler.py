@@ -1,13 +1,24 @@
-"""`plan_starts`: dependency depth then id, within the overall and per-project caps; and `FileTaskSource.depths`."""
+"""`plan_starts`: priority, depth then id per project, projects in turn, within the caps; `FileTaskSource.depths`."""
 
 from pathlib import Path
 
-from fact.core.scheduler import ProjectLoad, ReadyTask, ReadyTasks, plan_starts
+from fact.core.scheduler import ProjectLoad, ReadyTask, ReadyTasks, effective_priorities, plan_starts
 from fact.core.tasks.files import FileTaskSource
+from fact.core.types import Priority
 
 
-def _task(task_id: str, depth: int = 0, project: str = "a") -> ReadyTask:
-    return ReadyTask(project=project, task_key=f"task:{task_id}", task_id=task_id, depth=depth)
+def _task(
+    task_id: str, depth: int = 0, project: str = "a", priority: Priority = "medium", waiting_on: tuple[str, ...] = ()
+) -> ReadyTask:
+    return ReadyTask(
+        project=project,
+        task_key=f"task:{task_id}",
+        task_id=task_id,
+        depth=depth,
+        priority=priority,
+        effective_priority=priority,
+        waiting_on=[f"task:{w}" for w in waiting_on],
+    )
 
 
 def _ready(tasks: list[ReadyTask], *, max_runs: int = 10, active: int = 0, **projects: tuple[int, int]) -> ReadyTasks:
@@ -27,6 +38,38 @@ def test_orders_by_depth_then_id() -> None:
 def test_orders_issues_by_number() -> None:
     issues = [ReadyTask(project="a", task_key=f"gh:acme/app#{n}", task_id=n) for n in ("12", "9", "100")]
     assert _ids(plan_starts(_ready(issues, a=(0, 10)))) == ["9", "12", "100"]
+
+
+def test_priority_orders_before_depth_and_id() -> None:
+    tasks = [_task("M1-01", priority="low"), _task("M1-02"), _task("M3-09", depth=2, priority="urgent")]
+    assert _ids(plan_starts(_ready(tasks, a=(0, 10)))) == ["M3-09", "M1-02", "M1-01"]
+
+
+def test_effective_priority_follows_waits_within_the_project() -> None:
+    tasks = [
+        _task("M1-01", priority="low"),
+        _task("M1-02", waiting_on=("M1-01",)),
+        _task("M1-03", priority="urgent", waiting_on=("M1-02",)),  # urgent waits on M1-01 through M1-02
+        _task("M1-04", priority="low"),
+        _task("M1-04", project="b", priority="urgent", waiting_on=("M1-04",)),  # same key, another project
+    ]
+    raised = {(t.project, t.task_id): t.effective_priority for t in effective_priorities(tasks)}
+    assert raised == {
+        ("a", "M1-01"): "urgent",
+        ("a", "M1-02"): "urgent",
+        ("a", "M1-03"): "urgent",
+        ("a", "M1-04"): "low",
+        ("b", "M1-04"): "urgent",
+    }
+
+
+def test_projects_take_turns_for_the_overall_cap() -> None:
+    tasks = [
+        *(_task(f"M1-0{n}", project="a", priority="urgent") for n in (1, 2, 3)),
+        *(_task(f"M2-0{n}", project="b", priority="low") for n in (1, 2)),
+    ]
+    chosen = plan_starts(_ready(tasks, max_runs=4, a=(0, 5), b=(0, 5)))
+    assert _ids(chosen) == ["M1-01", "M2-01", "M1-02", "M2-02"]
 
 
 def test_overall_cap_counts_active_runs() -> None:

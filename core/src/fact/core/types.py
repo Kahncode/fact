@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 ArtifactRef = str  # key in the artifact store
 TaskType = Literal["feature", "chore", "bug"]
 Complexity = Literal["trivial", "standard", "complex"]
+Priority = Literal["urgent", "high", "medium", "low"]  # highest first
+PRIORITIES: tuple[Priority, ...] = ("urgent", "high", "medium", "low")
 
 SUMMARY_MAX_BYTES = 2048
 
@@ -39,6 +41,7 @@ class Task(_Model):
     acceptance_criteria: list[str] = Field(default_factory=list)
     type: TaskType = "feature"
     complexity: Complexity = "standard"
+    priority: Priority = "medium"
     depends_on: list[str] = Field(default_factory=list)
     path: str | None = None  # for file tasks
     require_plan_approval: bool | None = None  # the task's own setting; None: the project's

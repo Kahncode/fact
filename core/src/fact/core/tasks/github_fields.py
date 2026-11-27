@@ -1,5 +1,5 @@
 """
-Reading a GitHub issue's fields: type, complexity, acceptance criteria, `Depends on` lines, done-ness and its key.
+Reading a GitHub issue's fields: type, complexity, priority, acceptance criteria, `Depends on` lines, done-ness and its key.
 
 Used by `GitHubIssuesSource`; pure functions on the issue JSON as the REST API returns it.
 """
@@ -8,7 +8,7 @@ import re
 from typing import Any, get_args
 
 from fact.core.tasks.base import GITHUB_PREFIX
-from fact.core.types import Complexity, TaskType
+from fact.core.types import PRIORITIES, Complexity, Priority, TaskType
 
 READY_LABEL = "fact:ready"
 EPIC_TYPE = "epic"
@@ -67,6 +67,13 @@ def task_type(labels: list[str]) -> TaskType:
 def complexity(labels: list[str]) -> Complexity:
     value = _label_value(labels, "complexity")
     return value if value in get_args(Complexity) else "standard"  # type: ignore[return-value]
+
+
+def priority(labels: list[str]) -> Priority:
+    """Return the highest of the issue's `priority:*` labels; `medium` without one (unknown values are ignored)."""
+    prefix = "priority:"
+    values = {n[len(prefix) :].strip().lower() for n in labels if n.lower().startswith(prefix)}
+    return next((p for p in PRIORITIES if p in values), "medium")
 
 
 def is_done(issue: dict[str, Any]) -> bool:

@@ -52,6 +52,7 @@ async def test_creates_every_label_on_an_empty_repo() -> None:
 
     assert set(actions.values()) == {LabelAction.CREATED}
     assert len(actions) == len(FACT_LABELS)
+    assert {f"priority:{p}" for p in ("urgent", "high", "medium", "low")} <= actions.keys()
     assert {(lb["name"], lb["color"], lb["description"]) for lb in fake.labels} == {
         (lb.name, lb.color, lb.description) for lb in FACT_LABELS
     }

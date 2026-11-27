@@ -69,6 +69,7 @@ def _parse(path: Path, rel: str) -> _Entry:
         acceptance_criteria=_criteria(body),
         type=meta.get("type", "feature"),
         complexity=meta.get("complexity", "standard"),
+        priority=meta.get("priority") or "medium",
         depends_on=[str(d) for d in meta.get("depends_on") or []],
         path=rel,
         require_plan_approval=meta.get("require_plan_approval"),
