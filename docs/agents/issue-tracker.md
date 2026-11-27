@@ -18,7 +18,7 @@ fact's own work is planned as GitHub issues on `Kahncode/fact` (`.fact/project.y
   - Mostly a chain, with a side branch where two issues touch different files.
 - **Parents**: work bigger than one leaf becomes a parent issue with sub-issues. A parent's open sub-issues are its dependencies. Once they are closed, a parent with a work type runs as a normal task (an integration or verification pass, with its own acceptance criteria and `complexity:*`); a parent without one is closed without a run.
 - **Epics**: `type:epic` is for people; fact ignores it. Give it to every parent that holds a plan, and always to a parent of epics. A parent with work of its own carries `type:epic` and its work type; a parent with no work carries `type:epic` alone and no `complexity:*`.
-- **Dependencies between leaves**: GitHub blocked-by links. If you can't add them, write a `Depends on #3, #4` line in the body. An issue runs only once everything it depends on is closed as completed. Don't add blocked-by links from a parent to its own sub-issues: being a sub-issue already makes it one.
+- **Dependencies between leaves**: GitHub blocked-by links. If you can't add them, write a `Depends on #3, #4` line in the body. An issue runs only once everything it depends on is closed as completed. Don't add blocked-by links from a parent to its own sub-issues: being a sub-issue already makes it one. A blocker on a parent holds every issue under it, so to make a whole plan wait on other work, block its parent rather than each leaf.
 
 ## Commands
 

@@ -33,7 +33,7 @@ The issue tracker is where work starts and where its status is reported; GitHub 
 
 | Group | Labels | Set by | Meaning |
 | --- | --- | --- | --- |
-| fact | `fact:ready` | You, or the planner for leaf issues | The factory may pick this issue up (a sub-issue also needs every ancestor ready) |
+| fact | `fact:ready` | You, or the planner for leaf issues | The factory may pick this issue up (a sub-issue also needs every ancestor ready, and waits on every ancestor's dependencies) |
 | fact | `fact:planned` | The planner | Planned, not approved; a parent stays `fact:planned` until you approve its plan by setting it `fact:ready` (see `08-planning.md`) |
 | fact | `fact:needs-human` | The factory; removed by you or `fact run` | Waiting on a person; the factory will not touch the issue until a person answers. Every issue the scheduler will not start for a reason only a person can lift carries it |
 | fact | `fact:running` | The factory (retired, see Status) | A run is in progress |
