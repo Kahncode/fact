@@ -48,6 +48,7 @@ A test gives the same answer on every run, on every OS, under load:
 - Each wait that could hang (a subprocess, a workflow result, a queue) has its own short timeout, so a hang fails fast with its cause; pytest-timeout's 60 s is the last resort.
 - Network is localhost fakes only, on port 0 (the OS picks a free port). Paths come from `tmp_path`.
 - Inputs are fixed: no `now()`, random values or dict-order luck in assertions.
+- A test on a shared Temporal server reads time from the server (`await env.get_current_time()`); earlier tests have skipped its clock ahead.
 - A test that fails once without a code change is flaky: fix its cause or delete it. Never rerun until green.
 
 ## Fast
@@ -55,5 +56,5 @@ A test gives the same answer on every run, on every OS, under load:
 The suite runs on every check loop and every CI push. Guidelines, not limits:
 
 - A unit test runs well under 100 ms. One over about 1 s is a golden path, a regression or a safety test, and earns its time.
-- Expensive setup (a Temporal environment, a template git repo, a migrated database) is built once per module and copied or reset per test, as long as tests stay independent.
+- Expensive setup (a Temporal environment, a template git repo, a migrated database) is built once per module and copied or reset per test, as long as tests stay independent. A Temporal test server is shared per module, never per run.
 - A test of a real timeout or kill uses the shortest duration that still proves it.

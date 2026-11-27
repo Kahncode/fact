@@ -19,10 +19,10 @@ from fact.core.scheduler import (
 from fact.core.usage_gate import GateState, UsageCheck, UsageCheckInput
 from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.scheduler import SchedulerTick
+from temporal_env import time_skipping_env
 from temporalio import activity
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
-from temporalio.testing import ActivityEnvironment, WorkflowEnvironment
+from temporalio.testing import ActivityEnvironment
 from temporalio.worker import Worker
 
 
@@ -62,9 +62,8 @@ async def start_scheduled_run(spec: StartScheduledRunInput) -> str:
 
 async def test_tick_starts_in_order_within_the_caps() -> None:
     started.clear()
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    env = await time_skipping_env()
     async with (
-        env_cm as env,
         Worker(
             env.client,
             task_queue=CONTROL_QUEUE,

@@ -24,15 +24,15 @@ class OneGate:
     """Opens gate `g-1`, waits for it, and returns its decision with the steering it was sent."""
 
     def __init__(self) -> None:
-        self._gate: OpenGate | None = None
+        # Open before any handler runs: an update can arrive in the same activation as the start.
+        self._gate: OpenGate | None = OpenGate(
+            gate_id=GATE_ID, kind="needs_human", stage_id="needs_human", attempt=1, opened_at=workflow.now()
+        )
         self._answer: GateAnswer | None = None
         self._steering: list[str] = []
 
     @workflow.run
     async def run(self) -> list[str]:
-        self._gate = OpenGate(
-            gate_id=GATE_ID, kind="needs_human", stage_id="needs_human", attempt=1, opened_at=workflow.now()
-        )
         await workflow.wait_condition(lambda: self._answer is not None)
         self._gate = None
         await workflow.sleep(timedelta(hours=1))  # stay running, so steering and status still reach it
@@ -68,7 +68,7 @@ class _Connection:
         return self._client
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")  # one test server per module: starting one costs about half a second
 async def env() -> AsyncIterator[WorkflowEnvironment]:
     async with await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter) as e:
         yield e

@@ -17,6 +17,20 @@ from httpx import ASGITransport, AsyncClient
 if str(Path(__file__).parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).parent))
 
+import temporal_env
+
+
+@pytest.fixture(scope="module", autouse=True)
+async def _shared_temporal_server() -> AsyncIterator[None]:
+    """
+    Shut down the time-skipping server `temporal_env` started, at the end of each module.
+
+    One server per module, not per run: a test that cancels a run abandons its activity, and the test server then
+    keeps its clock from skipping for every later workflow on it.
+    """
+    yield
+    await temporal_env.shutdown()
+
 
 @pytest.fixture
 def settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Settings]:

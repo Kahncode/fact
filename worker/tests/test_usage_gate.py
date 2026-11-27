@@ -29,8 +29,8 @@ from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.scheduler import SchedulerTick
 from fact.worker.usage_gate import MIN_WAIT, RESET_MARGIN, UsageGate
 from structlog.testing import capture_logs
+from temporal_env import time_skipping_env
 from temporalio import activity
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
@@ -96,18 +96,17 @@ async def _run(
     claude: ClaudeSettings | None = None,
     environ: dict[str, str] | None = None,
 ) -> Harness:
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
-    async with env_cm as env:
-        h = Harness(env, ready)
-        gate = UsageGate(claude or ClaudeSettings(), fetch=h.fetch, environ=environ or {})
-        async with httpx.AsyncClient(transport=httpx.MockTransport(h.api)) as http:
-            worker = Worker(
-                env.client, task_queue=CONTROL_QUEUE, workflows=[SchedulerTick], activities=h.activities(http, gate)
-            )
-            # time moves only by `env.sleep`: auto-skipping would jump ahead while a tick waits on its activities
-            with env.auto_time_skipping_disabled():
-                async with worker:
-                    await body(h)
+    env = await time_skipping_env()
+    h = Harness(env, ready)
+    gate = UsageGate(claude or ClaudeSettings(), fetch=h.fetch, environ=environ or {})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(h.api)) as http:
+        worker = Worker(
+            env.client, task_queue=CONTROL_QUEUE, workflows=[SchedulerTick], activities=h.activities(http, gate)
+        )
+        # time moves only by `env.sleep`: auto-skipping would jump ahead while a tick waits on its activities
+        with env.auto_time_skipping_disabled():
+            async with worker:
+                await body(h)
     return h
 
 

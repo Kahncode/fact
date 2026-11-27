@@ -21,6 +21,7 @@ from fact.core.types import RunInput
 from fact.worker.activities.scheduler import SchedulerActivities
 from fact.worker.scheduler import SchedulerTick, ensure_schedule
 from fastapi import FastAPI
+from temporal_env import time_skipping_env
 from temporalio import activity, workflow
 from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -102,12 +103,9 @@ async def _tick(client: Client) -> TickResult:
 
 
 async def test_ticks_start_each_task_once_within_the_cap(app: FastAPI) -> None:
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    env = await time_skipping_env()
     transport = httpx.ASGITransport(app=app)
-    async with (
-        env_cm as env,
-        httpx.AsyncClient(transport=transport, base_url="http://test") as http,
-    ):
+    async with (httpx.AsyncClient(transport=transport, base_url="http://test") as http,):
         app.state.temporal = _Connection(env.client)
         acts = SchedulerActivities("http://test", http)
         async with (
@@ -133,12 +131,9 @@ async def test_ticks_start_each_task_once_within_the_cap(app: FastAPI) -> None:
 
 
 async def test_ticks_stop_restarting_a_task_after_three_failed_runs(app: FastAPI) -> None:
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
+    env = await time_skipping_env()
     transport = httpx.ASGITransport(app=app)
-    async with (
-        env_cm as env,
-        httpx.AsyncClient(transport=transport, base_url="http://test") as http,
-    ):
+    async with (httpx.AsyncClient(transport=transport, base_url="http://test") as http,):
         app.state.temporal = _Connection(env.client)
         acts = SchedulerActivities("http://test", http)  # no usage gate: OFF
         async with (

@@ -49,12 +49,12 @@ from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHan
 from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
-from standard_env import IDENTITY, OPTIONS, WORKFLOW_QUEUE, load_standard
+from standard_env import OPTIONS, WORKFLOW_QUEUE, load_standard
 from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, PR, run_input
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
+from temporal_env import terminate_if_running, time_skipping_env
 from temporalio import activity
 from temporalio.client import Client, WorkflowHandle, WorkflowHistory
-from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -271,13 +271,16 @@ async def started_standard(
     fakes: FakeActivities, workflow_id: str, run: RunInput | None = None
 ) -> AsyncIterator[tuple[WorkflowEnvironment, WorkflowHandle]]:
     """Start `Standard` on a time-skipping server; the test drives it (gates, signals) and awaits the result."""
-    env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter, identity=IDENTITY)
-    async with env_cm as env, workers(env.client, fakes, STANDARD):
+    env = await time_skipping_env()
+    async with workers(env.client, fakes, STANDARD):
         fakes.client = env.client
         handle = await env.client.start_workflow(
             STANDARD.run, run or run_input(), id=workflow_id, task_queue=WORKFLOW_QUEUE, result_type=RunResult
         )
-        yield env, handle
+        try:
+            yield env, handle
+        finally:
+            await terminate_if_running(handle)
 
 
 async def run_standard(
