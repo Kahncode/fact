@@ -195,6 +195,11 @@ async def test_success_records_harness_model_usage_and_transcript(env: Env) -> N
     assert [json.loads(line) for line in transcript.splitlines()] == MESSAGES
 
 
+async def test_step_is_named_after_its_prompt(env: Env) -> None:
+    await env.run(FakeHarness(), stage_id="checks")
+    assert (await env.step())["name"] == "implement"
+
+
 async def test_harness_error_result_is_failed_error(env: Env) -> None:
     result = await env.run(FakeHarness(_result("error_during_execution", is_error=True)), complexity="standard")
     assert result.outcome == StepOutcome.FAILED_ERROR

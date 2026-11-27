@@ -40,7 +40,8 @@ class ShellActivities:
 
     @activity.defn(name=SHELL_STEP)
     async def shell_step(self, spec: ShellStepInput) -> StepResult:
-        async with self._reporter.step(spec.run_id, spec.stage_id, StepKind.SHELL, spec.attempt) as step:
+        name = spec.check if len(spec.handle.repos) <= 1 else f"{spec.check} ({spec.repo})"
+        async with self._reporter.step(spec.run_id, spec.stage_id, StepKind.SHELL, spec.attempt, name=name) as step:
             beat = asyncio.create_task(_heartbeats(step))
             try:
                 await self._run_check(spec, step)

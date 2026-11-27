@@ -1311,6 +1311,18 @@
             ],
             "title": "Model"
           },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "queued_at": {
             "anyOf": [
               {
@@ -1436,6 +1448,17 @@
             ],
             "title": "Model"
           },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
           "outcome": {
             "anyOf": [
               {
@@ -1527,6 +1550,7 @@
           "id",
           "run_id",
           "stage_id",
+          "name",
           "kind",
           "attempt",
           "status",

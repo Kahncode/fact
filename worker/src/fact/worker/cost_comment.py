@@ -37,6 +37,11 @@ class StepCost:
     cost: Decimal | None  # None: the harness reported no cost
     partial: bool = False  # the session was cut short: tokens of the messages received
     unknown_costs: int = 0  # for totals: agent steps whose cost is None
+    name: str | None = None  # the step's name within its stage, such as `lint`; None for totals
+
+    @property
+    def label(self) -> str:
+        return f"{self.stage}:{self.name}" if self.name else self.stage
 
     @property
     def fresh_in(self) -> int:
@@ -70,6 +75,7 @@ def _step_cost(s: dict[str, Any]) -> StepCost:
         cache_write=int(s.get("cache_write_tokens") or 0),
         cost=None if cost is None else Decimal(str(cost)),
         partial=bool(s.get("usage_partial")),
+        name=s.get("name"),
     )
 
 
@@ -138,7 +144,7 @@ def _steps_table(steps: list[StepCost]) -> list[str]:
     ]
     for s in [*steps, _total(steps)]:
         attempt = f"{s.attempt} steps" if s.stage == TOTAL else str(s.attempt)
-        stage = f"{s.stage} (cut short)" if s.partial and s.stage != TOTAL else s.stage
+        stage = f"{s.label} (cut short)" if s.partial and s.stage != TOTAL else s.label
         timing = [format_duration(s.duration_s), format_duration(s.wait_s) if s.wait_s else NONE]
         lines.append(_row([stage, attempt, s.route, *timing, *_token_cells(s), _cost(s)]))
     return lines

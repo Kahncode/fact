@@ -4,7 +4,7 @@ Every step attempt writes one row with its timing, tokens and cost, plus a log f
 
 **How data flows**
 
-1. A step activity reports to the factory API when it starts and ends (one `steps` row per attempt: timings, tokens, cost, outcome, outputs). Nothing else about a step goes in the database.
+1. A step activity reports to the factory API when it starts and ends (one `steps` row per attempt: a short `name` telling apart steps that share a stage, such as the check `lint` or `test` in `checks`, or the prompt `implement` or `fix_checks`; timings, tokens, cost, outcome, outputs). Nothing else about a step goes in the database.
 2. Its log and agent transcript are files in the artifact store at `runs/<run>/<step>/<attempt>/`: `output.log`, `transcript.jsonl` and other artifacts such as diffs; the row keeps only their keys. A stopped run's handoff note is stored per run, at `runs/<run>/handoff.md`.
 3. **Live (decided 26 Nov 2026, M4, not built yet):** while the step runs, the worker sends new log and transcript text to the API about once a second; the API appends it to those artifact files and pushes it to open log panels over SSE. The upload at step end stays as a final reconcile. Today both files are uploaded only when the step ends.
 4. Every past run stays inspectable: its stages, every step attempt, and each attempt's log, transcript and artifacts.

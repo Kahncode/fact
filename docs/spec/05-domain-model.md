@@ -10,7 +10,7 @@ A project is a set of repos, and a run works on all of them at once in one works
 | Repository | One GitHub repo inside a project | URL, role (backend, mobile, web, infra), default branch, setup, test and build commands, merge order |
 | Workflow type | A Python workflow class, one or more per project | name, stage manifest, worker version (factory git SHA) |
 | Run | One Temporal workflow execution for one work item | workflow id `run-<ISSUE-KEY>-<n>`, project, issue, status, totals for time, cost and human touches |
-| Step | One activity or gate inside a run, per attempt | kind (agent, shell, github, gate, notify), attempt, start, end, duration, wait time, tokens, cost, log and transcript refs, outputs |
+| Step | One activity or gate inside a run, per attempt | kind (agent, shell, github, gate, notify), name (tells apart steps of one stage: the check or prompt), attempt, start, end, duration, wait time, tokens, cost, log and transcript refs, outputs |
 | Workspace | The per-run folder | one git worktree per repo, all on branch `fact/<ISSUE-KEY>` |
 | Change set | The PRs a run produces | one PR per touched repo, cross-linked, with a merge order |
 | Runner pool | Where a run's sandbox lives: your PC, containers, GitHub runners, Daytona | kind, concurrency cap, secrets |

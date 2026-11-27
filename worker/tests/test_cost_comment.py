@@ -45,7 +45,7 @@ RUN = {
             cost_usd="1.2345",
             **AGENT,
         ),
-        _step("checks", 1, "2026-11-25T10:12:40Z", "2026-11-25T10:13:40Z", wait_seconds=30.0),
+        _step("checks", 1, "2026-11-25T10:12:40Z", "2026-11-25T10:13:40Z", wait_seconds=30.0, name="lint"),
         _step(
             "implement",
             2,
@@ -81,7 +81,7 @@ GOLDEN = """<!-- fact:cost -->
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | prepare | 1 | — | 4s | — | — | — | — | — | — |
 | implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | — | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |
-| checks | 1 | — | 1m 00s | 30s | — | — | — | — | — |
+| checks:lint | 1 | — | 1m 00s | 30s | — | — | — | — | — |
 | implement | 2 | claude-code / claude-sonnet-5-5 | 2m 00s | — | 20,000 | — | — | 1,000 | $0.25 |
 | open_pr | 1 | — | running | — | — | — | — | — | — |
 | **Total** | 5 steps |  | 15m 34s | 30s | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |

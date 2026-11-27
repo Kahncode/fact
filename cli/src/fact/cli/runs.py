@@ -163,6 +163,7 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
     rows = [
         (
             s["stage_id"],
+            s["name"] or "-",
             str(s["attempt"]),
             s["kind"],
             s["status"],
@@ -174,7 +175,7 @@ def status(run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or
         for s in r["steps"]
     ]
     typer.echo("")
-    typer.echo(format_table(("STAGE", "#", "KIND", "STATUS", "OUTCOME", "TIME", "COST", "LINKS"), rows))
+    typer.echo(format_table(("STAGE", "NAME", "#", "KIND", "STATUS", "OUTCOME", "TIME", "COST", "LINKS"), rows))
 
 
 def _live(run_id: str) -> dict[str, Any]:
