@@ -6,6 +6,7 @@ requires-python = ">=3.15"
 dependencies = [
     "fact-core",
     "fact-sdk",
+    "filelock>=4.3",
     "httpx",
     "temporalio>=1.36.1",
 ]

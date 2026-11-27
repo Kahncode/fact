@@ -25,7 +25,6 @@ log = get_logger(__name__)
 
 API_PREFIX = "/api/v1"
 SERVER_ERROR = 500
-CONFLICT = 409
 
 
 def _refused(what: str, response: httpx.Response) -> ApplicationError:
@@ -76,18 +75,11 @@ class GateActivities:
             log.info("gate_answered", gate_id=spec.gate_id, decision=spec.decision, wait_seconds=spec.wait_seconds)
 
     async def _step(self, run_id: str, stage_id: str, attempt: int, opened_at: datetime) -> str:
-        """Create the gate's step, or find it if a retry already created it."""
+        """Create the gate's step; the API returns the row a retry already created."""
         at = opened_at.isoformat()
         body = {"stage_id": stage_id, "kind": StepKind.GATE, "attempt": attempt, "queued_at": at, "started_at": at}
         response = await self._http.post(f"{self._base}/runs/{run_id}/steps", json=body)
-        if response.status_code != CONFLICT:
-            return self._checked("create the gate step", response).json()["id"]
-        run = self._checked("read the run", await self._http.get(f"{self._base}/runs/{run_id}")).json()
-        for step in run["steps"]:
-            if (step["stage_id"], step["attempt"]) == (stage_id, attempt):
-                return step["id"]
-        msg = f"step {stage_id} attempt {attempt} conflicts, but the run has no such step"
-        raise ApplicationError(msg, non_retryable=True)
+        return self._checked("create the gate step", response).json()["id"]
 
     async def _patch(self, what: str, path: str, body: dict[str, Any]) -> None:
         self._checked(what, await self._http.patch(self._base + path, json=body))

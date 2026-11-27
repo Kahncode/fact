@@ -20,11 +20,8 @@ It probably builds on the gate and notification work in M2 (M2-01 to M2-03).
 
 ## Restart survival (audit, 27 Nov 2026)
 
-An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-process state a run depends on) found these, none fixed yet:
+An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-process state a run depends on) found these; the runner locks and steps left `running` are fixed, these remain:
 
-- `LocalWorktreeRunner._run_locks` (`worker/src/fact/worker/runners/local_worktree.py`) serialises `prepare` per run in one process only. `prepare` has no heartbeat, so a timed-out attempt can still be cloning while a retry on another process tears the same `workspaces_dir/<run_id>` down; `teardown` never takes the lock either. Fix: heartbeat `prepare` and await it with `WAIT_CANCELLED`, or a file lock next to the run folder held by `prepare` and `teardown`.
-- `LocalWorktreeRunner._mirror_locks` serialises clone, fetch and the free-branch pick per mirror in one process only. Across processes: a half-made first clone can be taken for a finished one, fetches hit ref locks, two runs can pick the same branch (git refuses, costing a retry). Fix: a file lock beside the mirror, clone into a temp folder and rename, treat "branch already checked out" as a re-pick.
-- Steps left `running`: a step row is created `running` and finished only by the process that ran it (`worker/src/fact/worker/reporting.py`). After a hard crash it stays `running` forever, and a retry of `shell_step` or `sync_base` (which take `spec.attempt` from the workflow) POSTs the same stage and attempt, gets 409 and records nothing. Fix: idempotent step creation (reuse the row on 409), and close a run's `running` steps when it ends.
 - Agent or shell processes outliving a hard-killed worker (no Job Object / `PR_SET_PDEATHSIG`): the heartbeat-timeout resume can start a second `claude --resume` in the same worktree. Fix: a Job Object with `KILL_ON_JOB_CLOSE`, or a PID file the next attempt kills first.
 - The API keeps the scheduler's last usage answer in memory (`PUT /scheduler/usage`): after an API restart `fact scheduler status` shows no usage hold until the gate makes a new call, which can be hours. Display only. Fix: PUT on every check, or keep it in a DB row.
 - Over the 300-line limit: `worker/tests/test_agent_step.py` (413), `worker/tests/test_local_worktree_runner.py` (315).

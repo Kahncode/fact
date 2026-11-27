@@ -13,9 +13,9 @@ from fact.api.run_schemas import (
     StepUpdate,
 )
 from fact.api.run_totals import recompute_totals
-from fact.core.enums import StepStatus
+from fact.core.enums import RunStatus, StepOutcome, StepStatus
 from fact.core.models import Event, Project, Run, Step
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -73,8 +73,22 @@ async def update_run(run_id: str, body: RunUpdate, session: Session) -> RunOut:
     run = await _run_or_404(session, run_id)
     for field, value in _changes(body, RUN_NULLABLE).items():
         setattr(run, field, value)
+    if run.status == RunStatus.FINISHED:
+        await _close_running_steps(session, run)
     await session.commit()
     return RunOut.model_validate(run)
+
+
+async def _close_running_steps(session: AsyncSession, run: Run) -> None:
+    """End the steps a finished run left `running` as `failed_error`: they lost their worker."""
+    stuck = (await session.scalars(select(Step).where(Step.run_id == run.id, Step.status == StepStatus.RUNNING))).all()
+    for step in stuck:
+        step.status = StepStatus.FINISHED
+        step.outcome = StepOutcome.FAILED_ERROR
+        step.ended_at = run.ended_at
+    if stuck:
+        await session.flush()
+        await recompute_totals(session, run)
 
 
 @router.get("/runs")
@@ -106,13 +120,44 @@ async def get_run(run_id: str, session: Session) -> RunDetail:
 
 
 @router.post("/runs/{run_id}/steps", status_code=status.HTTP_201_CREATED)
-async def create_step(run_id: str, body: StepCreate, session: Session) -> StepOut:
-    await _run_or_404(session, run_id)
-    step_status = StepStatus.RUNNING if body.started_at else StepStatus.QUEUED
-    step = Step(run_id=run_id, status=step_status, **body.model_dump())
-    session.add(step)
-    await _commit_unique(session, f"Step {body.stage_id} attempt {body.attempt} already exists")
-    return StepOut.model_validate(step)
+async def create_step(run_id: str, body: StepCreate, session: Session, response: Response) -> StepOut:
+    """
+    Create the step (201), or restart the row the same stage and attempt already has (200).
+
+    An activity retried after its worker died posts the same step again: it takes the row over and finishes it.
+    """
+    run = await _run_or_404(session, run_id)
+    existing = await _existing_step(session, run_id, body)
+    if existing is None:
+        step = Step(run_id=run_id, status=_initial_status(body), **body.model_dump())
+        session.add(step)
+        try:
+            await session.commit()
+        except IntegrityError:  # the same step posted at the same moment: take over the row that won
+            await session.rollback()
+            run = await _run_or_404(session, run_id)  # the rollback expired it
+            existing = await _existing_step(session, run_id, body)
+            if existing is None:
+                raise
+        else:
+            return StepOut.model_validate(step)
+    response.status_code = status.HTTP_200_OK
+    for field, value in body.model_dump().items():
+        setattr(existing, field, value)
+    existing.status, existing.outcome, existing.ended_at = _initial_status(body), None, None
+    await session.flush()
+    await recompute_totals(session, run)  # a step that was finished leaves the totals until it finishes again
+    await session.commit()
+    return StepOut.model_validate(existing)
+
+
+def _initial_status(body: StepCreate) -> StepStatus:
+    return StepStatus.RUNNING if body.started_at else StepStatus.QUEUED
+
+
+async def _existing_step(session: AsyncSession, run_id: str, body: StepCreate) -> Step | None:
+    query = select(Step).where(Step.run_id == run_id, Step.stage_id == body.stage_id, Step.attempt == body.attempt)
+    return await session.scalar(query)
 
 
 @router.patch("/steps/{step_id}")

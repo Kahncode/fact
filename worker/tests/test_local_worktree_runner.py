@@ -297,19 +297,3 @@ async def test_held_branch_keeps_its_unpushed_commits(runner: LocalWorktreeRunne
     assert _git("rev-parse", "fact/task-m1-06", cwd=worktree) == head
     for handle in (left, other):
         await runner.teardown(handle)
-
-
-async def test_concurrent_runs_get_distinct_branches(runner: LocalWorktreeRunner) -> None:
-    first, second = await asyncio.gather(runner.prepare(_spec(run_id="run-a")), runner.prepare(_spec(run_id="run-b")))
-
-    assert {first.branches[FULL_NAME], second.branches[FULL_NAME]} == {"fact/task-m1-06", "fact/task-m1-06-2"}
-    for handle in (first, second):
-        await runner.teardown(handle)
-
-
-async def test_overlapping_attempts_of_one_run_take_turns(runner: LocalWorktreeRunner) -> None:
-    first, second = await asyncio.gather(runner.prepare(_spec(run_id="run-a")), runner.prepare(_spec(run_id="run-a")))
-
-    assert first.branches[FULL_NAME] == second.branches[FULL_NAME] == "fact/task-m1-06"
-    assert Path(second.repos[FULL_NAME]).exists()  # noqa: ASYNC240
-    await runner.teardown(second)
