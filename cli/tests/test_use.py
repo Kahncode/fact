@@ -69,6 +69,17 @@ def test_pin_uses_fetched_origin(settings: Settings, source: Path, synced: list[
     assert use.current_pin(settings) == checkout
 
 
+@pytest.mark.usefixtures("synced")
+def test_pin_copies_dotenv_each_time(settings: Settings, source: Path) -> None:
+    (source / ".env").write_text("FACT_GITHUB_APP_ID=1", encoding="utf-8")
+    checkout = use.pin(settings, "main", "uv", repo=source)
+    assert (checkout / ".env").read_text(encoding="utf-8") == "FACT_GITHUB_APP_ID=1"
+
+    (source / ".env").write_text("FACT_GITHUB_APP_ID=2", encoding="utf-8")
+    use.pin(settings, "main", "uv", repo=source)  # same SHA: the checkout is kept, the secret still refreshed
+    assert (checkout / ".env").read_text(encoding="utf-8") == "FACT_GITHUB_APP_ID=2"
+
+
 def test_pin_is_idempotent_and_accepts_a_sha(
     settings: Settings, source: Path, synced: list[tuple[list[str], Path]]
 ) -> None:

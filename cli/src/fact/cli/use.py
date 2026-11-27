@@ -2,8 +2,10 @@
 `fact use <ref>`: pin the factory version that `fact dev --pinned` runs from.
 
 Fetch the factory repository (the source tree this CLI runs from), resolve `<ref>` (`origin/<ref>` first), check that
-SHA out as a detached worktree at `pinned_dir/factory/<sha>`, `uv sync --locked` in it, and write the SHA to
-`pinned_dir/current`. Agents never work there: their worktrees live under `workspaces_dir`.
+SHA out as a detached worktree at `pinned_dir/factory/<sha>`, copy the source tree's git-ignored `.env` into it,
+`uv sync --locked` in it, and write the SHA to `pinned_dir/current`. The pinned checkout is then self-contained: it
+reads its own committed `fact.yaml`, so config always matches the code that reads it. Agents never work there: their
+worktrees live under `workspaces_dir`.
 """
 
 import os
@@ -20,6 +22,7 @@ from fact.core.settings import REPO_ROOT, Settings, get_settings
 
 CURRENT_FILE = "current"
 FACTORY_SUBDIR = "factory"
+DOTENV = ".env"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 FETCH_TIMEOUT_S = 120.0
 # never wait on a credential prompt (terminal or Git Credential Manager's window): fail, and the caller retries
@@ -134,11 +137,19 @@ def latest(ref: str, repo: Path = REPO_ROOT) -> str:
     return resolve_ref(repo, ref)
 
 
+def copy_secrets(repo: Path, checkout: Path) -> None:
+    """Copy `repo/.env` into `checkout` on every pin, so a changed secret reaches the next pin; none, nothing."""
+    source = repo / DOTENV
+    if source.is_file():
+        shutil.copyfile(source, checkout / DOTENV)
+
+
 def pin(settings: Settings, ref: str, uv: str, repo: Path = REPO_ROOT) -> Path:
     """Fetch, check `ref` out under `pinned_dir/factory/<sha>`, sync it, point `current` at it; return the checkout."""
     sha = latest(ref, repo)
     checkout = factory_checkout(settings, sha)
     _checkout(repo, checkout, sha)
+    copy_secrets(repo, checkout)
     _run(sync_argv(uv), checkout)
     current_file(settings).write_text(f"{sha}\n", encoding="utf-8", newline="\n")
     return checkout

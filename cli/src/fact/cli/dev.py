@@ -11,7 +11,7 @@ import typer
 from fact.cli.follow import Follower
 from fact.cli.supervisor import INTERRUPTED, ChildSpec, emit, run_all
 from fact.cli.use import PinError, current_pin, pin
-from fact.core.settings import CONFIG_VAR, Settings, config_file, get_settings
+from fact.core.settings import Settings, get_settings
 
 TEMPORAL_UI_PORT = 8233
 IS_WINDOWS = sys.platform == "win32"
@@ -54,12 +54,12 @@ def factory_commands(
     """
     Return the API and worker processes; the worker waits for Temporal's port.
 
-    With `pinned`, they run from that checkout's venv, reading this tree's `fact.yaml` and `.env` (which a pinned
-    checkout lacks) through `FACT_CONFIG`. Either way they start without the venv activation `fact dev` may have
-    inherited, so the workspaces they create see a plain environment.
+    With `pinned`, they run from that checkout's venv and read its own `fact.yaml` and `.env` (copied by `fact use`).
+    Either way they start without the venv activation `fact dev` may have inherited, so the workspaces they create
+    see a plain environment.
     """
     python = python_argv(pinned)
-    env = {CONFIG_VAR: str(config_file().resolve())} if pinned else {}
+    env: dict[str, str] = {}
     path = deactivated_path(os.environ if environ is None else environ)
     if path is not None:
         env["PATH"] = path
