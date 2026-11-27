@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import IO
 
@@ -154,27 +154,55 @@ def first_exit(children: Sequence[Child]) -> tuple[str, int] | None:
     return None
 
 
-def _supervise(specs: Sequence[ChildSpec], width: int, children: list[Child], pumps: list[threading.Thread]) -> int:
+# Called on every poll; returns the specs of children to restart (matched by name), or None to keep them running.
+Restarter = Callable[[], Sequence[ChildSpec] | None]
+
+
+def _start_all(specs: Sequence[ChildSpec], width: int, children: list[Child], pumps: list[threading.Thread]) -> None:
     for spec in specs:
         if spec.wait_for:
             _wait_for_port(*spec.wait_for, children, PORT_TIMEOUT_S)
         _start(spec, width, children, pumps)
+
+
+def _restart(specs: Sequence[ChildSpec], width: int, children: list[Child], pumps: list[threading.Thread]) -> None:
+    """Stop the children named in `specs`, then start `specs` in their place; the others keep running."""
+    names = {s.name for s in specs}
+    stop_all([c for c in children if c.name in names])
+    children[:] = [c for c in children if c.name not in names]
+    _start_all(specs, width, children, pumps)
+
+
+def _supervise(
+    specs: Sequence[ChildSpec],
+    width: int,
+    children: list[Child],
+    pumps: list[threading.Thread],
+    restarter: Restarter | None,
+) -> int:
+    _start_all(specs, width, children, pumps)
     while (exited := first_exit(children)) is None:
+        if restarter is not None and (replacements := restarter()):
+            _restart(replacements, width, children, pumps)
         time.sleep(POLL_S)
     name, code = exited
     emit("fact", width, f"{name} exited with code {code}; stopping the others")
     return code
 
 
-def run_all(specs: Sequence[ChildSpec]) -> int:
-    """Start `specs` in order and block until one exits or Ctrl-C; return the first exit code (130 on Ctrl-C)."""
+def run_all(specs: Sequence[ChildSpec], restarter: Restarter | None = None) -> int:
+    """
+    Start `specs` in order and block until one exits or Ctrl-C; return the first exit code (130 on Ctrl-C).
+
+    `restarter`, polled while all run, may return specs to restart some children with (`fact dev --follow`).
+    """
     width = max(len(s.name) for s in [*specs, ChildSpec("fact", [])])
     children: list[Child] = []
     pumps: list[threading.Thread] = []
     code = 0
     try:
         with _stop_signals(_raise_interrupt):
-            code = _supervise(specs, width, children, pumps)
+            code = _supervise(specs, width, children, pumps, restarter)
     except KeyboardInterrupt:
         code = INTERRUPTED
     except PortTimeoutError as e:

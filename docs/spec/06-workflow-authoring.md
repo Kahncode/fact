@@ -128,7 +128,7 @@ It runs in three places:
 
 1. Open an issue against the factory project; the factory itself can do the work.
 2. The PR's CI runs unit tests plus Temporal replay tests against recorded histories of recent runs.
-3. You merge. `fact use main`, then restarting `fact dev --pinned`, starts a worker on the new version (`fact upgrade` will do both later).
+3. You merge. `fact use main`, then restarting `fact dev --pinned`, starts a worker on the new version (`fact upgrade` will do both later). `fact dev --follow main` does both by itself: when `main` moves, the upgrade is pending, nothing new starts, and once no run is active it pins and restarts the API and worker.
 4. New runs use the new version. Runs in flight stay pinned to the old worker until they finish, then it stops.
 
 In v0, if nothing is in flight, the upgrade is a plain restart.

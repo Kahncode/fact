@@ -134,3 +134,28 @@ def test_dev_pinned_without_venv_fails(settings: Settings, monkeypatch: pytest.M
 
     assert result.exit_code == 1
     assert "run `fact use` again" in result.output
+
+
+def test_dev_follow_pins_when_nothing_is_pinned_and_supervises_with_a_follower(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sha = "e" * 40
+    checkout = settings.pinned_dir / "factory" / sha
+
+    def fake_pin(_settings: Settings, ref: str, _uv: str) -> Path:
+        assert ref == "main"
+        dev.venv_python(checkout).parent.mkdir(parents=True)
+        dev.venv_python(checkout).write_text("", encoding="utf-8")
+        (checkout / "pyproject.toml").write_text("", encoding="utf-8")
+        (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
+        return checkout
+
+    monkeypatch.setattr(dev.shutil, "which", lambda name: name)
+    monkeypatch.setattr(dev, "pin", fake_pin)
+    supervised = []
+    monkeypatch.setattr(dev, "run_all", lambda _specs, restarter: supervised.append(restarter) or 130)
+
+    result = CliRunner().invoke(app, ["dev", "--follow", "main"])
+
+    assert result.exit_code == 0, result.output
+    assert supervised[0].pinned == sha

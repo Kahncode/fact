@@ -2,6 +2,7 @@
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 from fact.cli import supervisor
@@ -90,3 +91,24 @@ def test_child_env_is_added(capsys: pytest.CaptureFixture[str]) -> None:
 
     assert run_all([ChildSpec("e", show, env={"FACT_TEST_VAR": "from-spec"})]) == 0
     assert "e    | from-spec" in capsys.readouterr().out.splitlines()
+
+
+def test_restarter_replaces_named_children_and_keeps_the_others(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    starts = tmp_path / "a-starts"  # `a` adds a line each time it starts
+    keeper = [sys.executable, "-c", f"open({str(starts)!r}, 'a').write('up\\n'); import time; time.sleep(60)"]
+    replacement = [sys.executable, "-c", "print('new', flush=True); raise SystemExit(4)"]
+    restarted = []
+
+    def restarter() -> list[ChildSpec] | None:
+        if restarted or not starts.exists():  # restart once, after `a` is up
+            return None
+        restarted.append(True)
+        return [ChildSpec("b", replacement)]
+
+    code = run_all([ChildSpec("a", keeper), ChildSpec("b", SLEEPER)], restarter)
+
+    assert code == 4  # the replacement ran, and its exit ended the supervisor
+    assert starts.read_text(encoding="utf-8").splitlines() == ["up"]  # `a` was not restarted
+    assert "b    | new" in capsys.readouterr().out.splitlines()
