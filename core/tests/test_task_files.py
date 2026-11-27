@@ -47,6 +47,7 @@ def test_parses_task(tmp_path: Path) -> None:
     task = src.find("task:M1-02")
     assert task is not None
     assert (task.id, task.title, task.type, task.complexity) == ("M1-02", "Title M1-02", "chore", "trivial")
+    assert task.priority == "medium"
     assert task.depends_on == ["M1-01", "M1-03"]
     assert task.acceptance_criteria == ["first thing", "second thing"]
     assert task.path == "tasks/M1/02-x.md"
@@ -123,11 +124,15 @@ def test_validate_reports_bad_files(tmp_path: Path) -> None:
     wrong = _task(tmp_path, "M1-05")
     wrong.rename(wrong.with_name("06-wrong.md"))
     (tmp_path / "tasks" / "M1" / "07-broken.md").write_text("---\nid: M1-07\n---\n", encoding="utf-8")
+    typo = _task(tmp_path, "M1-08")
+    typo.write_text(typo.read_text(encoding="utf-8").replace("type: chore", "priority: hihg"), encoding="utf-8")
     errors = "\n".join(FileTaskSource(tmp_path).validate())
     assert "invalid status 'finished'" in errors
     assert "duplicate id M1-03" in errors
     assert "does not match its file name" in errors
     assert "07-broken.md" in errors
+    assert "08-x.md" in errors
+    assert "priority" in errors
 
 
 def test_mark_done_deletes_the_file(tmp_path: Path) -> None:

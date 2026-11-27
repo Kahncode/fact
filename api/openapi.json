@@ -429,6 +429,17 @@
             "title": "Depth",
             "type": "integer"
           },
+          "effective_priority": {
+            "default": "medium",
+            "enum": [
+              "urgent",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Effective Priority",
+            "type": "string"
+          },
           "failed_runs": {
             "default": 0,
             "title": "Failed Runs",
@@ -454,6 +465,17 @@
                 "type": "null"
               }
             ]
+          },
+          "priority": {
+            "default": "medium",
+            "enum": [
+              "urgent",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Priority",
+            "type": "string"
           },
           "project": {
             "title": "Project",

@@ -65,7 +65,13 @@ def _show_preview(preview: dict[str, Any]) -> None:
     for planned in tasks:
         task, hold = planned["task"], planned.get("hold")
         why = f"waits ({hold}): {planned['detail']}" if hold else "starts next tick"
-        typer.echo(f"  {task['task_key']:<28} {task['project']:<12} {why}")
+        typer.echo(f"  {task['task_key']:<28} {task['project']:<12} {_priority(task):<16} {why}")
+
+
+def _priority(task: dict[str, Any]) -> str:
+    """Show the task's priority, and its effective priority beside it when a task waiting on it raised it."""
+    own, effective = task.get("priority", "medium"), task.get("effective_priority", "medium")
+    return own if effective == own else f"{own} (eff. {effective})"
 
 
 @app.command("on")

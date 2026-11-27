@@ -36,6 +36,7 @@ from fact.core.scheduler import (
     ReadyTasks,
     RunRecord,
     TickResult,
+    effective_priorities,
     plan,
     plan_starts,
     run_history_hold,
@@ -76,18 +77,23 @@ def _hold(item: ReadyItem) -> Hold | None:
 
 
 async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = False) -> list[ReadyTask]:
-    """Read the project's ready tasks from its task source (`files`: on `origin/<default>`); none without one."""
+    """
+    Read the project's ready tasks from its task source (`files`: on `origin/<default>`); none without one.
+
+    A task's effective priority is raised by the project's listed tasks that wait on it (`effective_priorities`).
+    """
     try:
         async with project_tasks(settings, ref) as tasks:
             found = await tasks.source.list_ready(include_waiting=True, close_epics=close_epics) if tasks else []
     except (ConfigError, TaskReadError) as exc:
         log.warning("scheduler_skipped_project", project=ref.name, error=str(exc))
         return []
-    return [
+    ready = [
         ReadyTask(
             project=ref.name,
             task_key=r.task.key,
             task_id=r.task.id,
+            priority=r.task.priority,
             depth=r.depth,
             waiting_on=list(r.waiting_on),
             gated_by=r.gated_by,
@@ -95,6 +101,7 @@ async def _ready_in(settings: Settings, ref: ProjectRef, *, close_epics: bool = 
         )
         for r in found
     ]
+    return effective_priorities(ready)
 
 
 def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) -> ReadyTask | None:

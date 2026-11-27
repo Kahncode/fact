@@ -2,7 +2,7 @@
 GitHub Issues task source: open issues labelled `fact:ready` in one repository are tasks (`gh:owner/repo#12`).
 
 Write-backs (labels, comments, the context section between markers in the body, closing) are in `github_writes`; the
-issue's fields (type, complexity, acceptance criteria, `Depends on` lines) are read in `github_fields`.
+issue's fields (type, complexity, priority, acceptance criteria, `Depends on` lines) are read in `github_fields`.
 
 - Dependencies come from GitHub's blocked-by links, from `Depends on #n` lines in the body and from the issue's open
   sub-issues. A blocked-by or `Depends on` dependency is done when its issue is closed as completed; a sub-issue
@@ -34,6 +34,7 @@ from fact.core.tasks.github_fields import (
     is_epic,
     issue_key,
     label_names,
+    priority,
     task_type,
     unique_keys,
 )
@@ -177,6 +178,7 @@ class GitHubIssuesSource(GitHubIssueWrites):
             acceptance_criteria=acceptance_criteria(body),
             type=task_type(labels),
             complexity=complexity(labels),
+            priority=priority(labels),
             depends_on=[d for d in unique_keys(deps) if d.lower() != own.lower()],
         )
 

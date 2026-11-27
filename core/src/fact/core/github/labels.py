@@ -31,6 +31,10 @@ FACT_LABELS: tuple[Label, ...] = (
     Label("complexity:trivial", "C2E0C6", "A small, mechanical change"),
     Label("complexity:standard", "FBCA04", "A typical change"),
     Label("complexity:complex", "5319E7", "A large or risky change"),
+    Label("priority:urgent", "B60205", "Starts before every other ready task of its project"),
+    Label("priority:high", "D93F0B", "Starts before medium and low tasks of its project"),
+    Label("priority:medium", "FBCA04", "The default priority"),
+    Label("priority:low", "C2E0C6", "Starts after the other ready tasks of its project"),
 )
 
 

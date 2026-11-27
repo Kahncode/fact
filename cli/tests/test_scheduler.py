@@ -16,8 +16,15 @@ STATE = {
 }
 
 
-def _task(task_id: str) -> dict[str, object]:
-    return {"project": "fact", "task_key": f"gh:Kahncode/fact#{task_id}", "task_id": task_id}
+def _task(task_id: str, priority: str = "medium", effective: str = "medium") -> dict[str, object]:
+    key = f"gh:Kahncode/fact#{task_id}"
+    return {
+        "project": "fact",
+        "task_key": key,
+        "task_id": task_id,
+        "priority": priority,
+        "effective_priority": effective,
+    }
 
 
 WINDOW = {
@@ -29,7 +36,11 @@ WINDOW = {
 }
 PREVIEW = {
     "tasks": [
-        {"task": _task("12"), "hold": "usage", "detail": "five_hour 93% (reserve 10%) resets 2026-11-26 18:00 UTC"},
+        {
+            "task": _task("12", "low", "high"),
+            "hold": "usage",
+            "detail": "five_hour 93% (reserve 10%) resets 2026-11-26 18:00 UTC",
+        },
         {"task": _task("13"), "hold": "failure_cap", "detail": "3 failed runs in a row: start it with `fact run`"},
         {"task": _task("14"), "hold": "dependency", "detail": "waits on gh:Kahncode/fact#12"},
     ],
@@ -74,6 +85,9 @@ def test_status_previews_the_next_tick(settings: Settings, monkeypatch: pytest.M
     lines = [line for line in out.splitlines() if "gh:Kahncode/fact#" in line and "waits" in line]
     assert ["#12" in lines[0], "#13" in lines[1], "#14" in lines[2]] == [True, True, True]  # start order
     assert "failure_cap" in lines[1]
+    assert "low (eff. high)" in lines[0]
+    assert "medium" in lines[1]
+    assert "eff." not in lines[1]
 
 
 def test_no_switch_outside_dev_is_an_error(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

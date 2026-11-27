@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fact.core.github import GitHubError
 from fact.core.tasks import GitHubIssuesSource, ReadyItem, TaskSource, branch_name
-from fact.core.tasks.github_issues import acceptance_criteria, complexity, depends_on_lines, task_type
+from fact.core.tasks.github_issues import acceptance_criteria, complexity, depends_on_lines, priority, task_type
 from fake_github_issues import REPO, FakeApp, FakeGitHub
 from fake_github_issues import closed as _closed
 from fake_github_issues import issue as _issue
@@ -38,11 +38,19 @@ def test_parsing_helpers() -> None:
     assert task_type(["type:weird"]) == task_type([]) == "feature"
     assert complexity(["complexity:complex"]) == "complex"
     assert complexity([]) == "standard"
+    assert priority(["priority:low", "Priority:High"]) == "high"
+    assert priority(["priority:hihg"]) == priority([]) == "medium"
 
 
 async def test_get_reads_an_issue() -> None:
     github = FakeGitHub()
-    github.add(_issue(12, labels=("fact:ready", "type:bug", "complexity:trivial"), body=BODY.replace("\n", "\r\n")))
+    github.add(
+        _issue(
+            12,
+            labels=("fact:ready", "type:bug", "complexity:trivial", "priority:high"),
+            body=BODY.replace("\n", "\r\n"),
+        )
+    )
     github.blocked_by[12] = [_closed(5), _closed(4, repo="acme/lib")]
     source: TaskSource = _source(github)
     task = await source.get("gh:acme/app#12")
@@ -58,6 +66,7 @@ async def test_get_reads_an_issue() -> None:
     assert task.acceptance_criteria == ["`uv run pytest` passes.", "It works."]
     # blocked-by links first, then `Depends on` lines, without repeats
     assert task.depends_on == ["gh:acme/app#5", "gh:acme/lib#4", "gh:acme/app#3", "gh:acme/app#2"]
+    assert task.priority == "high"
     assert task.path is None
     assert branch_name(task.key) == "fact/gh-12"
     auth = {r.headers["Authorization"] for r in github.requests}
