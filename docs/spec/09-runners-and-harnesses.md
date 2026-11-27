@@ -59,4 +59,23 @@ A run's coding work happens in one sandbox, and trusted steps run in the control
 
 Agents commit locally and never push; the control zone pushes and opens the PRs, so the sandbox never holds GitHub credentials. In v0 the control zone and the sandbox run on the same machine, your PC: the sandbox is a worktree (later a container with the worktree mounted), so the control worker reads the branch and pushes from it directly. Agents still write the words: each agent session writes its own commit messages, and the last passing session before PRs (in `Standard`, the `learn` session, else `implement`) writes a PR title and summary as a step output, which the control zone puts at the top of the PR description. With remote pools, the sandbox exports its commits as a git bundle to object storage and the control zone pushes from that; cloning private repositories works the same way in reverse, with the control zone preparing the workspace or handing over a short-lived read-only token.
 
+**The factory orchestrates; runners do the work.** The factory side does as little as possible, so it still holds with thousands of runners.
+- **Factory side:** workflow workers, plus stateless control workers that scale horizontally and hold the factory's credentials. Factory secrets never reach a runner.
+- **Runners:** everything that touches a workspace (git, agent sessions, check commands and project `Script` steps).
+- **Long waits:** a long wait (CI, a PR's review) is a workflow timer plus a short check activity on each poll, never one activity held for the whole wait, so it holds no worker slot.
+- **Routing:** a workspace handle names the task queue of the runner that holds it, and every step on that workspace is routed to that queue.
+- **Self-contained runners (M7):** a runner lives on its own infrastructure and reaches the factory only through the API and the artifact store.
+
+**Step protocol (project `Script` steps).** The generic step activity runs the declared command in the runner, in the workspace unless the step is `workspace=False`, with these environment variables:
+- `FACT_INPUT`: a JSON file holding the step's input.
+- `FACT_RESULT`: the path where the script writes its JSON result. The framework validates the result against the declared output model.
+- `FACT_EVENTS`: an append-only JSON-lines file the script may write to, to record outputs (`{"output": {"kind": "deployment", "url": "..."}}`), notifications and progress.
+
+stdout and stderr are the step's log. The exit code is the outcome:
+- `0`: passed.
+- `2`: `needs_human`.
+- Anything else: failed.
+
+The script imports no fact library, so it can be in any language. The protocol is part of fact's version (`06-workflow-authoring.md`, Versions).
+
 **Ready for later, not built in v0**: every sandbox has its own task queue, so a run can open several sandboxes (one per repository, or per subtask) and run them in parallel as child workflows, with the control zone fanning out and joining. Planning can move to its own sandbox the same way. None of this changes how a workflow is written, only which queue its steps are sent to.

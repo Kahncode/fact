@@ -7,7 +7,8 @@ Workflows are Python code built from a small library of reusable steps. Prompts 
 | Layer | Lives in | Example change | Takes effect |
 | --- | --- | --- | --- |
 | Config and prompts | `.fact/project.yaml` and `.fact/prompts/` in the project's home repository; `.fact/repo.yaml` in each repository | Better implement prompt, new test command, cheaper model | Next step that reads it, even in a running run |
-| Step library | Activities in `fact.worker`; workflow helpers in `fact.sdk` call them by name through `fact.core.activity_contract` | New `run_e2e` step, better PR description | New activity attempts once the worker restarts |
+| Step library | The factory's step types: activities in `fact.worker`, declared in `fact.core.activity_contract` and called through `fact.sdk` | New `run_e2e` step type, better default PR template | New activity attempts once the worker restarts |
+| Project step types | `Script` steps declared in `.fact/workflows/`, their code in `.fact/steps/` (or anywhere in the repository), run in the run's runner | A deploy-preview step, the project's own PR description | New runs of the next config version |
 | Workflow code | `.fact/workflows/` in the project's home repository | Add a review stage, change a loop | New runs only; runs in flight finish on their pinned version |
 
 **Step library for v0**: `agent_step`, `shell_step`, `prepare_workspace`, `open_change_set`, `wait_for_ci`, `wait_for_pr_closed` (its step is recorded by the workflow as a gate-like step), `human_gate`, `notify`, `issue_update`. Bookkeeping activities that are not reported as steps: `mark_task_done`, `post_cost_comment`, `record_run_started`, `record_run_finished`, `teardown_workspace`. `FactWorkflow.execute` tears the workspace down when the run ends `pr_opened`, `merged`, `closed` or `abandoned`, once its work is pushed. Any other end leaves it on disk for a person, still holding its branch and unpushed commits; nothing removes it automatically. `prepare` runs once per run: called again it returns the same workspace, so a run's branches and PR never change.
@@ -23,6 +24,105 @@ Workflows are Python code built from a small library of reusable steps. Prompts 
 - **Survives a restart.** A run and its activities stay correct when a worker or process restarts and a retry lands elsewhere. State lives in Temporal, the database, the artifact store or on disk (git's own state in the worktree), never in process memory such as per-run lock dicts; coordination uses heartbeats with heartbeat timeouts, `WAIT_CANCELLED` cancellation, idempotent activities that resume partial work, and the external system's own locks (git `index.lock`).
 
 Example: a PR that conflicts with its base. The run merges the base into its branch only when GitHub reports the PR `dirty` (read by `wait_for_ci`) or refuses the merge as out of date. It then goes through the existing CI loop (sync, push, wait again). It never merges `main` because `main` moved, and it has no separate pre-PR sync path.
+
+### The workflow SDK: what the framework owns, what the project owns
+
+The framework (`fact.sdk` and the worker) runs every workflow the same way. The project writes only its software development process: which steps run, in what order, and how they loop. Agents write most workflow code, so the SDK makes the correct path the short one, and leaves out whatever a project should never touch.
+
+**Who owns what**
+
+| Framework | Project |
+| --- | --- |
+| The run lifecycle (lifecycle steps): recording the run's start and end, task reporting, stop and handoff, workspace teardown, the cost comment, run-end notifications | The graph: which steps run, their order, branches, loops and the conditions between them |
+| Activity mechanics: queues and routing, timeouts, heartbeats, retries, cancellation | Prompts, check commands, the schemas of agent answers |
+| Step records: stage ids, attempt numbers, logs and transcripts in the artifact store, tokens, cost, wall and wait time | Fix and retry counts, `max_duration` per step |
+| Payload size limits and trimming text | Where gates go and what they ask |
+| Gate mechanics: gate ids, gate notifications, task-source labels, delivering steering | Extra notifications a step sends, through the framework's notification step |
+| Workspace mechanics: prepare, branches, the teardown policy | Which repositories and which runner a step needs |
+| Push and merge mechanics, the head-SHA guard, the PR footer (run link, markers) | Merge policy, classify rules, the PR description (template and any logic, by replacing the `describe` slot) |
+| Usage pauses, budgets and caps, turning failures into outcomes, outputs, versions | The harness and model for each stage |
+
+**Shape of a workflow.**
+- **Lifecycle:** the framework owns `@workflow.run`, and runs the lifecycle steps around the project's `steps()` method.
+- **Stages:** a workflow declares its stages as class attributes, and the stage manifest is derived from them, so stage ids are never written twice.
+- **State:** the run holds the framework's state, which steps find themselves:
+  - its default workspace, prepared the first time a step needs it;
+  - its change set.
+
+  The data the project decides with flows through the steps' return values.
+- **What a project never does:** pass a workspace or the PRs around, set Temporal options, or catch Temporal exceptions.
+- **A step that does not pass** ends the run with the matching outcome, unless the step is `required=False` or the project handles its result.
+
+```python
+from fact.sdk import Agent, ChangeSet, Checks, Script, Workflow, workflow
+
+@workflow("standard")
+class Standard(Workflow):
+    implement = Agent("Implement", prompt="implement")
+    checks    = Checks("Lint and test", ["lint", "test"], fix=implement, max_fixes=3)
+    review    = Agent("Review", prompt="review", answer=Review)
+    address   = Agent("Address review", prompt="address_review", then=checks)
+    learn     = Agent("Learn", prompt="learn", required=False)
+    ship      = ChangeSet(ci_fix=Agent("Fix CI", prompt="fix_ci"), max_ci_fixes=2, on_green="merge")
+
+    async def steps(self) -> None:
+        await self.implement()
+        await self.checks()
+        review = await self.review()
+        if review.answer.needs_changes:
+            await self.address(context=review)
+        await self.learn()
+        await self.ship(criteria=review.answer.criteria)
+```
+
+**Step types.** A step type comes from the factory's step library (`Agent`, `Checks`, `ChangeSet`, gates, notifications) or is one of the project's own (`Script`). Composite library steps (`Checks`, `ChangeSet`) carry the framework's opinions, such as merging the base only when GitHub says the PR cannot merge. They are built from named slots, and the project can replace any slot with a step type of its own:
+- `ChangeSet`: `describe` (PR title and body), `open`, `ci_fix`, `merge`.
+- `Checks`: `run`, `fix`, `on_exhausted`.
+
+**Project step types run outside the factory.** A `Script` step is declared with a label, a command, typed input and output (Pydantic models), and optionally `max_duration` and `workspace=False`:
+
+```python
+deploy = Script("Deploy preview", run=["uv", "run", ".fact/steps/deploy.py"],
+                input=DeployIn, output=DeployOut, max_duration="40m")
+result = await self.deploy(DeployIn(env="dev"))   # a DeployOut
+```
+
+A Script step runs in the run's runner, through one generic framework activity, never inside a factory process. It uses the project's own environment, can be in any language and gets only the runner's secrets. The step protocol (`09-runners-and-harnesses.md`) is how it talks to fact.
+
+**Outputs.**
+- **Outcomes are generic:** a run ends `succeeded`, `nothing_to_do`, `failed`, `needs_human` or `stopped`.
+- **What the run produced** is a list of typed outputs, which its steps record: a change set (with its own state: open, merged, closed), tasks created in the tracker, a deployment and its URL. A run that found nothing to do has none.
+- **A workspace is a resource** a step asks for and the framework releases, so a workflow without one (triage, tracker updates) is valid.
+- **External tools:** fact triggers them and watches them; it never reimplements them.
+
+**What a project workflow may use.** Only `fact.sdk`, one public module that also provides the `workflow` decorator. A project workflow never imports `temporalio`, `fact.core` or `fact.sdk` internals, and never calls `execute_activity`.
+
+**Versions.**
+- fact and the SDK share one semver version, starting at 0.1.0. Before 1.0, a breaking change moves the minor version and a compatible one moves the patch.
+- A change that affects projects moves the version: the public `fact.sdk` API, the step protocol, the `.fact/project.yaml` schema, prompt variables. A committed SDK API snapshot, checked by a test like `api/openapi.json`, makes a forgotten bump fail.
+- A project declares the fact range it works with in `.fact/project.yaml` (`fact: "~0.1"`).
+- The project config version is the git tree hash of `.fact/`: workflows, prompts and config, nothing else.
+- A run's version is `<fact version>+<.fact tree hash>`, and the run also records the home SHA it loaded from. Benchmarks compare config versions with this id.
+- A run's activities run on workers of the same factory build as its workflow.
+- When `.fact/` changes on a project's default branch, the running worker loads the new config version alongside the old one and sends new runs to it; the old one serves its runs until they end. A new fact version still needs a restart.
+- No git tags before 1.0.
+
+**Checking a project's workflows.** `python -m fact.sdk.check .fact` checks that:
+- the workflows import, and import only what they may;
+- the declared range includes this fact version;
+- the stage manifest can be derived;
+- every prompt and script they name exists;
+- the step declarations are valid.
+
+It runs in three places:
+- In the project's CI, through a reusable GitHub Action or the same `uvx` command, against fact `main` until 1.0.
+- Inside a run whose change touches `.fact/`, as one of its checks, in the workspace and against the fact version that change targets. In fact's own repository that is the workspace's own SDK, so a run can make a breaking change to the SDK and the workflows that use it together.
+- When the worker loads a config version. A version that fails is refused:
+  - its runs do not start, and the scheduler holds its tasks (`incompatible`);
+  - an `error` notification says why;
+  - every other project and version keeps running.
+
+**Several machines.** Steps reach a workspace through its handle, which names the task queue its runner polls, so no workflow code assumes one machine. Moving a run to other compute is therefore a change in which queue its steps go to. Running across several runners, rebuilding a lost workspace and several workspaces per run come in M7 (`tasks/backlog.md`, Distributed runs).
 
 **Changing a workflow**
 

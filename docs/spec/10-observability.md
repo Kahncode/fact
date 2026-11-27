@@ -21,7 +21,8 @@ The `events` table and `POST /runs/{id}/events` from M0 were never used; M4 remo
 | Tokens and cost (USD) | step attempt, run, project, day | From the harness only; a cost the harness did not report is unknown (NULL), never estimated |
 | Attempts and loops | step, run | e.g. implement ran 3 times before tests passed |
 | Human touches | run | Gate answers, extra instructions, manual commits; the metric Warp tracks |
-| Outcome | run | pr_opened (the workflow ended with its PRs open, without waiting for a merge; `Standard` waits since M2-05), needs_human (gave up, such as an exhausted checks loop), no_changes (succeeded with nothing to change: no PR, issue closed; not built yet), merged, closed, abandoned, failed, stopped (a person stopped the run with `fact stop`, or rejected its plan at the `approve_plan` gate) |
+| Outcome | run | Generic, whatever the workflow: succeeded, nothing_to_do (succeeded with nothing to do: no output), failed, needs_human (gave up, such as an exhausted checks loop), stopped (a person stopped the run, or rejected its plan at the `approve_plan` gate). Today's change-set outcomes (pr_opened, merged, closed, abandoned) become states of the change set output |
+| Outputs | run | What the run produced, recorded by its steps: a change set and its state, tasks created, a deployment and its URL, and so on |
 
 Logs and transcripts are kept forever for now, like rows; a retention setting can come later if storage grows.
 

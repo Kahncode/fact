@@ -39,9 +39,15 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 
 - M3 Classify and auto-merge.
 - M4 UI: the web app covers everything a person does.
-- M5: `@fact` comment trigger, multi-repo change sets.
-- M6 Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner.
-- M7 Hardening: Docker runner, Codex harness, budgets that pause runs.
+- M5: Ability to be deployed and factory running on real backend. Runners can still use the local compute, but the factory is in the cloud and self managed. This means already moving to supabase for persistence, handling auth.
+- M5.3: Queue based processing, this app is inherently a queue system. So the polling of task tracker should be slow poll, things should be pushed to a queue and later processed, but the queue should be able to be reordered also for new urgency. So there's some design to do. Relevant after we move to a "real backend".
+- M6: Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner. Also how do ideas in the backlog become planned and how does the planner work with the humans to get that done?
+- M7: Using some sort of serverless compute for runners. Docker runner, even for local development, ideally.
+- M5.2: Multi tenancy, organizations, projects, teams, etc.
+- M8: Landing page, self-updatding. Brand book & voice. Taking its own screenshots and animations. Stretch: generated logos on a schedule (#72). 
+- M9: Billing for third party users, Also billing for my clients when i run projects on their behalf inside of sofact
+- M10: `@fact` comment trigger, multi-repo change sets.
+- M11: Hardening: Codex harness, budgets that pause runs.
 - Linear task source: in the spec, not yet scheduled.
 
 ## Ideas
@@ -123,3 +129,12 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 - Self-improvement: follow-up runs that open PRs on fact's own workflows and prompts, listing the regressions they address.
 - Usage windows over time, with alerts at 80% and 100%.
 - Insights per organization, once organizations exist.
+
+## Distributed runs (M7)
+
+The SDK refactor (27 Nov 2026) builds only the seam for this: a workspace handle names the queue its runner polls, and steps reach the workspace through that handle. Not built:
+- Self-contained runners: a runner worker on its own infrastructure, polling its own queue, reaching the factory only through the API and the artifact store.
+- Workspace recovery: when a runner disappears (its queue is no longer polled, so a timeout fires), prepare the workspace again on another runner from the pushed branches and carry on with the same run.
+- Several named workspaces in one run, each on its own runner.
+- Work-in-progress refs: push to `refs/fact/<run>/wip` after each step that commits, so a lost machine loses no commits.
+
