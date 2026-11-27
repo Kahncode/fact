@@ -4,6 +4,7 @@ Read a PR's reviews and a PR's or an issue's comments through the GitHub REST AP
 `review_event` decides from the PR and its reviews (oldest first, as GitHub lists them): merged or closed first; then
 the first `CHANGES_REQUESTED` review the run has not handled; then an `APPROVED` review on the current head, by anyone,
 not handled yet and newer than every `CHANGES_REQUESTED` review (a reviewer who accepts fact's push-back approves).
+Reviews submitted before `since` (the run's start) are ignored: on a PR an earlier run opened, that run answered them.
 Comments are people's only: bots, fact's own replies among them, are left out.
 """
 
@@ -44,10 +45,20 @@ def _by_person(item: dict[str, Any]) -> bool:
     return bool(user) and user.get("type") != BOT
 
 
+def _after(review: dict[str, Any], since: datetime | None) -> bool:
+    submitted = review.get("submitted_at")
+    return since is None or not submitted or _time(submitted) >= since
+
+
 def review_event(
-    pr: PRRef, body: dict[str, Any], reviews: list[dict[str, Any]], handled: Collection[int]
+    pr: PRRef,
+    body: dict[str, Any],
+    reviews: list[dict[str, Any]],
+    handled: Collection[int],
+    since: datetime | None = None,
 ) -> ReviewEvent | None:
     """Return the first event on the PR (`body` is its `GET /pulls/{n}`), or None while nothing needs the run."""
+    reviews = [r for r in reviews if _after(r, since)]
     head = str((body.get("head") or {}).get("sha") or pr.head_sha)
     current = pr.model_copy(update={"head_sha": head})
     if body.get("merged"):

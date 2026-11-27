@@ -249,7 +249,7 @@ class Standard(FactWorkflow):
         if merged == "out_of_date":  # take the base and CI; the new head needs a new approval
             return await self._take_base() or await self._ci_loop(self.prs)
         if merged == "refused":
-            workflow.logger.warning("%s is approved, but GitHub refused the merge: waiting for a person", event.pr.url)
+            await self.notify_merge_refused(event)
         return None  # merged: the next wait sees it
 
     async def _review_round(self, event: ReviewEvent) -> RunResult | None:

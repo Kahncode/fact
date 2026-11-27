@@ -1,6 +1,7 @@
 """wait_for_review against a mocked GitHub API: merges and closes, approvals on the head only, unhandled change requests."""
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -20,8 +21,11 @@ MERGED = {"state": "closed", "merged": True, "head": {"sha": HEAD}}
 CLOSED = {"state": "closed", "merged": False, "head": {"sha": HEAD}}
 
 
-def _review(review_id: int, state: str, commit: str = HEAD, login: str = "octo") -> dict:
-    return {"id": review_id, "state": state, "commit_id": commit, "user": {"login": login, "type": "User"}}
+def _review(
+    review_id: int, state: str, commit: str = HEAD, login: str = "octo", at: str = "2026-11-02T10:00:00Z"
+) -> dict:
+    user = {"login": login, "type": "User"}
+    return {"id": review_id, "state": state, "commit_id": commit, "user": user, "submitted_at": at}
 
 
 def _pr(number: int) -> PRRef:
@@ -62,11 +66,15 @@ def private_key() -> str:
 
 
 async def _wait(
-    fake: FakeGitHub, private_key: str, prs: list[PRRef], handled: tuple[int, ...] = ()
+    fake: FakeGitHub,
+    private_key: str,
+    prs: list[PRRef],
+    handled: tuple[int, ...] = (),
+    since: datetime | None = None,
 ) -> list[ReviewEvent]:
     github = GitHubApp(1, private_key, api_url="https://gh.test", transport=httpx.MockTransport(fake.handle))
     activities = ReviewWaitActivities(github, poll_interval_s=0)
-    spec = WaitForReviewInput(run_id="r", prs=prs, handled_reviews=list(handled))
+    spec = WaitForReviewInput(run_id="r", prs=prs, handled_reviews=list(handled), reviews_since=since)
     return await ActivityEnvironment().run(activities.wait_for_review, spec)
 
 
@@ -107,6 +115,18 @@ async def test_a_change_request_is_returned_once_and_an_approval_must_come_after
     accepted = FakeGitHub(polls={7: [OPEN]}, reviews={7: [*reviews, _review(3, "APPROVED", login="carol")]})
     (event,) = await _wait(accepted, private_key, [_pr(7)], (2,))
     assert (event.kind, event.review_id) == ("approved", 3)
+
+
+async def test_on_a_reused_pr_reviews_from_before_the_run_are_ignored(private_key: str) -> None:
+    old = _review(1, "CHANGES_REQUESTED", at="2026-10-01T10:00:00Z")  # an earlier run answered it
+    reviews = [old, _review(2, "APPROVED", at="2026-10-02T10:00:00Z")]
+    started = datetime(2026, 11, 1, tzinfo=UTC)
+    stale = FakeGitHub(polls={7: [OPEN, CLOSED]}, reviews={7: reviews})
+    assert _kinds(await _wait(stale, private_key, [_pr(7)], since=started)) == [(7, "closed")]
+
+    fresh = FakeGitHub(polls={7: [OPEN]}, reviews={7: [*reviews, _review(3, "CHANGES_REQUESTED")]})
+    (event,) = await _wait(fresh, private_key, [_pr(7)], since=started)
+    assert (event.kind, event.review_id) == ("changes_requested", 3)
 
 
 async def test_a_transient_error_only_skips_a_poll(private_key: str) -> None:

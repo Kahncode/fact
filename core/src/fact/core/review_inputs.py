@@ -24,6 +24,8 @@ class WaitForReviewInput(_Input):
     run_id: str
     prs: list[PRRef]  # the PRs still open; each is polled until something happens on it
     handled_reviews: list[int] = Field(default_factory=list)  # review ids the run acted on: never returned again
+    # reviews submitted before this are ignored: on a PR an earlier run opened, earlier runs answered them
+    reviews_since: datetime | None = None
 
 
 class ReviewEvent(_Input):

@@ -5,7 +5,8 @@ Waiting for review as a mixin of `FactWorkflow`, GitHub's review flow (`07-refer
 review requesting changes to the workflow; a PR fact merges is seen merged by the next wait. `wait_for_review` waits until something happens on the open PRs and returns it, at most one event per PR: `merged`,
 `closed`, `approved` (an `APPROVED` review on the PR's head) or `changes_requested` (a `CHANGES_REQUESTED` review).
 Every review it returns is added to `handled_reviews`, workflow state that survives worker restarts, so the same
-review never starts a second round or a second merge attempt. All of a run's waits share `REVIEW_TIMEOUT` (30 days).
+review never starts a second round or a second merge attempt; reviews submitted before the run started are ignored,
+so a new run on a PR an earlier run opened does not answer that run's reviews again. All of a run's waits share `REVIEW_TIMEOUT` (30 days).
 `review_reply` runs one round's conversation (`converse` with the `review_reply` prompt) over the review and every
 comment since fact last pushed or last replied; `request_review` asks the reviewer to look again.
 
@@ -31,7 +32,7 @@ with workflow.unsafe.imports_passed_through():
         ReviewEvent,
         WaitForReviewInput,
     )
-    from fact.core.enums import RunOutcome, StepOutcome
+    from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
     from fact.core.gates import NOTE_MAX_CHARS, GateAnswer, GateDecision, OpenGate
     from fact.core.types import PRRef, RunResult, limit_text
     from fact.sdk.converse import Conversation, comments_text
@@ -103,7 +104,12 @@ class ReviewWaitSteps:
         if self._review_deadline is None:
             self._review_deadline = workflow.now() + REVIEW_TIMEOUT
         left = max(self._review_deadline - workflow.now(), MIN_WAIT)
-        spec = WaitForReviewInput(run_id=self.input.run_id, prs=list(prs), handled_reviews=list(self.handled_reviews))
+        spec = WaitForReviewInput(
+            run_id=self.input.run_id,
+            prs=list(prs),
+            handled_reviews=list(self.handled_reviews),
+            reviews_since=workflow.info().start_time,  # a reused PR's older reviews were earlier runs' to answer
+        )
         try:
             events = await self._activity(WAIT_FOR_REVIEW, spec, list[ReviewEvent], max_duration=left)
         except ActivityError as exc:
@@ -149,6 +155,14 @@ class ReviewWaitSteps:
             await self._activity(REQUEST_REVIEW, spec, type(None))
         except ActivityError as exc:
             workflow.logger.warning("request_review failed for %s: %s", pr.url, exc.cause or exc)
+
+    async def notify_merge_refused(self: FactWorkflow, event: ReviewEvent) -> None:
+        """Tell a person an approved PR did not merge (branch protection, say): the run waits for them, once per review."""
+        pr = event.pr
+        title = f"{self.input.task.key}: {pr.url} is approved, but GitHub refused the merge"
+        body = f"@{event.reviewer} approved `{pr.head_sha}`. Merge or close the PR yourself; the run waits for it."
+        workflow.logger.warning("%s is approved, but GitHub refused the merge: waiting for a person", pr.url)
+        await self.notify(NotificationKind.PRS_READY, title, body, pr.url, key=f"merge_refused:{event.review_id}")
 
     async def _end_review(
         self: FactWorkflow, gate: OpenGate, step_id: str | None, decision: GateDecision, note: str
