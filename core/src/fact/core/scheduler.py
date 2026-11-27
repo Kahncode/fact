@@ -10,7 +10,8 @@ deletes it at start when a dev Temporal database still has it.
 `plan` orders every candidate and says why each one waits, if it does; `plan_starts` is what the tick starts and
 `fact scheduler status` previews the same `plan`. Both are pure and deterministic. Each project's candidates are
 ordered on their own, by effective priority (`effective_priorities`), then dependency depth, then id; the projects
-take turns (in name order) for the shared `concurrency.max_runs`, each offering its next task.
+take turns (in name order), each offering its next task, and each fills only its own runner pool's
+`max_concurrent_runs`.
 """
 
 import re
@@ -35,7 +36,7 @@ class Hold(StrEnum):
     DEPENDENCY = "dependency"  # a dependency is not done
     PARENT = "parent"  # an ancestor (parent issue) is not marked ready: its label gates the task
     FAILURE_CAP = "failure_cap"  # its last `concurrency.max_failed_runs` runs failed: a person restarts it
-    CAP = "cap"  # `concurrency.max_runs` or the project's `max_runs` is reached
+    CAP = "cap"  # the project's runner pool is at its `max_concurrent_runs`
     USAGE = "usage"  # a Claude usage window is inside its reserve
 
 
@@ -62,16 +63,14 @@ class ReadyTask(_Model):
 class ProjectLoad(_Model):
     project: str
     active: int  # runs queued, running or waiting
-    max_runs: int
+    max_concurrent_runs: int  # its runner pool's cap
 
 
 class ReadyTasks(_Model):
-    """What `find_ready` returns: the candidates, and how many runs are active against each cap."""
+    """What `find_ready` returns: the candidates, and each project's active runs against its pool's cap."""
 
     tasks: list[ReadyTask] = Field(default_factory=list)
     projects: list[ProjectLoad] = Field(default_factory=list)
-    active: int = 0  # all projects together
-    max_runs: int = 2
 
 
 class PlannedTask(_Model):
@@ -166,21 +165,19 @@ def _held_detail(task: ReadyTask) -> str:
 
 
 class _Slots:
-    """The free slots under `concurrency.max_runs` and each project's `max_runs`, taken as `plan` gives them out."""
+    """The free slots of each project's runner pool, taken as `plan` gives them out."""
 
     def __init__(self, ready: ReadyTasks, usage_full: str) -> None:
-        self.max_runs = ready.max_runs
-        self.free = ready.max_runs - ready.active
-        self.per_project = {p.project: p.max_runs - p.active for p in ready.projects}
+        self.caps = {p.project: p.max_concurrent_runs for p in ready.projects}
+        self.free = {p.project: p.max_concurrent_runs - p.active for p in ready.projects}
         self.usage_full = usage_full
 
     def take(self, task: ReadyTask) -> PlannedTask:
-        if self.free <= 0:
-            return PlannedTask(task=task, hold=Hold.CAP, detail=f"max_runs {self.max_runs} reached")
-        if self.per_project.get(task.project, 0) <= 0:
-            return PlannedTask(task=task, hold=Hold.CAP, detail=f"project {task.project} max_runs reached")
-        self.free -= 1
-        self.per_project[task.project] -= 1
+        if self.free.get(task.project, 0) <= 0:
+            cap = self.caps.get(task.project, 0)
+            detail = f"project {task.project} max_concurrent_runs {cap} reached"
+            return PlannedTask(task=task, hold=Hold.CAP, detail=detail)
+        self.free[task.project] -= 1
         return PlannedTask(task=task, hold=Hold.USAGE if self.usage_full else None, detail=self.usage_full)
 
 
@@ -199,9 +196,8 @@ def plan(ready: ReadyTasks, usage_full: str = "") -> list[PlannedTask]:
     Every candidate in start order with the reason it waits, if any.
 
     Each project's tasks are ordered on their own by effective priority, then dependency depth, then id. The projects
-    take turns in name order, each offering its next task, so one project's priorities never take a slot from
-    another. The overall and per-project caps apply in that order; `usage_full` (why the usage gate holds) holds every
-    task the caps would let start.
+    take turns in name order, each offering its next task; each project fills only its own runner pool's slots.
+    `usage_full` (why the usage gate holds) holds every task the caps would let start.
     """
     queues: dict[str, deque[ReadyTask]] = {}
     for task in sorted(ready.tasks, key=lambda t: (t.project, _order(t))):

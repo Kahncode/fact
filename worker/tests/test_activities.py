@@ -10,7 +10,7 @@ from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
 from fact.worker.activities.shell import ShellActivities, ShellStepInput
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalWorktreeRunner
+from fact.worker.runners import LocalRunner
 from httpx import AsyncClient
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
@@ -64,12 +64,12 @@ def reporter(client: AsyncClient, tmp_path: Path) -> StepReporter:
 
 @pytest.fixture
 def shell(settings: Settings, reporter: StepReporter) -> ShellActivities:
-    return ShellActivities(LocalWorktreeRunner(settings), reporter)
+    return ShellActivities(LocalRunner(settings), reporter)
 
 
 @pytest.fixture
 async def handle(settings: Settings, remote: Path, reporter: StepReporter, run_id: str) -> WorkspaceHandle:
-    runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri())
+    runner = LocalRunner(settings, remote_url=lambda _n: remote.as_uri())
     repo = RepoCheckout(full_name=FULL_NAME, default_branch="main", branch="fact/t")
     spec = WorkspaceSpec(run_id=run_id, task_key="task:M1-07", repos=[repo])
     return await ActivityEnvironment().run(WorkspaceActivities(runner, reporter).prepare_workspace, spec)

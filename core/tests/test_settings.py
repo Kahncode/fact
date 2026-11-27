@@ -52,14 +52,14 @@ def test_yaml_loading(tmp_path: Path) -> None:
 
 
 def test_env_overlay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "fact.yaml").write_text("api:\n  port: 1111\nconcurrency:\n  sandboxes: 3\n", encoding="utf-8")
+    (tmp_path / "fact.yaml").write_text("api:\n  port: 1111\nconcurrency:\n  max_failed_runs: 5\n", encoding="utf-8")
     (tmp_path / "fact.dev.yaml").write_text("api:\n  port: 2222\n", encoding="utf-8")
     assert Settings().api.port == 1111  # no overlay for env local
     monkeypatch.setenv("FACT_ENV", "dev")
     s = Settings()
     assert s.env is AppEnv.DEV
     assert s.api.port == 2222
-    assert s.concurrency.sandboxes == 3
+    assert s.concurrency.max_failed_runs == 5
 
 
 def test_env_var_overrides_yaml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

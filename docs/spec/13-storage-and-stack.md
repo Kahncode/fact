@@ -13,7 +13,7 @@ Everything runs as three local processes (Temporal, the API, the worker) with tw
 | Factory DB | SQLite with plain SQLAlchemy 2 async (aiosqlite driver) and Alembic, without the template's database service, so agents write standard SQLAlchemy; Postgres-compatible types only | Supabase Postgres (M5), through the session pooler |
 | Logs and transcripts | A small artifact store interface with a local-folder backend in v0; the DB stores only links | Supabase Storage (M5), S3 API; runners upload through presigned URLs |
 | Structured logging | `structlog`, set up as in the template (request id in logs and the `X-Request-ID` header, one log line per request, console locally, JSON elsewhere, optional Cloud Logging fields, per-env level), with `run_id` bound to every log line | OpenTelemetry export |
-| Runner pool: your PC | `git worktree`; Docker CLI for containers (v1) | GitHub-hosted runners, Daytona |
+| Runner pool: your PC | `git clone`; Docker CLI for containers (v1) | GitHub-hosted runners, Daytona |
 | Harnesses | Claude Code CLI (`claude -p --output-format stream-json`), Codex CLI (`codex exec --json`) | OpenCode and Pi adapters |
 | Linear | GraphQL API over `httpx`, polling every 30 s | Webhooks |
 | GitHub | `gh` CLI for git and PR operations, REST API over `httpx` for checks, labels and comments | GitHub App with webhooks (M5) |

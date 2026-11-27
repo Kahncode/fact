@@ -6,7 +6,7 @@ flowchart LR
     TS["Task source: task files, GitHub Issues"] --> API
     API -->|start runs, answer gates| T["Temporal server"]
     T --> CW["Worker: control zone"]
-    CW --> SB["Run sandbox: git worktrees"]
+    CW --> SB["Run sandbox: git clones"]
     CW -->|push, PRs, comments| GH["GitHub"]
     CW -->|events, logs, time, cost| API
     SB -->|events, logs, time, cost| API

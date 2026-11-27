@@ -57,9 +57,6 @@ class ApiSettings(_Section):
 
 
 class ConcurrencySettings(_Section):
-    sandboxes: int = 2
-    planners: int = 1
-    max_runs: int = Field(default=2, ge=1)  # runs queued, running or waiting at once, all projects together
     scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # dev only: the API's tick loop runs this often
     max_failed_runs: int = Field(default=3, ge=1)  # the scheduler stops restarting a task after this many failed runs
 
@@ -208,10 +205,6 @@ class Settings(BaseSettings):
     @property
     def workspaces_dir(self) -> Path:
         return self.data_dir / "workspaces"
-
-    @property
-    def repos_dir(self) -> Path:
-        return self.data_dir / "repos"
 
     @property
     def pinned_dir(self) -> Path:

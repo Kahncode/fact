@@ -25,15 +25,13 @@ from structlog.testing import capture_logs
 
 
 @pytest.fixture
-def caps() -> tuple[int, int]:
-    return 4, 3  # concurrency.max_runs, acme's max_runs
+def cap() -> int:
+    return 3  # acme's runner pool max_concurrent_runs
 
 
 @pytest.fixture
-def settings(
-    tmp_path: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch, caps: tuple[int, int]
-) -> Iterator[Settings]:
-    config = write_config(tmp_path, checkout, max_runs=caps[0], project_max_runs=caps[1])
+def settings(tmp_path: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch, cap: int) -> Iterator[Settings]:
+    config = write_config(tmp_path, checkout, project_cap=cap)
     monkeypatch.setenv(CONFIG_VAR, str(config))
     reset_settings()
     yield Settings()
@@ -56,11 +54,10 @@ async def test_nothing_ready_touches_neither_temporal_nor_the_gate(app: FastAPI,
 
 
 @pytest.mark.parametrize(
-    ("caps", "started"),
+    ("cap", "started"),
     [
-        ((4, 3), ["run-task-M2-01-1", "run-task-M2-02-1", "run-task-M1-02-1"]),  # plan order: depth, then id
-        ((4, 2), ["run-task-M2-01-1", "run-task-M2-02-1"]),  # acme's max_runs
-        ((1, 3), ["run-task-M2-01-1"]),  # concurrency.max_runs
+        (3, ["run-task-M2-01-1", "run-task-M2-02-1", "run-task-M1-02-1"]),  # plan order: depth, then id
+        (1, ["run-task-M2-01-1"]),  # acme's pool is full
     ],
 )
 async def test_tick_starts_in_plan_order_within_the_caps(app: FastAPI, client: AsyncClient, started: list[str]) -> None:

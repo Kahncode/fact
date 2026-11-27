@@ -33,7 +33,7 @@ ExecOutput = ExecLine | ExecExit
 @dataclass(frozen=True)
 class RunnerCapabilities:
     name: str
-    isolation: str  # "none" for local-worktree, "container" for docker
+    isolation: str  # "none" for local, "container" for docker
     runs_as_user: bool = True
     supports_resume: bool = True
 
@@ -60,8 +60,8 @@ class Runner(Protocol):
         """Remove the workspace. Safe to call twice."""
         ...
 
-    async def fetch(self, full_name: str) -> None:
-        """Update the `origin/*` branches the repository's workspaces see, such as before merging the base."""
+    async def fetch(self, handle: WorkspaceHandle, full_name: str) -> None:
+        """Update the `origin/*` branches of the workspace's checkout of `full_name`, such as before merging the base."""
         ...
 
     def capabilities(self) -> RunnerCapabilities: ...

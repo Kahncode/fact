@@ -6,11 +6,10 @@ Every registered activity needs an `ActivitySpec` in `fact.core.activity_contrac
 join the project's worker deployment version (`deployments.py`), so a run pinned to that version runs its activities
 on workers of the same factory build as its workflow. Every activity runs inside `HeartbeatInterceptor`.
 
-The runner pool's cap holds across versions: every version's workspace worker takes its slots from one `PoolSlots`,
-so the process runs at most the pool's cap of workspace activities whatever the number of loaded projects.
+The queues only route work; they cap nothing. How many runs go at once is the runner pool's `max_concurrent_runs`,
+which the scheduler and `POST /runs/start` enforce, and each run's workspace steps run one after another.
 """
 
-import asyncio
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -20,16 +19,7 @@ from fact.worker.heartbeats import HeartbeatInterceptor
 from fact.worker.loader import ProjectWorkflows
 from temporalio import activity
 from temporalio.client import Client
-from temporalio.worker import (
-    CustomSlotSupplier,
-    FixedSizeSlotSupplier,
-    SlotMarkUsedContext,
-    SlotPermit,
-    SlotReleaseContext,
-    SlotReserveContext,
-    Worker,
-    WorkerTuner,
-)
+from temporalio.worker import Worker
 
 type Activity = Callable[..., Any]
 
@@ -47,66 +37,22 @@ def by_zone(activities: Sequence[Activity]) -> dict[Zone, list[Activity]]:
     return zones
 
 
-class PoolSlots(CustomSlotSupplier):
-    """
-    A runner pool's activity slots, shared by the workspace workers of every project version.
-
-    A worker reserves a slot before it polls, so a full pool stops every version's worker from taking work; waiters
-    get slots in the order they asked. An idle worker holds its slot until its poll comes back empty (one long poll,
-    about a minute), which is why each workspace worker keeps one poll open at a time.
-    """
-
-    def __init__(self, cap: int) -> None:
-        self._free = asyncio.Semaphore(cap)
-
-    async def reserve_slot(self, ctx: SlotReserveContext) -> SlotPermit:  # noqa: ARG002 - Temporal's signature
-        await self._free.acquire()
-        return SlotPermit()
-
-    def try_reserve_slot(self, ctx: SlotReserveContext) -> SlotPermit | None:  # noqa: ARG002 - Temporal's signature
-        return None  # eager activities start only on the workflow's own queue, never on a runner's
-
-    def mark_slot_used(self, ctx: SlotMarkUsedContext) -> None:
-        pass
-
-    def release_slot(self, ctx: SlotReleaseContext) -> None:  # noqa: ARG002 - Temporal's signature
-        self._free.release()
-
-
-def _pool_tuner(slots: PoolSlots) -> WorkerTuner:
-    unused = FixedSizeSlotSupplier(1)  # a workspace worker runs no workflows, local activities or Nexus tasks
-    return WorkerTuner.create_composite(
-        workflow_supplier=unused, activity_supplier=slots, local_activity_supplier=unused, nexus_supplier=unused
-    )
-
-
 def activity_workers(
     client: Client,
     project: ProjectWorkflows,
     activities: Sequence[Activity],
     *,
     workspace_queue: str,
-    workspace_slots: PoolSlots | None = None,
 ) -> list[Worker]:
-    """
-    Return the control and workspace workers of `project`'s version; `workspace_queue` is the runner's queue.
-
-    `workspace_slots` is the runner pool's cap: pass the same `PoolSlots` for every project version.
-    """
+    """Return the control and workspace workers of `project`'s version; `workspace_queue` is the runner's queue."""
     zones = by_zone(activities)
     common: dict[str, Any] = {
         "deployment_config": deployment_config(project),
         "interceptors": [HeartbeatInterceptor()],
     }
-    pool: dict[str, Any] = {}
-    if workspace_slots is not None:
-        pool = {"tuner": _pool_tuner(workspace_slots), "max_concurrent_activity_task_polls": 1}
-    options: dict[Zone, dict[str, Any]] = {
-        "control": {"task_queue": CONTROL_QUEUE},
-        "workspace": {"task_queue": workspace_queue, **pool},
-    }
+    queues: dict[Zone, str] = {"control": CONTROL_QUEUE, "workspace": workspace_queue}
     return [
-        Worker(client, activities=fns, **options[zone], **common)
+        Worker(client, activities=fns, task_queue=queues[zone], **common)
         for zone, fns in zones.items()
         if fns  # a worker needs at least one activity
     ]
