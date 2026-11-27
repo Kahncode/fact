@@ -19,7 +19,7 @@ merge_method: squash
 # Where runs execute, and how many at once (queued, running or waiting for CI or review): the only concurrency cap.
 runner_pool:
   kind: local # this machine; each run clones its repositories into its own workspace
-  max_concurrent_runs: 2
+  max_concurrent_runs: 1
 # Harness and model per agent step: rules are "<complexity>.<stage>" with "*" wildcards. Most specific wins:
 # a step override, then <complexity>.<stage>, <complexity>.*, *.<stage>, then default. Unset fields fall through.
 routing:
