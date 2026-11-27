@@ -1,4 +1,4 @@
-"""merge_change_set against a mocked GitHub API: merged, refused or out of date (stops the rest), errors."""
+"""merge_change_set against a mocked GitHub API: merged, refused or out of date (stops the rest), errors, CI guard."""
 
 import json
 from dataclasses import dataclass, field
@@ -33,6 +33,10 @@ class FakeGitHub:
     merges: list[tuple[int, dict]] = field(default_factory=list)
     state_reads: int = 0  # reads of a refused PR's `mergeable_state`
     stale_reads: int = 0  # first reads after a refusal that still describe the previous head
+    heads: dict[int, str] = field(default_factory=dict)  # a PR's head on GitHub, when not the one CI passed on
+    check_runs: list[dict] = field(
+        default_factory=lambda: [{"name": "ci", "status": "completed", "conclusion": "success"}]
+    )
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -40,6 +44,10 @@ class FakeGitHub:
             return httpx.Response(200, json={"id": 7, "account": {"login": "acme"}})
         if path == "/app/installations/7/access_tokens":
             return httpx.Response(201, json={"token": TOKEN, "expires_at": "2099-01-01T00:00:00Z"})
+        if path.endswith("/check-runs"):
+            return httpx.Response(200, json={"total_count": len(self.check_runs), "check_runs": self.check_runs})
+        if path.endswith("/status"):
+            return httpx.Response(200, json={"statuses": []})
         if request.method == "GET":
             return self._pull(int(path.split("/")[-1]))
         number = int(path.split("/")[-2])
@@ -52,7 +60,8 @@ class FakeGitHub:
     def _pull(self, number: int) -> httpx.Response:
         """Answer the PR: whether it is merged, before a merge; its scripted `mergeable_state` once refused."""
         if not any(n == number for n, _ in self.merges):
-            return httpx.Response(200, json={"merged": number in self.merged, "mergeable": None})
+            head = {"sha": self.heads.get(number, f"sha{number}")}
+            return httpx.Response(200, json={"merged": number in self.merged, "mergeable": None, "head": head})
         if self.stale_reads > 0:  # GitHub still describes the previous head
             self.stale_reads -= 1
             body = {"merged": False, "mergeable": True, "mergeable_state": "clean", "head": {"sha": "old"}}
@@ -129,3 +138,22 @@ async def test_a_pr_already_merged_is_skipped(private_key: str) -> None:
 async def test_a_stale_answer_about_the_previous_head_is_read_again(private_key: str) -> None:
     fake = FakeGitHub(statuses={7: 405}, states=["dirty"], stale_reads=1)  # "clean", but about an older head
     assert await _merge(fake, private_key, [_pr(7)]) == "out_of_date"
+
+
+async def test_a_head_that_moved_after_ci_is_not_merged(private_key: str) -> None:
+    fake = FakeGitHub(heads={7: "pushed-later"})
+    assert await _merge(fake, private_key, [_pr(7), _pr(8)]) == "refused"
+    assert fake.merges == []
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        {"name": "ci", "status": "completed", "conclusion": "failure"},
+        {"name": "ci", "status": "in_progress", "conclusion": None},
+    ],
+)
+async def test_a_head_whose_ci_is_not_green_is_not_merged(private_key: str, check: dict) -> None:
+    fake = FakeGitHub(check_runs=[check])
+    assert await _merge(fake, private_key, [_pr(7)]) == "refused"
+    assert fake.merges == []

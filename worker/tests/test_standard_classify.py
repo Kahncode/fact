@@ -21,7 +21,7 @@ async def test_a_signal_routes_to_review_and_the_session_gets_the_context() -> N
     fakes = FakeActivities(signals=[SCHEMA], ci_failures=1)
     result, _ = await run_standard(fakes, "run-classify-signal")
 
-    assert result.outcome == RunOutcome.MERGED  # merging still ignores the route until auto-merge exists
+    assert result.outcome == RunOutcome.MERGED  # by the person, after the review
     assert len(fakes.of(CLASSIFY_SIGNALS)) == 1  # once, after CI is green, not after the failed CI
     session = fakes.of(AGENT_STEP)[-1]
     assert (session.stage_id, session.prompt_name) == ("classify", "classify")

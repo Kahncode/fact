@@ -5,6 +5,8 @@ Classify as a mixin of `FactWorkflow`: route a change set whose CI is green to `
 and security, `fact.sdk.classification.decide` combines them, and `label_change_set` puts `fact:auto-merge` or
 `fact:needs-review` on each PR and a `## Review` section in its description; that step's outputs hold the
 classification. Signals that cannot be read, or a session with no valid answer, route to `human_review`.
+`route_to_review` relabels a change set `fact:needs-review` when fact does not merge it after all (auto-merge off for
+the project, or GitHub refused the merge), adding why to its reasons.
 
 `ClassifySteps` uses the workflow's `input`, `handle`, `assumptions`, `spec_ambiguous`, `_change_set`, `agent`,
 `next_attempt`, `note_outcome` and `_control`.
@@ -57,6 +59,15 @@ class ClassifySteps:
         workflow.logger.info("classified %s: %s", classification.route, "; ".join(classification.reasons))
         await self.label_change_set(prs, classification)
         return classification
+
+    async def route_to_review(
+        self: FactWorkflow, prs: Sequence[PRRef], classification: Classification, reason: str
+    ) -> Classification:
+        """Send a change set fact will not merge to `human_review` after all: relabel its PRs, `reason` added."""
+        reasons = [*classification.reasons, reason]
+        review = classification.model_copy(update={"route": "human_review", "reasons": reasons})
+        await self.label_change_set(prs, review)
+        return review
 
     async def _classify_signals(self: FactWorkflow) -> tuple[list[ClassifySignal], list[str]]:
         run = self.input

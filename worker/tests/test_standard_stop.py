@@ -96,7 +96,7 @@ async def test_stop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
 
 
 async def test_stop_in_review_keeps_the_pr_for_the_next_run() -> None:
-    fakes = ReviewWaits()
+    fakes = ReviewWaits(merges=False)
     async with started_standard(fakes, "run-stop-review") as (_, handle):
         await _at_stage(handle, REVIEW_STAGE)
         await handle.cancel(reason="")

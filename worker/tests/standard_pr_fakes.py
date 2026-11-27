@@ -42,7 +42,7 @@ class FakePRSteps:
     ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
     fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
     pr_state: PRState = "merged"  # how `wait_for_pr_closed` says each PR ended
-    merges: bool = False  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
+    merges: bool = True  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
     merge_script: list[MergeResult] = field(default_factory=list)  # first `merge_change_set` results, before `merges`
     sync_script: list[SyncScript] = field(default_factory=list)  # first `sync_base` results, then `up_to_date`
     signals: list[ClassifySignal] = field(default_factory=list)  # what `classify_signals` raises
