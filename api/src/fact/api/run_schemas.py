@@ -31,6 +31,7 @@ class RunUpdate(BaseModel):
 
 class StepCreate(BaseModel):
     stage_id: str
+    name: str | None = Field(default=None, max_length=100)
     kind: StepKind
     attempt: int = Field(default=1, ge=1)
     queued_at: datetime | None = None
@@ -69,6 +70,7 @@ class StepOut(BaseModel):
     id: str
     run_id: str
     stage_id: str
+    name: str | None
     kind: str
     attempt: int
     status: str

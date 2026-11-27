@@ -27,9 +27,12 @@ async def _make_run(client: AsyncClient, **overrides: str) -> dict[str, Any]:
     return response.json()
 
 
-async def _make_step(client: AsyncClient, run_id: str, stage: str = "implement", attempt: int = 1) -> dict[str, Any]:
+async def _make_step(
+    client: AsyncClient, run_id: str, stage: str = "implement", attempt: int = 1, name: str | None = None
+) -> dict[str, Any]:
     body = {
         "stage_id": stage,
+        "name": name,
         "kind": "agent",
         "attempt": attempt,
         "queued_at": T0.isoformat(),
@@ -101,7 +104,7 @@ async def test_list_runs_filters(client: AsyncClient) -> None:
 
 async def test_steps_lifecycle_and_order(client: AsyncClient) -> None:
     run = await _make_run(client)
-    step = await _make_step(client, run["id"])
+    step = await _make_step(client, run["id"], name="implement")
     assert step["status"] == "running"
     await _make_step(client, run["id"], stage="tests")
     dup = await client.post(
@@ -110,7 +113,7 @@ async def test_steps_lifecycle_and_order(client: AsyncClient) -> None:
     assert dup.status_code == HTTPStatus.CONFLICT
     await _finish(client, step["id"], 5, "0.10", log_ref="runs/x/log", outputs={"k": 1})
     detail = (await client.get(f"/api/v1/runs/{run['id']}")).json()
-    assert [s["stage_id"] for s in detail["steps"]] == ["implement", "tests"]
+    assert [(s["stage_id"], s["name"]) for s in detail["steps"]] == [("implement", "implement"), ("tests", None)]
     assert detail["steps"][0]["outcome"] == "passed"
     assert detail["steps"][0]["log_ref"] == "runs/x/log"
     assert detail["steps"][0]["outputs"] == {"k": 1}

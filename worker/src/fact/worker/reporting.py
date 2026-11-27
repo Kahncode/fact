@@ -144,6 +144,8 @@ class StepReporter:
         attempt: int,
         harness: str | None = None,
         model: str | None = None,
+        *,
+        name: str | None = None,
     ) -> AsyncIterator[StepContext]:
         """
         Report one step attempt.
@@ -157,7 +159,7 @@ class StepReporter:
         log_path.unlink(missing_ok=True)  # a fresh attempt never appends to an old file
         ctx = StepContext(self, run_id, stage_id, attempt, log_path)
         started = _now()
-        ctx.step_id = await self._create_step(run_id, stage_id, kind, attempt, harness, model, started)
+        ctx.step_id = await self._create_step(run_id, stage_id, kind, attempt, harness, model, started, name=name)
         try:
             with bind_run(run_id, ctx.step_id):
                 try:
@@ -197,9 +199,12 @@ class StepReporter:
         harness: str | None,
         model: str | None,
         started: datetime,
+        *,
+        name: str | None = None,
     ) -> str | None:
         body = {
             "stage_id": stage_id,
+            "name": name,
             "kind": kind,
             "attempt": attempt,
             "queued_at": started.isoformat(),

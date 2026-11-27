@@ -135,7 +135,13 @@ class AgentActivities:
     async def agent_step(self, spec: AgentStepInput) -> StepResult:
         route = choose(spec.complexity, spec.stage_id, spec.override, self._settings.routing)
         reporter = self._reporter.step(
-            spec.run_id, spec.stage_id, StepKind.AGENT, spec.attempt, harness=route.harness, model=route.model
+            spec.run_id,
+            spec.stage_id,
+            StepKind.AGENT,
+            spec.attempt,
+            harness=route.harness,
+            model=route.model,
+            name=spec.prompt_name,
         )
         progress = _Progress()
         try:

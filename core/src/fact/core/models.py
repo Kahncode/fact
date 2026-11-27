@@ -97,6 +97,7 @@ class Step(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
     stage_id: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str | None] = mapped_column(String(100))  # tells steps of one stage apart: `lint`, `fix_checks`
     kind: Mapped[str] = mapped_column(String(20))
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[str] = mapped_column(String(20), default=StepStatus.QUEUED)

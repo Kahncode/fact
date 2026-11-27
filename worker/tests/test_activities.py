@@ -107,6 +107,17 @@ async def test_passing_check(shell: ShellActivities, run_id: str, handle: Worksp
     assert result.log_ref is not None
 
 
+@pytest.mark.parametrize(("repos", "name"), [(1, "lint"), (2, f"lint ({FULL_NAME})")])
+async def test_check_step_is_named_after_its_check(  # noqa: PLR0913, PLR0917
+    shell: ShellActivities, client: AsyncClient, run_id: str, handle: WorkspaceHandle, repos: int, name: str
+) -> None:
+    if repos > 1:  # a run with several repositories names the repository too
+        handle = handle.model_copy(update={"repos": {**handle.repos, "acme/other": handle.root}})
+    await ActivityEnvironment().run(shell.shell_step, _input(run_id, handle, "lint", stage_id="checks"))
+    steps = (await client.get(f"/api/v1/runs/{run_id}")).json()["steps"]
+    assert [s["name"] for s in steps if s["stage_id"] == "checks"] == [name]
+
+
 async def test_failing_check_stops_and_keeps_output(
     shell: ShellActivities, client: AsyncClient, run_id: str, handle: WorkspaceHandle
 ) -> None:
