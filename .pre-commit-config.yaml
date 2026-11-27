@@ -36,3 +36,13 @@ repos:
         language_version: python3 # use the Python 3 interpreter pre-commit provides
         types: [python]
         stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      # Package dependencies and import rules (`[tool.importlinter]` in pyproject.toml); checks the whole graph.
+      - id: lint-imports
+        name: lint-imports
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false

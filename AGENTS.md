@@ -25,7 +25,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 fact/
 ├── AGENTS.md, CLAUDE.md   instructions (CLAUDE.md is the @AGENTS.md shim)
 ├── fact.yaml              global settings and project registry
-├── pyproject.toml         uv workspace root, ruff/black/pytest config
+├── pyproject.toml         uv workspace root, ruff/black/pytest/import-linter config
 ├── core/                  fact.core: settings, logging, DB models, migrations, artifact store, shared types
 ├── api/                   fact.api: FastAPI app
 ├── worker/                fact.worker: Temporal workers and activities
@@ -60,6 +60,7 @@ Skills and subagents are edited only under `.agents/`. There is no cross-tool st
 | CLI            | Typer                                          | `fact` command                                                             |
 | Settings       | pydantic-settings + `fact.yaml`                | Layered config, `FACT_*` env overrides                                     |
 | Lint / format  | ruff (`select = ALL`), black (line length 120) | Enforced by pre-commit                                                     |
+| Import rules   | import-linter (`[tool.importlinter]`)          | Package boundaries checked statically, in pre-commit and CI                |
 | Tests          | pytest, pytest-asyncio (auto mode), pytest-timeout (60 s) | Per-package `tests/`; a deadlocked test fails with its stack       |
 
 See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
@@ -94,6 +95,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Regenerate the OpenAPI snapshot `api/openapi.json` (after an intended API change; `api/tests/test_openapi_compat.py` fails until you do) | `uv run python scripts/openapi_snapshot.py` |
 | Lint (autofix)          | `uv run ruff check . --fix`                     |
 | Format                  | `uv run black .`                                |
+| Check package dependencies and import rules | `uv run lint-imports`       |
 | Install git hooks       | `uv run pre-commit install --install-hooks`     |
 
 **Prerequisites:** Python 3.15 and uv; the Temporal CLI (`temporal`) on PATH for `fact dev`. Copy `.env.example` to `.env` for local secrets.
@@ -103,6 +105,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 ## Key patterns and conventions
 
 - Packages share the `fact.*` namespace; dependencies point inward: `api`, `worker`, `sdk`, `cli` depend on `core`, and `worker` also on `sdk`.
+- Package dependencies and import rules are verified statically by import-linter (`[tool.importlinter]` in `pyproject.toml`, `uv run lint-imports`, run by pre-commit and CI): the layers above, `api`/`cli`/`worker` independent of each other, clients never importing `fact.sdk`, and `FileTaskSource` imported only inside `fact.core.tasks`. Project workflows (`.fact/workflows/`, loaded by path) are checked by `sdk/tests/test_project_workflow_imports.py`: only `fact.sdk` and `fact.core`. A new boundary rule goes in as a contract, not just prose.
 - Temporal: workflows are deterministic and orchestrate only; every side effect is an activity.
 - Large data (logs, transcripts, diffs) goes to the artifact store; Temporal payloads carry references.
 - Project workflows import the step library from `fact.sdk` and subclass its workflow base class (`fact.sdk.workflow.FactWorkflow`).
@@ -188,7 +191,7 @@ Single-context, with `docs/spec/05-domain-model.md` as the glossary and the deci
 
 - No file over 300 lines; split if larger.
 - No function over 50 lines; extract helpers.
-- `ruff`, `black` and `pytest` must pass before committing.
+- `ruff`, `black`, `pytest` and `lint-imports` must pass before committing.
 
 ### 3. Git workflow
 
@@ -211,9 +214,10 @@ Before you commit:
 uv run ruff check . --fix
 uv run black .
 uv run pytest
+uv run lint-imports
 ```
 
-All three must pass. Then update the context: this file, `docs/spec/` and the package READMEs, wherever your change made them wrong.
+All four must pass. Then update the context: this file, `docs/spec/` and the package READMEs, wherever your change made them wrong.
 
 ### ALWAYS DO
 
@@ -221,7 +225,7 @@ All three must pass. Then update the context: this file, `docs/spec/` and the pa
 - Treat `docs/spec/` as the target application, not the code today: parts of it may not be built yet, and the code is the truth for what exists. Your issue may have been written before the spec was last updated; where they disagree, follow the spec for the design and the issue for what to build in this task. Never build spec beyond your task's scope, and never change the spec to match the code.
 - Keep `docs/spec/` and package READMEs in sync with significant changes.
 - Ask before refactoring more than 50 lines at once.
-- Run ruff, black and pytest before committing.
+- Run ruff, black, pytest and lint-imports before committing.
 
 ### NEVER DO
 

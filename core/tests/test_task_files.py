@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from fact.core.settings import REPO_ROOT
-from fact.core.tasks import FileTaskSource
+from fact.core.tasks.files import FileTaskSource
 
 TEMPLATE = """---
 id: {id}

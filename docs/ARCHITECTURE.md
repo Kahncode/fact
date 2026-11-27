@@ -57,7 +57,7 @@ graph TD
 | fact.yaml | `@fact.yaml` | Exists | Global settings and project registry (one project: `fact`, home `Kahncode/fact`) |
 | scripts | `scripts/` | Exists | Python dev scripts; today only `scripts/tests/` (tests for the `.claude/hooks` scripts). The task loop was retired in M2-14: run every ready task with `fact dev` plus `fact scheduler on`. Every script is Python |
 | Agent tooling | `.agents/` | Exists | Canonical skills (`.agents/skills/`) and subagent definitions (`.agents/agents/`); the SessionStart hook `@.claude/hooks/project_dot_agents.py` projects them into the gitignored `.claude/skills` and `.claude/agents` (see `docs/decisions.md`) |
-| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, pytest (20 min step timeout); PRs on ubuntu, main on ubuntu and windows |
+| CI | `@.github/workflows/ci.yaml` | Exists | On push to main and PRs: `uv sync --locked`, ruff, black `--check`, `lint-imports`, pytest (20 min step timeout); PRs on ubuntu, main on ubuntu and windows |
 | Work items | GitHub issues on `Kahncode/fact`, `tasks/` | Exists | fact's work is `fact:ready` issues since M2-12; `tasks/` keeps `backlog.md`, `README.md` (the task-file format for `task_source: files` projects) and the last bootstrap file task, M2-14 |
 | Design spec | `docs/spec/` | Exists | Design, one file per section |
 
@@ -96,7 +96,7 @@ graph TD
 
 **Task files** (`@core/src/fact/core/tasks/files.py`; tests in `@core/tests/test_task_files.py`):
 
-- `FileTaskSource(root, folder="tasks")` reads `tasks/<milestone>/<NN>-<slug>.md` into `Task` models. Implements `TaskSource` (write-backs only log). Sync methods: `all()`, `find(key)`, `status(key)`, `all_deps_done(task)`, `ready()`, `validate() -> list[str]`, `mark_done(worktree, key)`, `depths()` (dependency depth per task key, for the scheduler's order). Only `fact.core.tasks` constructs it (through `source_for`); other code imports it only in tests. The task branch name comes from the module-level `fact.core.tasks.branch_name(key)`.
+- `FileTaskSource(root, folder="tasks")` reads `tasks/<milestone>/<NN>-<slug>.md` into `Task` models. Implements `TaskSource` (write-backs only log). Sync methods: `all()`, `find(key)`, `status(key)`, `all_deps_done(task)`, `ready()`, `validate() -> list[str]`, `mark_done(worktree, key)`, `depths()` (dependency depth per task key, for the scheduler's order). Only `fact.core.tasks` constructs it (through `source_for`); other code imports it only in tests, from `fact.core.tasks.files` (the package does not re-export it; import-linter contract `file-task-source`). The task branch name comes from the module-level `fact.core.tasks.branch_name(key)`.
 - The optional front matter field `require_plan_approval` becomes `Task.require_plan_approval` (`None` when absent: the project decides).
 - Statuses are not on the `Task` model; read them with `status(key)`. `mark_done` deletes the task's file: a finished file task is removed, not marked (remote sources such as GitHub Issues will mark theirs done).
 - A dependency whose file is missing counts as done if its number is below the highest remaining task in its milestone, or its milestone is below the highest milestone present. `validate()` therefore accepts such ids and cannot catch typos below that bound; an id above it (M1-99 when M1-19 is highest) is an error.
@@ -230,6 +230,7 @@ Implemented choices are in effect now; the rest are specified in `docs/spec/13-s
 | pydantic-settings + `fact.yaml` | Layered config with `FACT_*` overrides; frozen settings avoid mutation after load | In use |
 | structlog | One `run_id` on every line, including third-party stdlib logs | In use |
 | ruff (`select = ALL`), black (120), pre-commit | Enforced style; CI runs ruff, black and pytest on Linux and Windows | In use |
+| import-linter | Package dependencies and import rules as contracts (`[tool.importlinter]` in `pyproject.toml`), checked by `lint-imports` in pre-commit and CI | In use |
 | pytest, pytest-asyncio (auto) | Per-package `tests/` | In use |
 | Temporal | Durable workflows; deterministic workflow code, side effects only in activities; a Temporal Schedule instead of a cron or background loop for the scheduler | In use (dev server via `fact dev`; worker on `control` and `sandbox` queues and per-project `wf-<project>` queues with Worker Deployment Versioning, pinned; Schedule `fact-scheduler`) |
 | FastAPI, Pydantic v2 | Plain routers, typed models | In use (health, projects, runs, artifacts, run start, gates, steering and stop, notifications, scheduler) |

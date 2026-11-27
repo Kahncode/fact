@@ -25,6 +25,7 @@ dev = [
     "fact-sdk",
     "fact-cli",
     "pytest-timeout>=2.4.0",
+    "import-linter>=2.17",
 ]
 
 [tool.uv.sources]
@@ -63,6 +64,40 @@ extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]
 ".agents/skills/*/*.py" = ["INP001", "T201", "S603", "S607", "PLW1510"] # standalone skill scripts
 ".fact/workflows/*.py" = ["INP001"] # project workflows are loaded by path, not imported as a package
 "scripts/*.py" = ["INP001", "T201"] # standalone development scripts that print
+
+# Package dependencies and import rules, checked by `uv run lint-imports` (pre-commit and CI).
+# A new boundary rule goes in here as a contract, not only as prose in AGENTS.md.
+[tool.importlinter]
+root_packages = ["fact.core", "fact.api", "fact.worker", "fact.sdk", "fact.cli"]
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+id = "layers"
+name = "Dependencies point inward: api, cli, worker over sdk over core; api, cli and worker are independent"
+type = "layers"
+layers = [
+    "fact.api | fact.cli | fact.worker",
+    "fact.sdk",
+    "fact.core",
+]
+
+[[tool.importlinter.contracts]]
+id = "clients-no-sdk"
+name = "Clients call workflow handlers by name from fact.core.gates and never import fact.sdk"
+type = "forbidden"
+source_modules = ["fact.api", "fact.cli"]
+forbidden_modules = ["fact.sdk"]
+
+[[tool.importlinter.contracts]]
+id = "file-task-source"
+name = "Only fact.core.tasks imports FileTaskSource; everything else goes through source_for"
+type = "forbidden"
+source_modules = ["fact.api", "fact.cli", "fact.sdk", "fact.worker", "fact.core.*"]
+forbidden_modules = ["fact.core.tasks.files"]
+# `fact.core.*` covers `fact.core.tasks` too: its package and `source_for` are the ones allowed in.
+ignore_imports = ["fact.core.tasks.** -> fact.core.tasks.files"]
+# Callers import `fact.core.tasks`, which imports `files`; only a direct import is forbidden.
+allow_indirect_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "api/tests", "worker/tests", "sdk/tests", "cli/tests", "scripts/tests"]
