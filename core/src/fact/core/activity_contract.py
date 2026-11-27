@@ -10,7 +10,7 @@ from typing import Any, Literal
 
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
-from fact.core.types import Complexity, PRRef, RouteOverride, Task, WorkspaceHandle
+from fact.core.types import Complexity, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
 from pydantic import BaseModel, ConfigDict, Field
 
 CONTROL_QUEUE = "control"  # holds the GitHub App and the API; workspace, PR and bookkeeping steps
@@ -27,6 +27,7 @@ POST_COST_COMMENT = "post_cost_comment"
 WAIT_FOR_CI = "wait_for_ci"
 WAIT_FOR_PR_CLOSED = "wait_for_pr_closed"
 MERGE_CHANGE_SET = "merge_change_set"
+SYNC_BASE = "sync_base"
 RECORD_RUN_STARTED = "record_run_started"
 RECORD_RUN_FINISHED = "record_run_finished"
 RECORD_RUN_WAITING = "record_run_waiting"
@@ -42,6 +43,9 @@ Check = Literal["lint", "test", "build", "setup"]
 TaskEvent = Literal["run_started", "gate_opened", "gate_answered", "prs_opened", "merged", "closed", "stopped"]
 PRState = Literal["merged", "closed"]  # how a PR left review: `wait_for_pr_closed` returns one per PR
 MergeMethod = Literal["squash", "merge", "rebase"]
+# how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
+# base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
+MergeResult = Literal["merged", "out_of_date", "refused"]
 # a reason to want a person's review that `classify_signals` finds with no LLM (`06-workflow-authoring.md`, Classify)
 SignalName = Literal["schema_change", "api_change", "api_breaking", "always_review", "task_closed"]
 
@@ -144,6 +148,15 @@ class MergeChangeSetInput(_Input):
     run_id: str
     prs: list[PRRef]  # merged in this order, each only at its `head_sha`
     method: MergeMethod = "squash"
+
+
+class SyncBaseInput(_Input):
+    run_id: str
+    handle: WorkspaceHandle
+    repos: list[RepoCheckout]  # each worktree in `handle.repos` merges `origin/<default_branch>` into its branch
+    stage_id: str = "sync_base"
+    attempt: int = 1
+    verify_only: bool = False  # after a resolve session: conclude its merge, but never start a new one
 
 
 class RunStartedInput(_Input):

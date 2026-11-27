@@ -270,6 +270,8 @@ def test_standard_stage_manifest() -> None:
         {"id": "open_pr", "label": "Open PR", "kind": "github", "loops_to": None},
         {"id": "wait_for_ci", "label": "Wait for CI", "kind": "github", "loops_to": "fix_ci"},
         {"id": "fix_ci", "label": "Fix CI", "kind": "agent", "loops_to": "open_pr"},
+        {"id": "sync_base", "label": "Merge base branch", "kind": "shell", "loops_to": None},
+        {"id": "resolve_conflicts", "label": "Resolve conflicts", "kind": "agent", "loops_to": "sync_base"},
         {"id": "wait_for_review", "label": "Wait for review", "kind": "gate", "loops_to": None},
         {"id": "needs_human", "label": "Needs a person", "kind": "gate", "loops_to": None},
     ]
