@@ -128,10 +128,8 @@ It runs in three places:
 
 1. Open an issue against the factory project; the factory itself can do the work.
 2. The PR's CI runs unit tests plus Temporal replay tests against recorded histories of recent runs.
-3. You merge. `fact use main`, then restarting `fact dev --pinned`, starts a worker on the new version (`fact upgrade` will do both later). `fact dev --follow main` does both by itself: when `main` moves, the upgrade is pending, nothing new starts, and once no run is active it pins and restarts the API and worker.
-4. New runs use the new version. Runs in flight stay pinned to the old worker until they finish, then it stops.
-
-In v0, if nothing is in flight, the upgrade is a plain restart.
+3. You merge. `fact use main` pins the new version and `fact dev` starts a worker generation on it next to the old ones; `fact dev --follow main` does both by itself when `main` moves, without waiting for runs to end (`14-dogfooding-and-safety.md`, Upgrading while it runs).
+4. New runs use the new version. Runs in flight stay pinned to the old generation until they finish, then its worker stops.
 
 ### Per-project workflows and triage
 
@@ -157,8 +155,8 @@ Each project has its own catalog of workflows, and a triage step picks one for e
 - `python -m fact.worker` loads each registered project: it resolves the home repository's default branch SHA (`git ls-remote`), clones the repository detached at that SHA into `pinned_dir/projects/<project>/<sha>` (reused when present) and imports `.fact/workflows/*.py` (files starting with `_` are skipped) under module names unique to the project and SHA. A project that fails to load is logged with the failing file and skipped; the others still start.
 - Each project is one worker deployment named `wf-<project>`, polled on task queue `wf-<project>`. The build id is the version id `<factory SHA, 12 chars>+<home SHA>` (it fits the 64-character `worker_version` column; a factory that is not a git checkout is `unknown`). The default behaviour is `PINNED`, and on start the worker makes its version the deployment's current one, so new runs go to it; startup fails if it cannot.
 - Every run records its version: `FactWorkflow.execute` reads the build id from `workflow.info().get_current_deployment_version()` and passes it to `record_run_started`, which stores `worker_version` and `home_sha`.
-- One worker process runs only the newest version. After a restart on new code, runs pinned to an older version wait for a worker of that version, and their worker is gone, so `fact stop` cannot end them (see above): stop them by hand and restart them. Running several versions side by side (`fact upgrade`) comes later.
-- `fact dev --follow <ref>` upgrades by itself: once `<ref>` moves, the upgrade is pending, nothing new starts, and when no run is active it pins `<ref>` and restarts the API and worker. `--on commit` (the default) upgrades on every new commit; `--on version` upgrades only when the fact version (semver) at `<ref>` differs from the pinned one.
+- Several versions run side by side: one worker process per worker generation, kept while Temporal reports any of its versions `DRAINING`, so a run pinned to an older version always has its worker, across restarts and reboots too (`14-dogfooding-and-safety.md`, Upgrading while it runs). Today one worker process runs only the newest version, and runs pinned to an older one stall after a restart on new code.
+- `fact dev --follow <ref>` upgrades by itself: once `<ref>` (or a project's home branch) moves, it pins `<ref>`, restarts the API and starts the new generation next to the old ones, whatever runs are active. `--on commit` (the default) upgrades on every new commit; `--on version` upgrades only when the fact version (semver) at `<ref>` differs from the pinned one.
 
 **Long human waits are fine.** A gate is a Temporal wait on a signal or update. It can last weeks, costs nothing while waiting, and survives restarts. The only cost is that its worker version has to keep running until the run ends.
 

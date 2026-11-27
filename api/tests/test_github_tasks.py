@@ -176,3 +176,21 @@ async def test_fact_run_on_a_held_issue_removes_the_label_before_starting(
         ("START", response.json()["workflow_id"]),
     ]
     assert NEEDS_HUMAN not in github.labels(14)
+
+
+async def test_start_refuses_an_issue_whose_ancestor_is_blocked(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    github.issues[30] = {"number": 30, "title": "A ready plan", "body": "", "labels": [{"name": READY}]}
+    github.issues[31] = {"number": 31, "title": "Its step", "body": "", "labels": [{"name": READY}]}
+    github.__post_init__()
+    github.parents[31] = 30
+    github.blocked_by[30] = [12]  # #12 is open
+    response = await client.post("/api/v1/runs/start", json={"task_key": "gh:acme/app#31"})
+    assert response.status_code == HTTPStatus.CONFLICT, response.text
+    assert response.json()["detail"]["missing_deps"] == ["gh:acme/app#12"]
+
+    _fakes(app, github)
+    body = {"task_key": "gh:acme/app#31", "override_deps": True}
+    response = await client.post("/api/v1/runs/start", json=body)
+    assert response.status_code == HTTPStatus.CREATED, response.text
