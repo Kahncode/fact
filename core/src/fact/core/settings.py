@@ -210,10 +210,6 @@ class Settings(BaseSettings):
         return self.data_dir / "workspaces"
 
     @property
-    def repos_dir(self) -> Path:
-        return self.data_dir / "repos"
-
-    @property
     def pinned_dir(self) -> Path:
         return self.data_dir / "pinned"
 

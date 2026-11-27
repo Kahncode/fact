@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 FACT_DIR = ".fact"
 PROJECT_FILE = "project.yaml"
 REPO_FILE = "repo.yaml"
-DEFAULT_MAX_RUNS = 1  # a project's runs queued, running or waiting at once, unless its config says otherwise
+DEFAULT_MAX_RUNS = 2  # a project's runs queued, running or waiting at once, unless its config says otherwise
 
 Command = list[str]  # an argv list, never a shell string
 

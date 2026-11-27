@@ -67,7 +67,9 @@ class WorkspaceActivities:
             worktree = spec.handle.repos.get(repo.full_name)
             if not worktree:
                 continue
-            await self._runner.fetch(repo.full_name)  # a `RunnerError` here is retried: the network may come back
+            await self._runner.fetch(
+                spec.handle, repo.full_name
+            )  # a `RunnerError` here is retried: the network may come back
             try:
                 result = await merge_base(
                     self._runner, spec.handle, worktree, repo.default_branch, step.log, verify_only=spec.verify_only

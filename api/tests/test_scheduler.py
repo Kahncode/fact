@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fact.api.scheduler import find_ready
+from fact.core.project_config import DEFAULT_MAX_RUNS
 from fact.core.scheduler import ReadyTasks
 from fact.core.settings import CONFIG_VAR, Settings, reset_settings
 from fact.core.usage_gate import GateState, GateWindow, UsageCheck
@@ -43,8 +44,8 @@ async def test_ready_tasks_with_deps_done_and_never_run(app: FastAPI) -> None:
     assert (got.active, got.max_runs) == (0, 4)
     assert {p.project: (p.active, p.max_runs) for p in got.projects} == {
         PROJECT: (0, 3),
-        "remote": (0, 1),
-        "broken": (0, 1),
+        "remote": (0, DEFAULT_MAX_RUNS),  # a config fact cannot read takes the default
+        "broken": (0, DEFAULT_MAX_RUNS),
     }
 
 

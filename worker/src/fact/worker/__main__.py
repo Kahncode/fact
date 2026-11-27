@@ -40,7 +40,7 @@ from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
 from fact.worker.loader import ProjectWorkflows, WorkflowLoadError, factory_sha, load_project, sandbox_runner
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalWorktreeRunner, RunnerError
+from fact.worker.runners import LocalRunner, RunnerError
 from fact.worker.scheduler import delete_leftover_schedule
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -71,7 +71,7 @@ def _github_app(settings: Settings) -> GitHubApp | None:
         return None
 
 
-async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list[ProjectWorkflows]:
+async def load_projects(settings: Settings, runner: LocalRunner) -> list[ProjectWorkflows]:
     """
     Load every registered project's workflows; a project that fails to load is logged and skipped.
 
@@ -82,7 +82,7 @@ async def load_projects(settings: Settings, runner: LocalWorktreeRunner) -> list
     loaded: list[ProjectWorkflows] = []
     for ref in settings.projects:
         try:
-            project = await load_project(ref.name, ref.home, runner.sync_mirror, settings.pinned_dir, factory)
+            project = await load_project(ref.name, ref.home, runner.remote_url, settings.pinned_dir, factory)
         except (WorkflowLoadError, RunnerError) as exc:
             log.error("workflow_load_failed", project=ref.name, error=str(exc))  # noqa: TRY400 - the message is enough
             continue
@@ -108,7 +108,7 @@ def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
 
 
 def factory_activities(
-    settings: Settings, http: httpx.AsyncClient, runner: LocalWorktreeRunner, github: GitHubApp | None
+    settings: Settings, http: httpx.AsyncClient, runner: LocalRunner, github: GitHubApp | None
 ) -> list[Activity]:
     """Every activity the worker registers; `activity_workers` puts each on the queue of its spec's zone."""
     reporter = StepReporter(settings.api_url, http, log_dir=settings.data_dir / "step-logs")
@@ -147,7 +147,7 @@ def _project_workers(
     client: Client,
     project: ProjectWorkflows,
     activities: list[Activity],
-    runner: LocalWorktreeRunner,
+    runner: LocalRunner,
     sandboxes: PoolSlots,
 ) -> list[Worker]:
     workers = activity_workers(
@@ -163,7 +163,7 @@ async def run() -> None:
     client = await connect(settings)
     log = get_logger("fact.worker")
     github = _github_app(settings)
-    runner = LocalWorktreeRunner(settings, github=github)
+    runner = LocalRunner(settings, github=github)
     projects = await load_projects(settings, runner)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)

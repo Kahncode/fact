@@ -14,7 +14,7 @@ Read only the sections a task points you to.
 | [06-workflow-authoring.md](06-workflow-authoring.md) | Config, step library and workflow code layers; `.fact/`; pinning; the Standard workflow code; review evidence |
 | [07-reference-workflow.md](07-reference-workflow.md) | Diagram of the standard workflow |
 | [08-planning.md](08-planning.md) | Planning phase: refresh, grill, triage, plan, break down, approve; MCP tools |
-| [09-runners-and-harnesses.md](09-runners-and-harnesses.md) | Runner interface, local worktrees, harness contract, model routing, execution zones |
+| [09-runners-and-harnesses.md](09-runners-and-harnesses.md) | Runner interface, local runner, harness contract, model routing, execution zones |
 | [10-observability.md](10-observability.md) | Step events, artifact layout, what is measured, caps and monitors |
 | [11-ui-and-notifications.md](11-ui-and-notifications.md) | Views, run graph, notifications |
 | [12-integrations.md](12-integrations.md) | Task source interface, GitHub Issues, Linear, labels, GitHub App setup |

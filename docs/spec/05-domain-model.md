@@ -11,13 +11,13 @@ A project is a set of repos, and a run works on all of them at once in one works
 | Workflow type | A Python workflow class, one or more per project | name, stage manifest, worker version (factory git SHA) |
 | Run | One Temporal workflow execution for one work item | workflow id `run-<ISSUE-KEY>-<n>`, project, issue, status, totals for time, cost and human touches |
 | Step | One activity or gate inside a run, per attempt | kind (agent, shell, github, gate, notify), name (tells apart steps of one stage: the check or prompt), attempt, start, end, duration, wait time, tokens, cost, log and transcript refs, outputs |
-| Workspace | The per-run folder | one git worktree per repo, all on branch `fact/<ISSUE-KEY>` |
+| Workspace | The per-run folder | one git clone per repo, all on branch `fact/<ISSUE-KEY>` |
 | Change set | The PRs a run produces | one PR per touched repo, cross-linked, with a merge order |
 | Runner pool | Where a run's sandbox lives: your PC, containers, GitHub runners, Daytona | kind, concurrency cap, secrets |
 | Harness | Which coding agent runs an agent step | Claude Code, Codex, OpenCode, Pi; model; allowed tools; chosen per task or per step (see Choosing a harness and model) |
 
 **How multi-repo works**
 
-- The project config lists its repos; a run checks out a worktree of each repo it needs, side by side, so one agent can see the backend and the mobile app together.
+- The project config lists its repos; a run clones each repo it needs, side by side, so one agent can see the backend and the mobile app together.
 - The agent sees one workspace folder with a short `WORKSPACE.md` describing the repos and how they relate.
 - At PR time the factory opens one PR per repo that changed, links them to each other in their descriptions, and records a merge order (for example backend before mobile) that the UI shows.

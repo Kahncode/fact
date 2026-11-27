@@ -1,8 +1,8 @@
 """
 Load each project's workflows from its home repository, pinned to one SHA.
 
-For a project: sync the home repository's mirror, resolve its default branch's SHA, check that SHA out as a detached
-worktree at `pinned_dir/projects/<project>/<sha>` (reused when it is already there), and import
+For a project: ask the home repository for its default branch's SHA (`git ls-remote`), clone it and check that SHA
+out detached at `pinned_dir/projects/<project>/<sha>` (reused when it is already there), and import
 `.fact/workflows/*.py` under module names unique to the project and SHA. The modules are found by a meta path finder,
 so the workflow sandbox can import them again by name.
 """
@@ -15,7 +15,7 @@ import inspect
 import re
 import shutil
 import sys
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
@@ -25,6 +25,7 @@ from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT
 from fact.sdk.workflow import FactWorkflow
 from fact.worker.git_push import run_git
+from fact.worker.runners.workspace_files import make_writable_and_retry
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 log = get_logger(__name__)
@@ -37,7 +38,7 @@ _SHA = re.compile(r"^[0-9a-f]{40}$")
 # Imported outside the sandbox and shared with it: the SDK (and the core types it uses), pydantic, rich (logging).
 SANDBOX_PASSTHROUGH = ("fact", "pydantic", "pydantic_core", "rich")
 
-SyncMirror = Callable[[str], Awaitable[Path]]
+RemoteUrl = Callable[[str], str]  # `owner/repo` to its clone URL
 
 
 class WorkflowLoadError(Exception):
@@ -97,33 +98,32 @@ async def factory_sha(root: Path = REPO_ROOT) -> str:
     return sha
 
 
-async def default_branch_sha(mirror: Path) -> str:
-    """
-    Return the SHA of the remote default branch in a bare mirror.
-
-    `origin/HEAD` (kept current by `sync_mirror`) names the branch; a mirror without it falls back to its own HEAD,
-    which `clone --bare` set to the default branch at the time.
-    """
-    code, lines = await run_git(["rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD^{commit}"], mirror)
-    if code == 0 and lines:
-        return lines[0].strip()
-    branch = await _git(["symbolic-ref", "--short", "HEAD"], mirror)
-    return await _git(["rev-parse", "--verify", f"refs/remotes/origin/{branch}^{{commit}}"], mirror)
+async def default_branch_sha(url: str, cwd: Path) -> str:
+    """Return the SHA the remote's `HEAD` (its default branch) points at."""
+    for line in (await _git(["ls-remote", url, "HEAD"], cwd)).splitlines():
+        sha, _, ref = line.partition("	")
+        if ref.strip() == "HEAD" and _SHA.match(sha):
+            return sha
+    msg = f"{url} has no default branch (empty repository?)"
+    raise WorkflowLoadError(msg)
 
 
-async def pinned_checkout(mirror: Path, pinned_dir: Path, project: str, sha: str) -> Path:
-    """Create, or reuse, a detached worktree of `sha` at `pinned_dir/projects/<project>/<sha>`."""
+async def pinned_checkout(url: str, pinned_dir: Path, project: str, sha: str) -> Path:
+    """Create, or reuse, a clone of `url` detached at `sha`, at `pinned_dir/projects/<project>/<sha>`."""
     path = pinned_dir / "projects" / project / sha
     if (path / ".git").exists():
         code, lines = await run_git(["rev-parse", "HEAD"], path)
         if code == 0 and lines and lines[0].strip() == sha:
             return path
         log.warning("pinned_checkout_replaced", project=project, path=str(path))
-    if path.exists():
-        shutil.rmtree(path)
-    await _git(["worktree", "prune"], mirror)
+    partial = path.with_name(f".{sha}.clone")  # a leading dot: never a SHA, so a clone cut short is never taken
+    for stale in (partial, path):
+        if stale.exists():
+            shutil.rmtree(stale, onexc=make_writable_and_retry)
     path.parent.mkdir(parents=True, exist_ok=True)
-    await _git(["worktree", "add", "--detach", str(path), sha], mirror)
+    await _git(["clone", "--no-checkout", url, str(partial)], path.parent)
+    await _git(["checkout", "--detach", sha], partial)
+    partial.rename(path)
     return path
 
 
@@ -189,15 +189,16 @@ def load_workflows(project: str, checkout: Path, sha: str) -> tuple[type[FactWor
 
 
 async def load_project(
-    project: str, home: str, sync_mirror: SyncMirror, pinned_dir: Path, factory: str
+    project: str, home: str, remote_url: RemoteUrl, pinned_dir: Path, factory: str
 ) -> ProjectWorkflows:
     """Pin `project` to its home repository's default-branch SHA and load its workflows from that checkout."""
     if not _PROJECT.match(project):
         msg = f"invalid project name {project!r}"
         raise WorkflowLoadError(msg)
-    mirror = await sync_mirror(home)
-    sha = await default_branch_sha(mirror)
-    checkout = await pinned_checkout(mirror, pinned_dir, project, sha)
+    url = remote_url(home)
+    pinned_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 - one directory, instant
+    sha = await default_branch_sha(url, pinned_dir)
+    checkout = await pinned_checkout(url, pinned_dir, project, sha)
     workflows = load_workflows(project, checkout, sha)
     names = [cls.__name__ for cls in workflows]
     log.info("project_workflows_loaded", project=project, home_sha=sha, workflows=names, checkout=str(checkout))

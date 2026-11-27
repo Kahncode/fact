@@ -1,4 +1,4 @@
-"""`sync_base` with the real LocalWorktreeRunner, a bare repository standing in for GitHub, reporting to the real API."""
+"""`sync_base` with the real LocalRunner, a bare repository standing in for GitHub, reporting to the real API."""
 
 import subprocess
 from pathlib import Path
@@ -11,7 +11,7 @@ from fact.core.settings import Settings
 from fact.core.types import RepoCheckout, StepResult, WorkspaceHandle, WorkspaceSpec
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalWorktreeRunner, RunnerError
+from fact.worker.runners import LocalRunner, RunnerError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -44,18 +44,18 @@ def seed(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def runner(settings: Settings, tmp_path: Path, seed: Path) -> LocalWorktreeRunner:  # noqa: ARG001 - seeds the remote
+def runner(settings: Settings, tmp_path: Path, seed: Path) -> LocalRunner:  # noqa: ARG001 - seeds the remote
     remote = tmp_path / "remote.git"
-    return LocalWorktreeRunner(settings, remote_url=lambda _name: remote.as_uri())
+    return LocalRunner(settings, remote_url=lambda _name: remote.as_uri())
 
 
 @pytest.fixture
-async def workspace(runner: LocalWorktreeRunner, run_id: str) -> WorkspaceHandle:
+async def workspace(runner: LocalRunner, run_id: str) -> WorkspaceHandle:
     return await runner.prepare(WorkspaceSpec(run_id=run_id, task_key="task:M1-99", repos=[REPO]))
 
 
 @pytest.fixture
-def activities(runner: LocalWorktreeRunner, client: httpx.AsyncClient, tmp_path: Path) -> WorkspaceActivities:
+def activities(runner: LocalRunner, client: httpx.AsyncClient, tmp_path: Path) -> WorkspaceActivities:
     return WorkspaceActivities(runner, StepReporter("http://test", client, log_dir=tmp_path / "logs"))
 
 

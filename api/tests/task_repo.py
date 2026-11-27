@@ -14,6 +14,7 @@ task_source:
   path: tasks
 workflows:
   default: standard
+max_runs: 1
 """
 
 

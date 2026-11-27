@@ -16,7 +16,7 @@ from fact.worker.git_push import PushError, PushRefusedError, branch_sha, curren
 from fact.worker.pr_body import render_pr_body
 from fact.worker.pull_requests import RepoInfo, open_or_update_pr, repo_info, swap_label, update_pr_body
 from fact.worker.reporting import StepContext, StepReporter
-from fact.worker.runners.local_worktree import github_url
+from fact.worker.runners.local import github_url
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 

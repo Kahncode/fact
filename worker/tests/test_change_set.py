@@ -18,7 +18,7 @@ from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.git_push import auth_header
 from fact.worker.pr_body import CheckResult
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalWorktreeRunner
+from fact.worker.runners import LocalRunner
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
@@ -107,7 +107,7 @@ def reporter(client: httpx.AsyncClient, tmp_path: Path) -> StepReporter:
 
 
 async def _prepare(settings: Settings, remote: Path, reporter: StepReporter, run_id: str, **kw: object) -> Path:
-    runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri(), **kw)
+    runner = LocalRunner(settings, remote_url=lambda _n: remote.as_uri(), **kw)
     spec = WorkspaceSpec(
         run_id=run_id,
         task_key="task:M1-11",
@@ -260,7 +260,7 @@ async def test_restart_after_a_stop_reuses_the_branch_and_the_pr(  # noqa: PLR09
     stopped = await _prepare(settings, remote, reporter, run_id, github=github)
     _commit(stopped, "one.txt")
     (pr,) = await ActivityEnvironment().run(activities.open_change_set, _input(run_id, stopped))
-    runner = LocalWorktreeRunner(settings, remote_url=lambda _n: remote.as_uri())
+    runner = LocalRunner(settings, remote_url=lambda _n: remote.as_uri())
     await runner.teardown(
         WorkspaceHandle(run_id=run_id, root=str(stopped.parent), task_queue="sandbox", repos={FULL_NAME: str(stopped)})
     )

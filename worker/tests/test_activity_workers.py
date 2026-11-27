@@ -16,7 +16,7 @@ from fact.core.activity_contract import (
 from fact.core.settings import Settings
 from fact.worker.__main__ import factory_activities
 from fact.worker.activity_workers import PoolSlots, activity_name, by_zone
-from fact.worker.runners import LocalWorktreeRunner
+from fact.worker.runners import LocalRunner
 from standard_env import RUNNER_QUEUE
 from standard_harness import FakeActivities, run_standard
 from temporalio import activity
@@ -29,7 +29,7 @@ async def unspecified_step() -> None:
 
 async def test_every_activity_the_worker_registers_has_a_spec(settings: Settings) -> None:
     async with httpx.AsyncClient() as http:
-        activities = factory_activities(settings, http, LocalWorktreeRunner(settings), None)
+        activities = factory_activities(settings, http, LocalRunner(settings), None)
     zones = by_zone(activities)
     assert sorted(activity_name(fn) for fns in zones.values() for fn in fns) == sorted(ACTIVITY_SPECS)
 

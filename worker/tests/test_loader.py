@@ -17,7 +17,7 @@ from fact.worker.loader import (
     sandbox_runner,
     version_id,
 )
-from fact.worker.runners import LocalWorktreeRunner
+from fact.worker.runners import LocalRunner
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
@@ -79,8 +79,8 @@ def home(tmp_path: Path) -> HomeRepo:
 
 
 @pytest.fixture
-def runner(settings: Settings, home: HomeRepo) -> LocalWorktreeRunner:
-    return LocalWorktreeRunner(settings, remote_url=lambda _name: home.bare.as_uri())
+def runner(settings: Settings, home: HomeRepo) -> LocalRunner:
+    return LocalRunner(settings, remote_url=lambda _name: home.bare.as_uri())
 
 
 def _project() -> str:
@@ -89,12 +89,12 @@ def _project() -> str:
 
 
 async def test_loads_workflows_pinned_to_the_default_branch(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
+    settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:
     sha = home.push({".fact/workflows/hello.py": HELLO, ".fact/workflows/_shared.py": "raise RuntimeError\n"})
     project = _project()
 
-    loaded = await load_project(project, HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+    loaded = await load_project(project, HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
 
     assert loaded.home_sha == sha
     assert loaded.checkout == settings.pinned_dir / "projects" / project / sha
@@ -106,45 +106,43 @@ async def test_loads_workflows_pinned_to_the_default_branch(
 
 
 async def test_reuses_the_checkout_and_follows_new_commits(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
+    settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:
     first_sha = home.push({".fact/workflows/hello.py": HELLO})
     project = _project()
-    first = await load_project(project, HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+    first = await load_project(project, HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
     marker = first.checkout / "untracked.txt"
     marker.write_text("kept\n", encoding="utf-8")
 
-    again = await load_project(project, HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+    again = await load_project(project, HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
     assert again.checkout == first.checkout
     assert marker.exists()  # reused, not re-created
 
     second_sha = home.push({"README.md": "new\n"})
-    moved = await load_project(project, HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+    moved = await load_project(project, HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
     assert moved.home_sha == second_sha != first_sha
     assert moved.checkout.name == second_sha
     assert first.checkout.exists()  # the old version's checkout stays for runs pinned to it
 
 
 async def test_module_that_fails_to_import_names_the_file(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
+    settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:
     home.push({".fact/workflows/broken.py": "import does_not_exist_anywhere\n"})
 
     with pytest.raises(WorkflowLoadError, match=r"broken\.py: ModuleNotFoundError") as info:
-        await load_project(_project(), HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+        await load_project(_project(), HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
     assert "does_not_exist_anywhere" in str(info.value)
 
 
-async def test_invalid_project_name_is_refused(settings: Settings, runner: LocalWorktreeRunner) -> None:
+async def test_invalid_project_name_is_refused(settings: Settings, runner: LocalRunner) -> None:
     with pytest.raises(WorkflowLoadError, match="invalid project name"):
-        await load_project("../escape", HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+        await load_project("../escape", HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
 
 
-async def test_loaded_workflow_runs_in_the_sandbox(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
-) -> None:
+async def test_loaded_workflow_runs_in_the_sandbox(settings: Settings, home: HomeRepo, runner: LocalRunner) -> None:
     home.push({".fact/workflows/hello.py": HELLO})
-    loaded = await load_project(_project(), HOME, runner.sync_mirror, settings.pinned_dir, "f" * 40)
+    loaded = await load_project(_project(), HOME, runner.remote_url, settings.pinned_dir, "f" * 40)
     env_cm = await WorkflowEnvironment.start_time_skipping(data_converter=pydantic_data_converter)
     async with (
         env_cm as env,
@@ -173,7 +171,7 @@ async def test_factory_sha_is_the_checkout_head(tmp_path: Path) -> None:
 
 
 async def test_load_projects_skips_a_project_that_fails(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
+    settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:
     home.push({".fact/workflows/broken.py": "raise RuntimeError('boom')\n"})  # every project's home is this repo
 
@@ -191,7 +189,7 @@ def test_files_that_map_to_one_module_name_are_refused(tmp_path: Path) -> None:
 
 
 async def test_load_projects_refuses_two_projects_with_one_build_id(
-    settings: Settings, home: HomeRepo, runner: LocalWorktreeRunner
+    settings: Settings, home: HomeRepo, runner: LocalRunner
 ) -> None:
     home.push({".fact/workflows/hello.py": HELLO})
     twins = [ProjectRef(name=_project(), home=HOME), ProjectRef(name=_project(), home=HOME)]

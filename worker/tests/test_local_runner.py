@@ -1,8 +1,6 @@
-"""LocalWorktreeRunner against a local bare repository standing in for GitHub."""
+"""LocalRunner against a local bare repository standing in for GitHub."""
 
 import asyncio
-import shutil
-import stat
 import subprocess
 import sys
 import time
@@ -11,7 +9,7 @@ from pathlib import Path
 import pytest
 from fact.core.settings import Settings
 from fact.core.types import RepoCheckout, WorkspaceSpec
-from fact.worker.runners import ExecExit, ExecLine, LocalWorktreeRunner, RunnerError
+from fact.worker.runners import ExecExit, ExecLine, LocalRunner, RunnerError
 
 FULL_NAME = "acme/widget"
 TIMEOUT_SLACK = 30
@@ -38,8 +36,8 @@ def remote(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def runner(settings: Settings, remote: Path) -> LocalWorktreeRunner:
-    return LocalWorktreeRunner(settings, remote_url=lambda _name: remote.as_uri())
+def runner(settings: Settings, remote: Path) -> LocalRunner:
+    return LocalRunner(settings, remote_url=lambda _name: remote.as_uri())
 
 
 def _spec(run_id: str = "run-1", branch: str = "fact/task-m1-06") -> WorkspaceSpec:
@@ -53,7 +51,7 @@ async def _collect(stream) -> tuple[list[str], ExecExit]:  # noqa: ANN001
     return [i.text for i in items if isinstance(i, ExecLine)], items[-1]
 
 
-async def test_fresh_branch_from_default(runner: LocalWorktreeRunner, settings: Settings) -> None:
+async def test_fresh_branch_from_default(runner: LocalRunner, settings: Settings) -> None:
     handle = await runner.prepare(_spec())
 
     worktree = Path(handle.repos[FULL_NAME])
@@ -68,7 +66,7 @@ async def test_fresh_branch_from_default(runner: LocalWorktreeRunner, settings: 
     await runner.teardown(handle)
 
 
-async def test_resumes_branch_that_exists_remotely(runner: LocalWorktreeRunner, remote: Path, tmp_path: Path) -> None:
+async def test_resumes_branch_that_exists_remotely(runner: LocalRunner, remote: Path, tmp_path: Path) -> None:
     pusher = tmp_path / "pusher"
     _git("clone", str(remote), str(pusher), cwd=tmp_path)
     _git("config", "user.name", "p", cwd=pusher)
@@ -79,15 +77,13 @@ async def test_resumes_branch_that_exists_remotely(runner: LocalWorktreeRunner, 
     _git("commit", "-m", "wip", cwd=pusher)
     _git("push", "origin", "fact/task-m1-06", cwd=pusher)
 
-    first = await runner.prepare(_spec(run_id="run-a", branch="fact/other"))  # creates the mirror before the push
-    await runner.teardown(first)
-    handle = await runner.prepare(_spec(run_id="run-b"))
+    handle = await runner.prepare(_spec())
 
     assert (Path(handle.repos[FULL_NAME]) / "work.txt").read_text(encoding="utf-8") == "in progress\n"
     await runner.teardown(handle)
 
 
-async def test_exec_streams_output_and_exit_code(runner: LocalWorktreeRunner) -> None:
+async def test_exec_streams_output_and_exit_code(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
     code = "import os,sys; print('hi', flush=True); print('err', file=sys.stderr, flush=True); print(os.environ.get('FACT_X')); sys.exit(3)"
 
@@ -98,7 +94,7 @@ async def test_exec_streams_output_and_exit_code(runner: LocalWorktreeRunner) ->
     await runner.teardown(handle)
 
 
-async def test_exec_rejects_cwd_outside_workspace(runner: LocalWorktreeRunner) -> None:
+async def test_exec_rejects_cwd_outside_workspace(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
 
     with pytest.raises(RunnerError):
@@ -120,7 +116,7 @@ def _beat(path: Path) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
-async def test_timeout_kills_whole_process_tree(runner: LocalWorktreeRunner) -> None:
+async def test_timeout_kills_whole_process_tree(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
     beat = Path(handle.root) / "beat"
 
@@ -138,18 +134,16 @@ async def test_timeout_kills_whole_process_tree(runner: LocalWorktreeRunner) -> 
     await runner.teardown(handle)
 
 
-async def test_teardown_removes_workspace_and_worktree(runner: LocalWorktreeRunner, settings: Settings) -> None:
+async def test_teardown_removes_the_workspace(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
 
     await runner.teardown(handle)
     await runner.teardown(handle)  # safe twice
 
     assert not Path(handle.root).exists()  # noqa: ASYNC240
-    mirror = settings.repos_dir / "acme" / "widget"
-    assert "run-1" not in _git("worktree", "list", cwd=mirror)
 
 
-async def test_env_is_inherited(runner: LocalWorktreeRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_env_is_inherited(runner: LocalRunner, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FACT_ENV_TEST", "inherited")
     handle = await runner.prepare(_spec())
 
@@ -162,19 +156,19 @@ async def test_env_is_inherited(runner: LocalWorktreeRunner, monkeypatch: pytest
 
 
 @pytest.mark.parametrize("run_id", ["..", "../x", "a/b", ""])
-async def test_rejects_unsafe_run_id(runner: LocalWorktreeRunner, run_id: str) -> None:
+async def test_rejects_unsafe_run_id(runner: LocalRunner, run_id: str) -> None:
     with pytest.raises(RunnerError):
         await runner.prepare(_spec(run_id=run_id))
 
 
 @pytest.mark.parametrize(("full_name", "branch"), [("acme/..", "b"), ("a/b/c", "b"), (FULL_NAME, "--orphan")])
-async def test_rejects_unsafe_repo_or_branch(runner: LocalWorktreeRunner, full_name: str, branch: str) -> None:
+async def test_rejects_unsafe_repo_or_branch(runner: LocalRunner, full_name: str, branch: str) -> None:
     repo = RepoCheckout(full_name=full_name, default_branch="main", branch=branch)
     with pytest.raises(RunnerError):
         await runner.prepare(WorkspaceSpec(run_id="run-x", task_key="task:x", repos=[repo]))
 
 
-async def test_timeout_when_stdout_closes_but_process_lives(runner: LocalWorktreeRunner) -> None:
+async def test_timeout_when_stdout_closes_but_process_lives(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
     code = "import os,time; os.close(1); time.sleep(600)"
 
@@ -184,7 +178,7 @@ async def test_timeout_when_stdout_closes_but_process_lives(runner: LocalWorktre
     await runner.teardown(handle)
 
 
-async def test_multi_repo_workspace(runner: LocalWorktreeRunner) -> None:
+async def test_multi_repo_workspace(runner: LocalRunner) -> None:
     repos = [RepoCheckout(full_name=n, default_branch="main", branch="fact/t") for n in (FULL_NAME, "acme/other")]
     handle = await runner.prepare(WorkspaceSpec(run_id="run-m", task_key="task:m", repos=repos))
 
@@ -192,19 +186,18 @@ async def test_multi_repo_workspace(runner: LocalWorktreeRunner) -> None:
     await runner.teardown(handle)
 
 
-async def test_agent_can_commit_in_worktree(runner: LocalWorktreeRunner, settings: Settings) -> None:
+async def test_agent_can_commit_in_the_clone(runner: LocalRunner) -> None:
     handle = await runner.prepare(_spec())
     worktree = Path(handle.repos[FULL_NAME])
     (worktree / "new.txt").write_text("x\n", encoding="utf-8")
     _git("add", ".", cwd=worktree)
     _git("commit", "-m", "agent work", cwd=worktree)
     assert _git("log", "-1", "--format=%an", cwd=worktree) == "fact"
-    assert _git("rev-parse", "--is-bare-repository", cwd=settings.repos_dir / FULL_NAME) == "true"
     await runner.teardown(handle)
 
 
 async def test_refuses_workspace_inside_running_factory(settings: Settings, remote: Path) -> None:
-    runner = LocalWorktreeRunner(settings, remote_url=lambda _name: remote.as_uri(), factory_root=settings.data_dir)
+    runner = LocalRunner(settings, remote_url=lambda _name: remote.as_uri(), factory_root=settings.data_dir)
 
     with pytest.raises(RunnerError, match="factory checkout"):
         await runner.prepare(_spec())
@@ -219,63 +212,25 @@ class _PinnedOverWorkspaces(Settings):
 
 async def test_refuses_workspace_inside_pinned_dir(settings: Settings, remote: Path) -> None:
     pinned_settings = _PinnedOverWorkspaces(data_dir=settings.data_dir)
-    runner = LocalWorktreeRunner(pinned_settings, remote_url=lambda _name: remote.as_uri())
+    runner = LocalRunner(pinned_settings, remote_url=lambda _name: remote.as_uri())
 
     with pytest.raises(RunnerError, match="pinned_dir"):
         await runner.prepare(_spec())
     assert not settings.workspaces_dir.exists()
 
 
-async def test_taken_branch_gets_a_suffix(runner: LocalWorktreeRunner) -> None:
+async def test_two_runs_of_one_repository_share_no_git_state(runner: LocalRunner) -> None:
     first = await runner.prepare(_spec(run_id="run-a"))
-    second = await runner.prepare(_spec(run_id="run-b"))
-    third = await runner.prepare(_spec(run_id="run-c"))
+    second = await runner.prepare(_spec(run_id="run-b", branch="fact/task-m1-07"))
+    hook = Path(first.repos[FULL_NAME]) / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")  # as `pre-commit install` in run-a's setup
 
-    assert first.branches[FULL_NAME] == "fact/task-m1-06"
-    assert second.branches[FULL_NAME] == "fact/task-m1-06-2"
-    assert third.branches[FULL_NAME] == "fact/task-m1-06-3"
-    assert _git("branch", "--show-current", cwd=Path(second.repos[FULL_NAME])) == "fact/task-m1-06-2"
-    assert "fact/task-m1-06-2" in (Path(second.root) / "WORKSPACE.md").read_text(encoding="utf-8")
-    for handle in (first, second, third):
-        await runner.teardown(handle)
-
-
-async def test_branch_is_free_again_after_teardown(runner: LocalWorktreeRunner) -> None:
-    first = await runner.prepare(_spec(run_id="run-a"))
-    await runner.teardown(first)
-    second = await runner.prepare(_spec(run_id="run-b"))
-
-    assert second.branches[FULL_NAME] == "fact/task-m1-06"
-    await runner.teardown(second)
-
-
-async def test_branch_is_free_once_its_folder_is_gone(runner: LocalWorktreeRunner) -> None:
-    first = await runner.prepare(_spec(run_id="run-a"))
-    shutil.rmtree(first.root, onexc=_writable)  # a folder deleted by hand: git still lists the worktree
-    second = await runner.prepare(_spec(run_id="run-b"))
-
-    assert second.branches[FULL_NAME] == "fact/task-m1-06"
-    await runner.teardown(second)
-
-
-async def test_suffix_skips_branches_on_the_remote(runner: LocalWorktreeRunner, remote: Path, tmp_path: Path) -> None:
-    pusher = tmp_path / "pusher"
-    _git("clone", str(remote), str(pusher), cwd=tmp_path)
-    _git("push", "origin", "HEAD:refs/heads/fact/task-m1-06-2", cwd=pusher)  # another run's PR branch
-    first = await runner.prepare(_spec(run_id="run-a"))
-    second = await runner.prepare(_spec(run_id="run-b"))
-
-    assert second.branches[FULL_NAME] == "fact/task-m1-06-3"
+    assert not (Path(second.repos[FULL_NAME]) / ".git" / "hooks" / "pre-commit").exists()
     for handle in (first, second):
         await runner.teardown(handle)
 
 
-def _writable(func, path: str, _exc: BaseException) -> None:  # noqa: ANN001
-    Path(path).chmod(stat.S_IWRITE)
-    func(path)
-
-
-async def test_retry_after_a_crash_mid_prepare_keeps_the_branch(runner: LocalWorktreeRunner) -> None:
+async def test_retry_after_a_crash_mid_prepare_keeps_the_branch(runner: LocalRunner) -> None:
     await runner.prepare(_spec(run_id="run-a"))  # the activity died before reporting: the retry prepares again
     handle = await runner.prepare(_spec(run_id="run-a"))
 
@@ -283,17 +238,32 @@ async def test_retry_after_a_crash_mid_prepare_keeps_the_branch(runner: LocalWor
     await runner.teardown(handle)
 
 
-async def test_held_branch_keeps_its_unpushed_commits(runner: LocalWorktreeRunner) -> None:
+async def test_a_workspace_left_behind_keeps_its_unpushed_commits(runner: LocalRunner) -> None:
     left = await runner.prepare(_spec(run_id="run-a"))  # a failed run's workspace, left on disk
-    worktree = Path(left.repos[FULL_NAME])
-    (worktree / "local.txt").write_text("not pushed\n", encoding="utf-8")
-    _git("add", ".", cwd=worktree)
-    _git("commit", "-m", "local work", cwd=worktree)
-    head = _git("rev-parse", "HEAD", cwd=worktree)
+    clone = Path(left.repos[FULL_NAME])
+    (clone / "local.txt").write_text("not pushed\n", encoding="utf-8")
+    _git("add", ".", cwd=clone)
+    _git("commit", "-m", "local work", cwd=clone)
+    head = _git("rev-parse", "HEAD", cwd=clone)
 
-    other = await runner.prepare(_spec(run_id="run-b"))
+    other = await runner.prepare(_spec(run_id="run-b"))  # the task's next run, on the same branch
 
-    assert other.branches[FULL_NAME] == "fact/task-m1-06-2"
-    assert _git("rev-parse", "fact/task-m1-06", cwd=worktree) == head
+    assert other.branches[FULL_NAME] == "fact/task-m1-06"
+    assert not (Path(other.repos[FULL_NAME]) / "local.txt").exists()  # it starts from the remote
+    assert _git("rev-parse", "HEAD", cwd=clone) == head
     for handle in (left, other):
         await runner.teardown(handle)
+
+
+async def test_fetch_updates_the_workspace_clone(runner: LocalRunner, remote: Path, tmp_path: Path) -> None:
+    handle = await runner.prepare(_spec())
+    pusher = tmp_path / "pusher"
+    _git("clone", str(remote), str(pusher), cwd=tmp_path)
+    _git("-c", "user.name=p", "-c", "user.email=p@example.com", "commit", "--allow-empty", "-m", "main", cwd=pusher)
+    _git("push", "origin", "HEAD:main", cwd=pusher)
+
+    await runner.fetch(handle, FULL_NAME)
+
+    clone = Path(handle.repos[FULL_NAME])
+    assert _git("rev-parse", "origin/main", cwd=clone) == _git("rev-parse", "HEAD", cwd=pusher)
+    await runner.teardown(handle)
