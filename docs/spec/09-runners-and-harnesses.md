@@ -40,7 +40,7 @@ A runner pool decides where a run's sandbox lives and a harness decides which co
 Every agent step runs on a harness and model chosen at run time, never hard-coded in a workflow, so moving from Claude Code to OpenCode or Pi is a config change.
 
 - **Complexity level**: the planner (or triage, when the issue skipped planning) gives each task a level: `trivial`, `standard` or `complex`. It is stored on the run and shown in the UI.
-- **Routing table** in `fact.yaml` maps level and step kind to a harness and model, for example `standard.implement → claude-code / sonnet`, `complex.implement → claude-code / opus`, `*.review → a different model from implement`.
+- **Routing table** in the project's `.fact/project.yaml` maps level and step kind to a harness and model, for example `standard.implement → claude-code / sonnet`, `complex.implement → claude-code / opus`, `*.review → a different model from implement`.
 - **Overrides**, highest first: a step-level choice the planner wrote for this task, then the task's level through the routing table, then the workflow's default for that step, then the project's default.
 - **Availability**: if the chosen harness is over its cap, out of budget or outside its usage window, the step waits; it falls back to the next entry in its routing list only where the table allows it.
 - Every step records the harness and model it actually used, so cost and success can be compared across them later.

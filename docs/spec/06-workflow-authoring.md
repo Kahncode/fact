@@ -139,7 +139,7 @@ Each project has its own catalog of workflows, and a triage step picks one for e
 
 **Workflows are Python, one or more per project.** A project's workflows live in `.fact/workflows/*.py` in the project's home repository, never in the factory repo, and are built from the factory's step library. A decorator records each workflow's stages so the UI can draw it.
 
-**Where projects live.** Each project has a home repository with a `.fact/` folder: `project.yaml` (its repositories and merge order, task source, runner pool, budgets, merge policy, triage rules), `workflows/*.py` and `prompts/`. The factory repo holds only the factory, its step library (`fact.sdk`) and a registry in `fact.yaml` mapping each project to its home repository.
+**Where projects live.** Each project has a home repository with a `.fact/` folder: `project.yaml` (its repositories and merge order, task source, runner pool, budgets, its concurrency cap, routing, step limits, merge policy, triage rules), `workflows/*.py` and `prompts/`. The factory repo holds only the factory, its step library (`fact.sdk`) and its factory settings in `fact.yaml` (`05-domain-model.md`), including the registry mapping each project to its home repository. Step limits (timeout, turns, permission mode per step kind) have defaults in the SDK's code; a project's `step_defaults` overrides any of them.
 
 - **Single-repository project**: the home is that repository.
 - **Multi-repository project**: the home is a small dedicated config repository (for example `<product>-fact`) by default, so changing a workflow never needs a PR on product code. Pointing the home at one of its repositories, such as the backend, is also allowed.
@@ -158,6 +158,7 @@ Each project has its own catalog of workflows, and a triage step picks one for e
 - Each project is one worker deployment named `wf-<project>`, polled on task queue `wf-<project>`. The build id is the version id `<factory SHA, 12 chars>+<home SHA>` (it fits the 64-character `worker_version` column; a factory that is not a git checkout is `unknown`). The default behaviour is `PINNED`, and on start the worker makes its version the deployment's current one, so new runs go to it; startup fails if it cannot.
 - Every run records its version: `FactWorkflow.execute` reads the build id from `workflow.info().get_current_deployment_version()` and passes it to `record_run_started`, which stores `worker_version` and `home_sha`.
 - One worker process runs only the newest version. After a restart on new code, runs pinned to an older version wait for a worker of that version, and their worker is gone, so `fact stop` cannot end them (see above): stop them by hand and restart them. Running several versions side by side (`fact upgrade`) comes later.
+- `fact dev --follow <ref>` upgrades by itself: once `<ref>` moves, the upgrade is pending, nothing new starts, and when no run is active it pins `<ref>` and restarts the API and worker. `--on commit` (the default) upgrades on every new commit; `--on version` upgrades only when the fact version (semver) at `<ref>` differs from the pinned one.
 
 **Long human waits are fine.** A gate is a Temporal wait on a signal or update. It can last weeks, costs nothing while waiting, and survives restarts. The only cost is that its worker version has to keep running until the run ends.
 
