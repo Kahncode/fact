@@ -20,6 +20,7 @@ LOW_RISK = {
     "door_reason": "a revert undoes it",
     "security_findings": [],
 }
+REPLY = {"status": "done", "summary": "pushed back", "decision": "reply", "replies": [], "instructions": ""}
 LEARNED = {"status": "done", "title": "feat(widget): widget, documented", "summary": "Adds the widget and its docs."}
 
 

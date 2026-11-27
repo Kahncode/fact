@@ -9,7 +9,7 @@ Workflow code is replayed: it must do no I/O and read no clock; the helpers only
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from temporalio import workflow
@@ -37,9 +37,11 @@ with workflow.unsafe.imports_passed_through():
     from fact.sdk.agents import AgentSteps
     from fact.sdk.base_sync import BaseSyncSteps
     from fact.sdk.classify import ClassifySteps
+    from fact.sdk.converse import ConverseSteps
     from fact.sdk.failures import CONTEXT_MAX_BYTES, failure_context
     from fact.sdk.human import HumanSteps
     from fact.sdk.pull_requests import PullRequestSteps
+    from fact.sdk.review_wait import ReviewWaitSteps
     from fact.sdk.stages import Stage, stages
     from fact.sdk.step_defaults import resolve, timeout_s
     from fact.sdk.stop import StopSteps
@@ -52,8 +54,18 @@ SHELL_SLACK_S = 60  # on top of the check's own timeout, for reporting the step
 PUSHED_OUTCOMES = frozenset({RunOutcome.PR_OPENED, RunOutcome.MERGED, RunOutcome.CLOSED, RunOutcome.ABANDONED})
 
 
-class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, HumanSteps, StopSteps, TaskStatusSteps):
-    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, classify, gates, stop in mixins."""
+class FactWorkflow(
+    AgentSteps,
+    PullRequestSteps,
+    ReviewWaitSteps,
+    ConverseSteps,
+    ClassifySteps,
+    BaseSyncSteps,
+    HumanSteps,
+    StopSteps,
+    TaskStatusSteps,
+):
+    """Base class for project workflows: bookkeeping and step helpers; agents, PRs, review, gates, stop in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
 
@@ -69,6 +81,10 @@ class FactWorkflow(AgentSteps, PullRequestSteps, ClassifySteps, BaseSyncSteps, H
         self.spec_ambiguous = False  # an agent session found the spec ambiguous
         self.prs: list[PRRef] = []  # from the last `open_change_set`, with the head SHA it pushed
         self.merged_by_fact = False  # `merge_change_set` merged the change set: its end notifies no one
+        self.pushed_at: datetime | None = None  # workflow time of the last push
+        self.handled_reviews: list[int] = []  # reviews `wait_for_review` returned, each acted on once
+        self._review_deadline: datetime | None = None  # the end of the run's 30 days of review
+        self._replied_at: datetime | None = None  # when the last review round read its comments
         self._change_set: OpenChangeSetInput | None = None  # its input, to push again after a CI fix
 
     @classmethod

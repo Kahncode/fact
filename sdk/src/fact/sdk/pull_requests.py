@@ -1,40 +1,33 @@
 """
-The steps of `FactWorkflow` that act on its PRs: open, comment the cost, wait for CI and fix it, merge, wait for one.
+The steps of `FactWorkflow` that act on its PRs: open and push, comment the cost, wait for CI and fix it, merge.
 
 `PullRequestSteps` is a mixin of `FactWorkflow` only: it uses the workflow's `input`, `handle`, `check_results`,
-`next_attempt`, `note_outcome`, `agent`, `report_task`, `_activity`, `_record`, the gate recording
-helpers of `HumanSteps`, and the `pr_title`, `pr_summary`, `assumptions`, `spec_ambiguous`, `prs` and `_change_set`
-its `__init__` sets.
+`next_attempt`, `note_outcome`, `agent`, `report_task`, `_activity`, `_record`, and the `pr_title`, `pr_summary`,
+`assumptions`, `spec_ambiguous`, `prs`, `pushed_at` and `_change_set` its `__init__` sets. Waiting for review is in
+`fact.sdk.review_wait`.
 """
 
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
 from temporalio import workflow
-from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.activity_contract import (
         MERGE_CHANGE_SET,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
-        RECORD_GATE_ANSWERED,
-        RECORD_GATE_OPENED,
         WAIT_FOR_CI,
-        WAIT_FOR_PR_CLOSED,
         CriterionResult,
         MergeChangeSetInput,
         MergeMethod,
         MergeResult,
         OpenChangeSetInput,
         PostCostCommentInput,
-        PRState,
         WaitForCIInput,
-        WaitForPRClosedInput,
     )
-    from fact.core.enums import RunOutcome, StepOutcome
-    from fact.core.gates import NOTE_MAX_CHARS, GateAnswer, GateDecision, OpenGate
+    from fact.core.enums import StepOutcome
     from fact.core.types import PRRef, StepResult
     from fact.sdk.change_set import (
         assumptions_output,
@@ -52,7 +45,6 @@ OPEN_PR_STAGE = "open_pr"
 CI_STAGE = "wait_for_ci"
 FIX_CI_STAGE = "fix_ci"
 CI_TIMEOUT = timedelta(minutes=60)  # give up on checks still running after this long; `wait_for_ci`'s spec adds 5 min
-REVIEW_STAGE = "wait_for_review"
 # how `until_ci_green` ended: green, a PR conflicting with its base (merge the base), or out of fixes
 CIOutcome = Literal["passed", "conflict", "needs_human"]
 
@@ -63,6 +55,7 @@ class PullRequestSteps:
     assumptions: list[str]  # every passed agent session's `assumptions`, in order, without repeats
     spec_ambiguous: bool  # an agent session answered `spec_ambiguous: true`
     prs: list[PRRef]  # from the last push, with the head SHA it pushed
+    pushed_at: datetime | None  # workflow time of the last push, where a review round starts reading comments
     merged_by_fact: bool  # `merge_change_set` merged the change set, so no person needs telling
     _change_set: OpenChangeSetInput | None  # the last `open_change_set` input, to push again after a CI fix
 
@@ -99,18 +92,26 @@ class PullRequestSteps:
         await self.report_task("prs_opened", prs=prs)
         return prs
 
-    async def push_change_set(self: FactWorkflow) -> list[PRRef]:
-        """Push the branch again and update its PR (new assumptions too), as the next attempt of `open_pr`; sets `prs`."""
+    async def push_change_set(self: FactWorkflow, criteria: Sequence[CriterionResult] | None = None) -> list[PRRef]:
+        """
+        Push the branch again and update its PR, as the next attempt of `open_pr`; sets `prs` and `pushed_at`.
+
+        The description takes the new assumptions, and `criteria` (from a new review) when given.
+        """
         if self._change_set is None:
             msg = "no change set: call `open_change_set` first"
             raise RuntimeError(msg)
+        if criteria is not None:
+            self._change_set = self._change_set.model_copy(update={"criteria": list(criteria)})
         update = {
             "attempt": self.next_attempt(OPEN_PR_STAGE),
+            "check_results": list(self.check_results),  # a review round runs the checks again
             "assumptions": list(self.assumptions),  # a CI fix session may have added some
             "spec_ambiguous": self.spec_ambiguous,
         }
         spec = self._change_set.model_copy(update=update)
         self.prs = await self._activity(OPEN_CHANGE_SET, spec, list[PRRef])
+        self.pushed_at = workflow.now()
         self.note_outcome(OPEN_PR_STAGE, spec.attempt, StepOutcome.PASSED)
         return self.prs
 
@@ -191,49 +192,3 @@ class PullRequestSteps:
         merged: MergeResult = await self._activity(MERGE_CHANGE_SET, spec, str)  # type: ignore[assignment]
         self.merged_by_fact = self.merged_by_fact or merged == "merged"
         return merged
-
-    async def wait_for_pr_closed(self: FactWorkflow, prs: Sequence[PRRef], stage_id: str = REVIEW_STAGE) -> RunOutcome:
-        """
-        Wait until a person merges or closes every PR: `merged` if all were merged, else `closed`.
-
-        The wait is a gate-like step (stage `stage_id`, kind `gate`): the run shows as waiting, and all of the step's
-        time is human wait time. Nobody answers it through `answer_gate`; GitHub does, through the PRs' state. With no
-        PR there is nothing to wait for: `pr_opened`. If the wait fails (30 days pass, or GitHub refuses), its step is
-        ended `needs_human` and the error raised.
-        """
-        if not prs:
-            return RunOutcome.PR_OPENED
-        attempt = self.next_attempt(stage_id)
-        urls = [pr.url for pr in prs]
-        details = {"summary": f"Review and merge or close: {', '.join(urls)}", "prs": urls}
-        gate = OpenGate(
-            gate_id=f"{stage_id}-{attempt}",
-            kind=stage_id,
-            stage_id=stage_id,
-            attempt=attempt,
-            details=details,
-            opened_at=workflow.now(),
-        )  # never in `_open_gates`, so `answer_gate` cannot answer it
-        step_id = await self._record_gate(RECORD_GATE_OPENED, self._opened_input(gate), str)
-        try:
-            states = await self._pr_states(prs)
-        except ActivityError as exc:
-            await self._end_review(gate, step_id, GateDecision.REJECT, f"waiting failed: {exc.cause or exc}")
-            raise
-        merged = all(state == "merged" for state in states)
-        note = ", ".join(f"{url}: {state}" for url, state in zip(urls, states, strict=True))
-        await self._end_review(gate, step_id, GateDecision.APPROVE if merged else GateDecision.REJECT, note)
-        return RunOutcome.MERGED if merged else RunOutcome.CLOSED
-
-    async def _pr_states(self: FactWorkflow, prs: Sequence[PRRef]) -> list[PRState]:
-        spec = WaitForPRClosedInput(run_id=self.input.run_id, prs=list(prs))
-        return await self._activity(WAIT_FOR_PR_CLOSED, spec, list[PRState])
-
-    async def _end_review(
-        self: FactWorkflow, gate: OpenGate, step_id: str | None, decision: GateDecision, note: str
-    ) -> None:
-        outcome = StepOutcome.PASSED if decision == GateDecision.APPROVE else StepOutcome.NEEDS_HUMAN
-        answer = GateAnswer(gate_id=gate.gate_id, decision=decision, note=note[:NOTE_MAX_CHARS])
-        self.note_outcome(gate.stage_id, gate.attempt, outcome)
-        answered = self._answered_input(gate, answer, step_id, outcome)
-        await self._record_gate(RECORD_GATE_ANSWERED, answered, type(None))

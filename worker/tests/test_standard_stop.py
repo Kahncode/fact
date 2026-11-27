@@ -9,15 +9,15 @@ from fact.core.activity_contract import (
     RECORD_RUN_FINISHED,
     REPORT_STATUS,
     TEARDOWN_WORKSPACE,
-    WAIT_FOR_PR_CLOSED,
+    WAIT_FOR_REVIEW,
     WRITE_HANDOFF,
     AgentStepInput,
-    PRState,
-    WaitForPRClosedInput,
+    ReviewEvent,
+    WaitForReviewInput,
 )
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.types import RunResult, StepResult
-from fact.sdk.pull_requests import REVIEW_STAGE
+from fact.sdk.review_wait import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import POLL_S, open_gate, until_status
 from standard_harness import STANDARD, FakeActivities, finished, run_standard, started_standard
@@ -31,11 +31,11 @@ HANDOFF = "runs/run-0/handoff.md"
 
 
 class ReviewWaits(FakeActivities):
-    """Nobody merges the PR: `wait_for_pr_closed` heartbeats until it is cancelled."""
+    """Nobody reviews the PR: `wait_for_review` heartbeats until it is cancelled."""
 
-    @activity.defn(name=WAIT_FOR_PR_CLOSED)
-    async def wait_for_pr_closed(self, spec: WaitForPRClosedInput) -> list[PRState]:
-        self._call(WAIT_FOR_PR_CLOSED, spec)
+    @activity.defn(name=WAIT_FOR_REVIEW)
+    async def wait_for_review(self, spec: WaitForReviewInput) -> list[ReviewEvent]:
+        self._call(WAIT_FOR_REVIEW, spec)
         while True:
             activity.heartbeat()
             await asyncio.sleep(POLL_S)

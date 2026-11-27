@@ -1,6 +1,6 @@
 """Shared run, step and task types and outcomes, re-exported from `fact.core` for workflow authors."""
 
-from fact.core.activity_contract import Check, CheckResult, CriterionResult
+from fact.core.activity_contract import Check, CheckResult, Comment, CriterionResult, Reply, ReviewEvent
 from fact.core.enums import NotificationKind, RunOutcome, StepKind, StepOutcome
 from fact.core.gates import GateAnswer, GateDecision, OpenGate, StageOutcome, WorkflowStatus
 from fact.core.types import (
@@ -30,6 +30,7 @@ __all__ = [
     "ArtifactRef",
     "Check",
     "CheckResult",
+    "Comment",
     "Complexity",
     "CriterionResult",
     "GateAnswer",
@@ -37,7 +38,9 @@ __all__ = [
     "NotificationKind",
     "OpenGate",
     "PRRef",
+    "Reply",
     "RepoCheckout",
+    "ReviewEvent",
     "Route",
     "RouteOverride",
     "RoutingConfig",

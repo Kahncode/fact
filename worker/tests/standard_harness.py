@@ -34,12 +34,12 @@ from fact.core.activity_contract import (
 from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
-from fact.sdk.pull_requests import REVIEW_STAGE
+from fact.sdk.review_wait import REVIEW_STAGE
 from fact.worker.activity_workers import by_zone
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
 from standard_env import OPTIONS, RUNNER_QUEUE, WORKFLOW_QUEUE, load_standard
-from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, LOW_RISK, run_input
+from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, LOW_RISK, REPLY, run_input
 from standard_pr_fakes import FakePRSteps
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporal_env import terminate_if_running, time_skipping_env
@@ -65,6 +65,7 @@ class FakeActivities(FakePRSteps):
         default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, outputs=LEARNED)
     )
     classify: StepResult = field(default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, outputs=LOW_RISK))
+    review_reply: list[StepResult] = field(default_factory=list)  # each `review_reply` session, in order
     test_failures_after_address: int = 0  # `test` failures once `address_review` has run
     checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
@@ -90,7 +91,7 @@ class FakeActivities(FakePRSteps):
     @activity.defn(name=RECORD_GATE_OPENED)
     async def record_gate_opened(self, spec: GateOpenedInput) -> str:
         self._call(RECORD_GATE_OPENED, spec)
-        if spec.kind == REVIEW_STAGE:  # GitHub answers it, through `wait_for_pr_closed`
+        if spec.kind == REVIEW_STAGE:  # GitHub answers it, through `wait_for_review`
             return f"step-{spec.gate_id}"
         if self.gate_decisions is not None and self.client is not None:
             decision = self.gate_decisions.pop(0) if self.gate_decisions else GateDecision.REJECT
@@ -137,8 +138,8 @@ class FakeActivities(FakePRSteps):
             if isinstance(scripted, Exception):
                 raise scripted
             return scripted
-        if spec.prompt_name in {"review", "classify"}:
-            return self.review if spec.prompt_name == "review" else self.classify
+        if spec.prompt_name in {"review", "classify", "review_reply"}:
+            return self._judge(spec.prompt_name)
         if spec.prompt_name == "learn":
             if isinstance(self.learn, Exception):
                 raise self.learn
@@ -155,6 +156,14 @@ class FakeActivities(FakePRSteps):
         outputs = {"title": "feat(widget): add the widget"} if implementing else {}
         outcome = self.implement_outcome if implementing else StepOutcome.PASSED
         return StepResult(outcome=outcome, summary=f"{spec.prompt_name} done", outputs=outputs)
+
+    def _judge(self, prompt: str) -> StepResult:
+        """Answer the sessions that judge rather than change: the review, classify and review replies."""
+        if prompt == "review_reply":
+            return (
+                self.review_reply.pop(0) if self.review_reply else StepResult(outcome=StepOutcome.PASSED, outputs=REPLY)
+            )
+        return self.review if prompt == "review" else self.classify
 
     @activity.defn(name=SHELL_STEP)
     async def shell_step(self, spec: ShellStepInput) -> StepResult:
@@ -189,7 +198,10 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.open_change_set,
         fakes.post_cost_comment,
         fakes.wait_for_ci,
-        fakes.wait_for_pr_closed,
+        fakes.wait_for_review,
+        fakes.collect_comments,
+        fakes.post_replies,
+        fakes.request_review,
         fakes.merge_change_set,
         fakes.classify_signals,
         fakes.label_change_set,
