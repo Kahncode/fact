@@ -1,19 +1,24 @@
 """
 Read a PR's reviews and a PR's or an issue's comments through the GitHub REST API, and pick what a review wait sees.
 
-`review_event` decides from the PR and its reviews (oldest first, as GitHub lists them): merged or closed first; then
-the first `CHANGES_REQUESTED` review the run has not handled; then an `APPROVED` review on the current head, by anyone,
+Only maintainers count: a review or a comment is taken only when its author is a person with `write`, `maintain` or
+`admin` permission on the repository (`Maintainers`, `GET /repos/{repo}/collaborators/{login}/permission`). Bots, fact's
+own replies among them, and everyone else are left out, as if they were not there. A lookup that fails other than with
+a 404 raises: the author is never counted by default.
+
+`review_event` decides from the PR and its maintainers' reviews (oldest first, as GitHub lists them): merged or closed
+first; then the first `CHANGES_REQUESTED` review the run has not handled; then an `APPROVED` review on the current head,
 not handled yet and newer than every `CHANGES_REQUESTED` review (a reviewer who accepts fact's push-back approves).
 Reviews submitted before `since` (the run's start) are ignored: on a PR an earlier run opened, that run answered them.
-Comments are people's only: bots, fact's own replies among them, are left out.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from datetime import datetime
 from typing import Any
 
 import httpx
 from fact.core.activity_contract import Comment, CommentKind, ReviewEvent
+from fact.core.github import GitHubNotFoundError
 from fact.core.types import PRRef
 
 PAGE_SIZE = 100
@@ -21,6 +26,7 @@ MAX_PAGES = 20  # 2,000 reviews or comments on one PR is far more than any real 
 APPROVED = "APPROVED"
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
 BOT = "Bot"
+MAINTAINER_PERMISSIONS = frozenset({"admin", "write"})  # GitHub reports `maintain` as `write` here
 
 
 async def paged(client: httpx.AsyncClient, path: str, params: dict[str, str] | None = None) -> list[dict[str, Any]]:
@@ -36,13 +42,43 @@ async def paged(client: httpx.AsyncClient, path: str, params: dict[str, str] | N
     return items
 
 
-def _login(item: dict[str, Any]) -> str:
+def login_of(item: dict[str, Any]) -> str:
     return str((item.get("user") or {}).get("login") or "")
 
 
-def _by_person(item: dict[str, Any]) -> bool:
+def by_person(item: dict[str, Any]) -> bool:
     user = item.get("user") or {}
     return bool(user) and user.get("type") != BOT
+
+
+class Maintainers:
+    """
+    Which logins have write access to one repository, each looked up once per instance (one per activity call or poll).
+
+    A 404 (not a collaborator, or no such user) means not a maintainer; any other failure raises, never counting the
+    author by default.
+    """
+
+    def __init__(self, client: httpx.AsyncClient, repo: str) -> None:
+        self._client = client
+        self._repo = repo
+        self._known: dict[str, bool] = {}
+
+    async def check(self, login: str) -> bool:
+        if login not in self._known:
+            self._known[login] = await self._lookup(login)
+        return self._known[login]
+
+    async def among(self, logins: Iterable[str]) -> frozenset[str]:
+        """Return the maintainers among `logins`."""
+        return frozenset([login for login in dict.fromkeys(logins) if await self.check(login)])
+
+    async def _lookup(self, login: str) -> bool:
+        try:
+            body = (await self._client.get(f"/repos/{self._repo}/collaborators/{login}/permission")).json()
+        except GitHubNotFoundError:
+            return False
+        return body.get("permission") in MAINTAINER_PERMISSIONS
 
 
 def _after(review: dict[str, Any], since: datetime | None) -> bool:
@@ -50,15 +86,21 @@ def _after(review: dict[str, Any], since: datetime | None) -> bool:
     return since is None or not submitted or _time(submitted) >= since
 
 
-def review_event(
+def review_event(  # noqa: PLR0913 - the PR as read, what the run handled, who counts
     pr: PRRef,
     body: dict[str, Any],
     reviews: list[dict[str, Any]],
     handled: Collection[int],
+    *,
+    maintainers: Collection[str],
     since: datetime | None = None,
 ) -> ReviewEvent | None:
-    """Return the first event on the PR (`body` is its `GET /pulls/{n}`), or None while nothing needs the run."""
-    reviews = [r for r in reviews if _after(r, since)]
+    """
+    Return the first event on the PR (`body` is its `GET /pulls/{n}`), or None while nothing needs the run.
+
+    Only the reviews by a person in `maintainers` count; any other is skipped as if it were not there.
+    """
+    reviews = [r for r in reviews if _after(r, since) and by_person(r) and login_of(r) in maintainers]
     head = str((body.get("head") or {}).get("sha") or pr.head_sha)
     current = pr.model_copy(update={"head_sha": head})
     if body.get("merged"):
@@ -71,10 +113,10 @@ def review_event(
             continue
         last_changes = i
         if review["id"] not in handled:
-            return ReviewEvent(pr=current, kind="changes_requested", review_id=review["id"], reviewer=_login(review))
+            return ReviewEvent(pr=current, kind="changes_requested", review_id=review["id"], reviewer=login_of(review))
     for review in reversed(reviews[last_changes + 1 :]):
         if review.get("state") == APPROVED and review.get("commit_id") == head and review["id"] not in handled:
-            return ReviewEvent(pr=current, kind="approved", review_id=review["id"], reviewer=_login(review))
+            return ReviewEvent(pr=current, kind="approved", review_id=review["id"], reviewer=login_of(review))
     return None
 
 
@@ -91,7 +133,7 @@ def _comment(item: dict[str, Any], kind: CommentKind, created: str = "created_at
     return Comment(
         id=item["id"],
         kind=kind,
-        author=_login(item),
+        author=login_of(item),
         body=str(item.get("body") or ""),
         created_at=_time(item[created]),
         url=str(item.get("html_url") or ""),
@@ -117,14 +159,16 @@ async def collect(  # noqa: PLR0913 - where to read, and from when
     since: datetime | None,
     review_id: int | None,
 ) -> list[Comment]:
-    """People's comments on the PR or issue since `since` (with all of review `review_id`), oldest first."""
+    """Maintainers' comments on the PR or issue since `since` (with all of review `review_id`), oldest first."""
     found: list[Comment] = []
     if pull_request:
         reviews = await paged(client, f"/repos/{repo}/pulls/{number}/reviews")
-        found += [_comment(r, "review", "submitted_at") for r in reviews if _by_person(r) and r.get("submitted_at")]
+        found += [_comment(r, "review", "submitted_at") for r in reviews if by_person(r) and r.get("submitted_at")]
         inline = await paged(client, f"/repos/{repo}/pulls/{number}/comments")
-        found += [_comment(c, "review_comment") for c in inline if _by_person(c)]
+        found += [_comment(c, "review_comment") for c in inline if by_person(c)]
     conversation = await paged(client, f"/repos/{repo}/issues/{number}/comments")
-    found += [_comment(c, "comment") for c in conversation if _by_person(c)]
-    kept = [c for c in found if c.body.strip() and _wanted(c, since, review_id)]
+    found += [_comment(c, "comment") for c in conversation if by_person(c)]
+    wanted = [c for c in found if c.body.strip() and _wanted(c, since, review_id)]
+    maintainers = await Maintainers(client, repo).among(c.author for c in wanted)
+    kept = [c for c in wanted if c.author in maintainers]
     return sorted(kept, key=lambda c: c.created_at)
