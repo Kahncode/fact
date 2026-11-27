@@ -55,7 +55,8 @@ class ClassifySteps:
             answer = parse_classify(await self.agent(stage_id, prompt, context, pr_text=False))
         except ActivityError as exc:  # timed out, interrupted twice, or the step could not start
             answer = f"the classify session failed: {exc.cause or exc}"
-        classification = decide(signals, answer, spec_ambiguous=self.spec_ambiguous, problems=problems)
+        forced = self.spec_ambiguous and self.input.review_spec_ambiguous  # else only the session weighs it
+        classification = decide(signals, answer, spec_ambiguous=forced, problems=problems)
         workflow.logger.info("classified %s: %s", classification.route, "; ".join(classification.reasons))
         await self.label_change_set(prs, classification)
         return classification
