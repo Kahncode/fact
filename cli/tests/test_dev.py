@@ -5,7 +5,7 @@ import pytest
 import typer
 from fact.cli import dev
 from fact.cli.main import app
-from fact.core.settings import CONFIG_VAR, Settings, config_file
+from fact.core.settings import Settings
 from typer.testing import CliRunner
 
 
@@ -65,7 +65,7 @@ def test_build_commands_from_pinned(settings: Settings, tmp_path: Path) -> None:
     python = str(dev.venv_python(checkout))
     assert api.argv == [python, "-m", "fact.api"]
     assert worker.argv == [python, "-m", "fact.worker"]
-    assert api.env == worker.env == {CONFIG_VAR: str(config_file().resolve())}
+    assert api.env == worker.env == {}  # the checkout reads its own fact.yaml and .env
     assert temporal.env == {}
 
 
