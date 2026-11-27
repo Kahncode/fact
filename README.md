@@ -17,7 +17,7 @@ uv sync
 uv run fact dev
 ```
 
-`fact dev` starts the Temporal dev server (UI at http://localhost:8233), the API and the worker, prefixing each output line with the process name. Ctrl-C stops all three; if one exits, the others are stopped too. While runs are active, stop it with `uv run fact shutdown` instead (such as before a reboot): no new run starts, and `fact dev` stops all three and exits once the active runs end (`fact scheduler on` cancels). In another terminal, `uv run fact projects list` shows the projects the API knows about.
+`fact dev` starts the Temporal dev server (UI at http://localhost:8233), the API and the worker, prefixing each output line with the process name. They run detached, tracked in `<data_dir>/run/`, so restarting `fact dev` (or it crashing) leaves them running and the next `fact dev` adopts them; a second `fact dev` is refused. A child that exits is started again. Ctrl-C stops all three. While runs are active, stop it with `uv run fact shutdown` instead (such as before a reboot): no new run starts, and `fact dev` stops all three and exits once the active runs end (`fact scheduler on` cancels). In another terminal, `uv run fact projects list` shows the projects the API knows about.
 
 ## Letting fact work on itself
 
