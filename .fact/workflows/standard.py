@@ -17,7 +17,8 @@ base (`sync_base`, a merge commit, as the PR is squashed), hand conflicts to a `
 the merge, loop the checks (with their gate), push and wait for CI again, at most `MAX_BASE_SYNCS` times each before a
 person is asked. Once CI is green, `classify` routes the change set: the rules' signals (`classify_signals`) and a
 read-only `classify` session (risk, door, security findings) decide `auto_merge` or `human_review`, and a `label_prs`
-step labels each PR `fact:auto-merge` or `fact:needs-review` and adds a `## Review` section to its description. Then,
+step labels each PR `fact:auto-merge` or `fact:needs-review` and adds a `## Review` section to its description; a
+base sync after that which moves a PR's head classifies again once CI is green, so the label describes what merges. Then,
 while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head
 commit CI passed on) and the run ends `merged`. If the switch is off or GitHub refuses the merge otherwise, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as
 human wait time) until every PR is merged or closed: it ends `merged` if all were merged, else `closed`, and its
@@ -76,6 +77,10 @@ def _ended(stage: str, step: StepResult) -> RunResult:
     return RunResult(
         outcome=outcome, summary=limit_text(f"{stage} ended {step.outcome}: {step.summary}", SUMMARY_BYTES)
     )
+
+
+def _heads(prs: list[PRRef]) -> dict[tuple[str, int], str]:
+    return {(pr.repo, pr.number): pr.head_sha for pr in prs}
 
 
 @stages(
@@ -189,7 +194,7 @@ class Standard(FactWorkflow):
         if (stuck := await self._ci_loop(prs)) is not None:
             return stuck
         await self.classify(self.prs, review)
-        return await self._until_closed(self.prs)
+        return await self._until_closed(self.prs, review)
 
     async def _ci_loop(self, prs: list[PRRef]) -> RunResult | None:
         """
@@ -226,12 +231,12 @@ class Standard(FactWorkflow):
         await self.push_change_set()
         return None
 
-    async def _until_closed(self, prs: list[PRRef]) -> RunResult:
+    async def _until_closed(self, prs: list[PRRef], review: Review) -> RunResult:
         """
         CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed.
 
         A merge GitHub refuses as out of date takes the base (`_take_base`) and CI again, at most `MAX_BASE_SYNCS`
-        times; any other refusal goes to a person.
+        times, and classifies again if that moved a PR's head; any other refusal goes to a person.
         """
         syncs = 0
         while MERGE_WHEN_GREEN:
@@ -245,6 +250,8 @@ class Standard(FactWorkflow):
                 return stuck
             if (stuck := await self._ci_loop(self.prs)) is not None:
                 return stuck
+            if _heads(self.prs) != _heads(prs):  # the merge, a resolution or a CI fix changed what would merge
+                await self.classify(self.prs, review)
             prs = self.prs
         await self.notify_prs_ready(prs)
         outcome = await self.wait_for_pr_closed(prs)
