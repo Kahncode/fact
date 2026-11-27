@@ -16,4 +16,4 @@ Every requirement below comes from Samuel; the right column says where this spec
 | R10 | The UI and factory manage notifications to the user | UI and notifications |
 | R11 | Access to all logs, plus time and cost per step | Observability |
 | R12 | Visualize a workflow and inspect every step | UI and notifications |
-| R13 | FastAPI + SQLite now, with a path to Supabase | Storage and stack |
+| R13 | FastAPI + SQLite locally; hosted on Railway with Supabase (database, Auth, Storage) from M5 | Storage and stack |

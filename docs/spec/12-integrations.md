@@ -63,7 +63,7 @@ Removing `fact:ready` from an issue with a run in progress does not stop the run
 | --- | --- |
 | Homepage URL | `https://github.com/Kahncode/fact` |
 | Callback URL, OAuth during installation, device flow | Callback URL http://localhost:8000/github/callback (a placeholder GitHub requires; unused); OAuth during installation and device flow off |
-| Webhook | Off in v0, which polls the same events through the API; on once fact is hosted (or locally through a smee.io forwarding channel) |
+| Webhook | Off in v0, which polls the same events through the API; on once fact is hosted (M5, `https://app.sofact.dev/api/v1/github/webhook`, with a webhook secret), or locally through a smee.io forwarding channel. Deliveries wake ticks and runs; GitHub stays the state (`19-cloud.md`) |
 | Contents | Read and write |
 | Pull requests | Read and write |
 | Issues | Read and write |

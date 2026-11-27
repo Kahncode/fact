@@ -251,7 +251,7 @@ Three local processes: Temporal dev server, the API, and the worker, with two SQ
 
 ## Milestones
 
-M0 Skeleton, M1 First run, M2 Issues and gates, M3 Classify and auto-merge, M4 UI, M5 Loops and multi-repo, M6 Planner, M7 Hardening. Detail in `docs/spec/15-milestones.md`. Finished file tasks are deleted (git history keeps them); work after M2 is GitHub issues.
+The roadmap (M0 onwards) is the Roadmap section of `tasks/backlog.md`, the only place milestones are kept. Finished file tasks are deleted (git history keeps them); work after M2 is GitHub issues.
 
 ## Subsystem Links
 
@@ -269,7 +269,7 @@ No `docs/<subsystem>.md` deep-dive files exist yet. Design documentation lives i
 | UI and notifications | `docs/spec/11-ui-and-notifications.md` |
 | Storage and stack | `docs/spec/13-storage-and-stack.md` |
 | Dogfooding and safety, pinned checkout | `docs/spec/14-dogfooding-and-safety.md` |
-| Milestones | `docs/spec/15-milestones.md` |
+| Milestones | `tasks/backlog.md` (Roadmap) |
 | Decisions and open questions (design) | `docs/spec/16-decisions.md` |
 | Implementation decisions log, open items | `docs/decisions.md` |
 | Implementation decisions log, continued (from M2-07) | `docs/decisions-2.md` |

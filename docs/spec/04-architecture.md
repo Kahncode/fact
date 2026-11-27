@@ -15,3 +15,5 @@ flowchart LR
 ```
 
 Channels reach the factory API, which starts runs and answers gates through Temporal. The worker runs each step in the run's workspace and pushes PRs to GitHub, and every step reports its logs, time and cost back to the API, which stores them.
+
+Hosted (M5), the API, the control worker, Temporal and the databases run in the cloud and the run sandbox stays on a runner worker wherever the compute is; the runner reaches the factory only through outbound connections. See `19-cloud.md`.

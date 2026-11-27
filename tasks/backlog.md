@@ -35,19 +35,27 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 - Nothing calls `write_context` yet (M2-11 follow-up): decide what context the factory writes into the issue body, and whether the reader should strip the context section from `Task.body` and the acceptance criteria.
 - `report_status` treats every GitHub 4xx but 429 as permanent (M2-11 follow-up), so a 403 secondary rate limit is not retried and the event is lost; detect it (`retry-after`, `x-ratelimit-remaining: 0`) and retry.
 
-## Later milestones (from the spec)
+## Untrusted input (public repos)
 
+Safe today because only the owner has triage access and sets `fact:ready` by hand. Before other people can reach a project (a public repo with contributors, issues filed by outsiders), close these:
+
+- Issue author edits after ready: anyone can edit an issue they opened, and `GitHubIssuesSource` reads the body (and its `Depends on #n` lines) at every tick, so an outsider's issue labelled `fact:ready` can be rewritten into a prompt injection afterwards. Start only issues whose author is trusted (`author_association` in `OWNER`, `MEMBER`, `COLLABORATOR`, or a repo permission check), and freeze the body at the first start (hash or `updated_at`): an edit by someone without triage access holds the issue with `fact:needs-human`.
+- Comments reaching prompts: the planned gate answers on the issue, PR comments mentioning the App and review rounds would feed any GitHub user's text to an agent. Filter by commenter permission before a comment enters a prompt; write the rule into specs 07 and 12 before building them.
+- Auto-merge of sensitive paths: an injection can aim for an `auto_merge` classification, and `fact dev --follow main` then deploys it. Force `human_review` through `classify` globs for `worker/`, `sdk/`, `core/`, `.fact/workflows/`, `.claude/hooks/`, `.github/`, at least until the Docker runner isolates agents.
+- Never add an issue template whose `labels:` applies `fact:ready` (a template applies it for anyone). Set Actions to require approval for all outside contributors' workflow runs, and keep CI off `pull_request_target`.
+
+## Roadmap
+
+The milestones live here, and only here. v0 is done when the factory has shipped one of its own GitHub issues end to end, and your only touches were answering the planner, approving the plan and merging the PR.
+
+- M0 Skeleton, M1 First run, M2 Issues and gates: done.
 - M3 Classify and auto-merge.
 - M4 UI: the web app covers everything a person does.
-- M5: Ability to be deployed and factory running on real backend. Runners can still use the local compute, but the factory is in the cloud and self managed. This means already moving to supabase for persistence, handling auth.
+- M5 Cloud (planned 27 Nov 2026, `docs/spec/19-cloud.md`): API, UI, control worker, database, Temporal and artifact store hosted; the runner worker stays on your PC. Every route authenticated. Local `fact dev` keeps working unchanged. Stretch, not required: CI deploys `main`, and upgrades that wait for or drain active runs.
 - M5.2: Multi tenancy, organizations, projects, teams, etc.
-- M5.3: Queue based processing, this app is inherently a queue system. So the polling of task tracker should be slow poll, things should be pushed to a queue and later processed, but the queue should be able to be reordered also for new urgency. So there's some design to do. Relevant after we move to a "real backend".
-  - **Concurrency counts compute** (target in `docs/spec/10-observability.md`, decided 27 Nov 2026). The factory cap (`fact.yaml`, ours) and each project's cap (its `.fact/project.yaml`: the project regulating its throughput and spend) count concurrent runs only: queued or running, using a worker and compute. Today both count waiting runs too (`active_by_project`: queued, running or waiting), so one run waiting days on review holds a slot.
-  - A run waiting on a person or a usage limit frees its slot. When its gate is answered, its PR needs a `sync_base`, or its usage window resets, it goes back into the queue and waits for a slot like a new start, in queue order, never going over a cap. That needs a durable slot queue shared by scheduled starts and resumes (a DB-backed semaphore, or Temporal) and a wait for a slot in every resume path of `FactWorkflow` (gates, `wait_for_review`, usage-limit sleeps), surviving restarts (no in-process state).
-  - Rename both caps to `max_concurrent_runs` with the change of meaning, and have `fact scheduler status` show concurrent and waiting runs apart.
-  - Prerequisite: git hooks per worktree. A repository's hooks live in its bare mirror and point at the newest workspace's `.venv`, which is why fact's own cap is 1; once waiting runs free their slot, a waiting run that resumes could commit through hooks pointing at a deleted venv.
+- M5.3 Run queue (planned 27 Nov 2026, `docs/spec/10-observability.md`, Run queue): concurrency counts compute; a run releases its slot before every wait and queues a `resume` when it ends; one dispatcher grants slots in priority order under the factory, project and pool caps. Built after M5.
   - Later: a factory-side cap on one project (a registry entry in `fact.yaml`), for projects the factory serves but does not own; a limit on waiting runs, so open PRs and gates do not outgrow the people reviewing them.
-  - Until then keep it simple: the v0 caps, low concurrency.
+  - Later: the `workspace.keep_while_waiting` teardown timer (the setting exists from M5.3, default `forever`).
 - M6: Planner: the planning phase as a workflow, and the MCP server for planning from Claude. Until then, Claude Code in this repository is the planner. Also how do ideas in the backlog become planned and how does the planner work with the humans to get that done?
 - M7: Using some sort of serverless compute for runners. Docker runner, even for local development, ideally.
 - M8: Landing page, self-updatding. Brand book & voice. Taking its own screenshots and animations. Stretch: generated logos on a schedule (#72). 
@@ -55,6 +63,8 @@ An audit against the restart rule in `AGENTS.md` (runs survive a restart; no in-
 - M10: `@fact` comment trigger, multi-repo change sets.
 - M11: Hardening: Codex harness, budgets that pause runs.
 - Linear task source: in the spec, not yet scheduled.
+- v0.1: a second runner pool.
+- v0.2: scoring and benchmarks: LLM-judge scorers on every run, and a set of past issues replayed against a new version of fact (prompts, workflows, models) to show whether it is better before it is adopted.
 
 ## Ideas
 

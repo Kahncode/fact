@@ -13,7 +13,11 @@ A project is a set of repos, and a run works on all of them at once in one works
 | Step | One activity or gate inside a run, per attempt | kind (agent, shell, github, gate, notify), name (tells apart steps of one stage: the check or prompt), attempt, start, end, duration, wait time, tokens, cost, log and transcript refs, outputs |
 | Workspace | The per-run folder | one git worktree per repo, all on branch `fact/<ISSUE-KEY>` |
 | Change set | The PRs a run produces | one PR per touched repo, cross-linked, with a merge order |
-| Runner pool | Where a run's sandbox lives: your PC, containers, GitHub runners, Daytona | kind, concurrency cap, secrets |
+| Runner pool | Where a run's sandbox lives: your PC, containers, GitHub runners, Daytona | kind, concurrency cap, harness credentials (the pool brings its own) |
+| Runner | One worker process serving a runner pool from one machine; connects out to the factory, never in. Its live capacity is the slots it advertises (none while its usage window is spent) | pool, machine id, slots, paused until |
+| Control plane | The factory itself: API, control worker, Temporal and the databases; it does no compute, runners do | |
+| Slot | Permission for a run to use compute, granted by the dispatcher under the factory, project and pool caps; released before every wait | run, granted at |
+| Queue entry | A request for a slot: `start` (a ready task) or `resume` (a run whose wait ended) | kind, task or run, queue priority, enqueued at |
 | Harness | Which coding agent runs an agent step | Claude Code, Codex, OpenCode, Pi; model; allowed tools; chosen per task or per step (see Choosing a harness and model) |
 
 **How multi-repo works**

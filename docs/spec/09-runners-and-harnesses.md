@@ -16,14 +16,14 @@ A runner pool decides where a run's sandbox lives and a harness decides which co
 
 |  | GitHub runners | Daytona |
 | --- | --- | --- |
-| Style | Worker inside the sandbox: a GitHub Actions job starts a factory worker that polls the run's own task queue (`sandbox-<run_id>`) | Driven from outside: the control worker creates the sandbox and runs commands in it through Daytona's SDK |
+| Style | Worker inside the sandbox: a GitHub Actions job starts a factory worker that polls the run's own task queue (`sandbox-<run_id>`) | Driven from outside: a pool worker the factory hosts (not the control worker) creates the sandbox and runs commands in it through Daytona's SDK |
 | Start | The factory dispatches a runner workflow (`workflow_dispatch`) in a dedicated runner repository | API call to create a sandbox from a prepared image per project |
 | Lifetime | Jobs are time-limited (6 h on GitHub-hosted runners); a long run gets a new job, rebuilt from its branches | Stopped when idle and resumed on the next step; deleted when the run ends |
 | Concurrency cap | The account's concurrent job limit, and our own cap below it | The account's sandbox quota, and our own cap below it |
 | Secrets | Actions secrets on the runner repository (agent credentials only) | Injected as environment variables per sandbox (agent credentials only) |
 | Good for | Free or included minutes, Linux builds close to CI | Fast start, many parallel sandboxes, long-lived interactive sessions |
 
-**Prerequisites for any remote pool**: Temporal and the factory API reachable from outside your PC (Temporal Cloud, or a hosted server or tunnel), and object storage that is not a local folder. Until then, the only pool is your PC.
+**Prerequisites for any remote pool**: Temporal and the factory API reachable from outside your PC, and object storage that is not a local folder: M5 provides both (`19-cloud.md`, which also covers how a runner connects, authenticates and gets its credentials). Until then, the only pool is your PC.
 
 **Harness contract**
 
