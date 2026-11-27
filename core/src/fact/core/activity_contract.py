@@ -8,6 +8,7 @@ under these names and takes these inputs. Everything here crosses the Temporal b
 from datetime import datetime
 from typing import Any, Literal
 
+from fact.core.classification import Classification
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import Complexity, PRRef, RepoCheckout, RouteOverride, Task, WorkspaceHandle
@@ -37,6 +38,7 @@ NOTIFY = "notify"
 WRITE_HANDOFF = "write_handoff"
 REPORT_STATUS = "report_status"
 CLASSIFY_SIGNALS = "classify_signals"
+LABEL_CHANGE_SET = "label_change_set"
 
 Check = Literal["lint", "test", "build", "setup"]
 # a change in a run that the task's source hears of through `report_status` (`fact.core.tasks.events`)
@@ -46,8 +48,6 @@ MergeMethod = Literal["squash", "merge", "rebase"]
 # how `merge_change_set` ended: `out_of_date` when GitHub refused because the branch conflicts with or is behind its
 # base (`mergeable_state` `dirty` or `behind`), which a merge of the base fixes; `refused` for anything else
 MergeResult = Literal["merged", "out_of_date", "refused"]
-# a reason to want a person's review that `classify_signals` finds with no LLM (`06-workflow-authoring.md`, Classify)
-SignalName = Literal["schema_change", "api_change", "api_breaking", "always_review", "task_closed"]
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
@@ -116,6 +116,7 @@ class OpenChangeSetInput(_Input):
     criteria: list[CriterionResult] = Field(default_factory=list)  # from the review; empty: the task's plain list
     assumptions: list[str] = Field(default_factory=list)  # the agent sessions' `assumptions`, for the PR description
     spec_ambiguous: bool = False  # an agent session found the spec ambiguous
+    classification: Classification | None = None  # once classified: the PR description's `## Review` section
     run_url: str = ""
     attempt: int = 1  # of stage `open_pr`: a CI fix pushes and updates the PR again as the next attempt
 
@@ -264,13 +265,11 @@ class ClassifySignalsInput(_Input):
     handle: WorkspaceHandle
 
 
-class ChangedPath(_Input):
-    repo: str  # full name, a key of the workspace's repositories
-    path: str  # relative to the repository, with `/`
+class LabelChangeSetInput(_Input):
+    """Label each PR with its classification and re-render its description, `## Review` included."""
 
-
-class ClassifySignal(_Input):
-    """A signal `classify_signals` raised, with the changed paths that raised it (none for `task_closed`)."""
-
-    name: SignalName
-    paths: list[ChangedPath] = Field(default_factory=list)
+    run_id: str
+    change_set: OpenChangeSetInput  # with `classification` set
+    prs: list[PRRef]
+    stage_id: str = "label_prs"
+    attempt: int = 1

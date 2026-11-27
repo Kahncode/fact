@@ -41,7 +41,14 @@ async def test_fix_and_address_sessions_never_replace_the_implement_text() -> No
     fakes = FakeActivities(test_failures=1, review=review, learn=learn)
     await run_standard(fakes, "run-learn-fallback-after-fixes")
 
-    assert [p for _, _, p in agent_sessions(fakes)] == ["implement", "fix_checks", "review", "address_review", "learn"]
+    assert [p for _, _, p in agent_sessions(fakes)] == [
+        "implement",
+        "fix_checks",
+        "review",
+        "address_review",
+        "learn",
+        "classify",
+    ]
     (pr_spec,) = fakes.of(OPEN_CHANGE_SET)
     assert (pr_spec.title, pr_spec.summary) == (IMPLEMENT_TITLE, "implement done")
 

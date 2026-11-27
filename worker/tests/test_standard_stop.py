@@ -106,7 +106,7 @@ async def test_stop_in_review_keeps_the_pr_for_the_next_run() -> None:
     assert (result.outcome, result.summary, result.prs) == (RunOutcome.STOPPED, "stopped", [PR])
     (note,) = fakes.of(WRITE_HANDOFF)
     assert (note.stage_id, note.prs, note.reason) == (REVIEW_STAGE, [PR], "")
-    assert [s.stage_id for s in note.steps] == ["implement", "review", "learn"]
+    assert [s.stage_id for s in note.steps] == ["implement", "review", "learn", "classify"]
     # the cost comment goes on the kept PR last, once the stop is recorded
     assert _before(fakes, WRITE_HANDOFF, TEARDOWN_WORKSPACE)
     assert _before(fakes, RECORD_RUN_FINISHED, POST_COST_COMMENT)
@@ -124,7 +124,7 @@ async def test_restart_hands_the_note_to_every_agent_session() -> None:
 
     assert result.outcome == RunOutcome.MERGED
     sessions = fakes.of(AGENT_STEP)
-    assert [s.prompt_name for s in sessions] == ["implement", "review", "learn"]
+    assert [s.prompt_name for s in sessions] == ["implement", "review", "learn", "classify"]
     assert {s.handoff_ref for s in sessions} == {HANDOFF}
     assert fakes.of(WRITE_HANDOFF) == []
 

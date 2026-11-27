@@ -4,6 +4,8 @@ import pytest
 from fact.core.activity_contract import (
     AGENT_INTERRUPTED,
     AGENT_STEP,
+    CLASSIFY_SIGNALS,
+    LABEL_CHANGE_SET,
     MARK_TASK_DONE,
     MERGE_CHANGE_SET,
     NOTIFY,
@@ -47,7 +49,8 @@ async def test_green_path() -> None:
     assert order[0] == RECORD_RUN_STARTED
     assert order.index(PREPARE_WORKSPACE) < order.index(AGENT_STEP)
     assert order.index(MARK_TASK_DONE) < order.index(OPEN_CHANGE_SET) < order.index(WAIT_FOR_CI)
-    assert order.index(WAIT_FOR_CI) < order.index(MERGE_CHANGE_SET)
+    assert order.index(WAIT_FOR_CI) < order.index(CLASSIFY_SIGNALS) < order.index(LABEL_CHANGE_SET)
+    assert order.index(LABEL_CHANGE_SET) < order.index(MERGE_CHANGE_SET)
     assert order[-3:] == [TEARDOWN_WORKSPACE, POST_COST_COMMENT, NOTIFY]  # the cost comment covers every step
     assert [(r.task_key, r.event) for r in fakes.of(REPORT_STATUS)] == [
         ("task:M1-99", "run_started"),
@@ -55,9 +58,17 @@ async def test_green_path() -> None:
         ("task:M1-99", "merged"),
     ]
     assert fakes.of(REPORT_STATUS)[1].prs == [PR]
-    assert agent_sessions(fakes) == [("implement", 1, "implement"), ("review", 1, "review"), ("learn", 1, "learn")]
-    last_agent = len(order) - 1 - order[::-1].index(AGENT_STEP)
-    assert last_agent < order.index(MARK_TASK_DONE)  # learn runs before mark_done
+    assert agent_sessions(fakes) == [
+        ("implement", 1, "implement"),
+        ("review", 1, "review"),
+        ("learn", 1, "learn"),
+        ("classify", 1, "classify"),  # once CI is green
+    ]
+    agents = [i for i, n in enumerate(order) if n == AGENT_STEP]
+    assert agents[2] < order.index(MARK_TASK_DONE) < order.index(WAIT_FOR_CI) < agents[3]  # learn, then classify
+    (labelled,) = fakes.of(LABEL_CHANGE_SET)
+    assert (labelled.stage_id, labelled.prs) == ("label_prs", [PR])
+    assert labelled.change_set.classification.route == "auto_merge"
     assert [(s.stage_id, s.attempt, s.check) for s in fakes.of(SHELL_STEP)] == [
         ("setup", 1, "setup"),
         ("checks", 1, "lint"),
@@ -92,6 +103,7 @@ async def test_two_failures_then_green() -> None:
         ("implement", 3, "fix_checks"),
         ("review", 1, "review"),
         ("learn", 1, "learn"),
+        ("classify", 1, "classify"),
     ]
     fix = fakes.of(AGENT_STEP)[1]
     assert "### test: `pytest` exited with 1" in fix.context
@@ -163,7 +175,7 @@ async def test_retryable_block_resumes_the_session_once() -> None:
     result, _ = await run_standard(fakes, "run-retryable")
 
     assert result.outcome == RunOutcome.MERGED
-    first, second, _review, _learn = fakes.of(AGENT_STEP)
+    first, second, _review, _learn, _classify = fakes.of(AGENT_STEP)
     assert (first.attempt, first.resume_session_id) == (1, None)
     assert (second.stage_id, second.attempt, second.prompt_name) == ("implement", 2, "implement")
     assert second.resume_session_id == "s-1"
@@ -184,7 +196,7 @@ async def test_interrupted_worker_resumes_the_session() -> None:
     result, _ = await run_standard(fakes, "run-interrupted")
 
     assert result.outcome == RunOutcome.MERGED
-    _, resumed, _review, _learn = fakes.of(AGENT_STEP)
+    _, resumed, _review, _learn, _classify = fakes.of(AGENT_STEP)
     assert (resumed.attempt, resumed.resume_session_id) == (2, "s-1")
     assert "worker" in resumed.context
 

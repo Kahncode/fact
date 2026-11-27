@@ -4,6 +4,8 @@ from pathlib import Path
 from string import Template
 
 from fact.core.activity_contract import CheckResult, CriterionResult
+from fact.core.classification import Classification
+from fact.core.github import AUTO_MERGE_LABEL, NEEDS_REVIEW_LABEL
 from fact.core.tasks import parse_key
 from fact.core.types import Task
 
@@ -76,6 +78,42 @@ def _assumptions(assumptions: list[str], *, spec_ambiguous: bool) -> str:
     return "\n## Assumptions\n\n" + "\n\n".join(lines) + "\n"
 
 
+def _where(file: str, line: int | None) -> str:
+    if not file:
+        return ""
+    return f"`{file}:{line}` " if line is not None else f"`{file}` "
+
+
+def _judgment(name: str, value: str | None, reason: str) -> str:
+    if value is None:
+        return f"- **{name}**: not judged"
+    return f"- **{name}**: {value.replace('_', '-')}" + (f": {' '.join(reason.split())}" if reason.strip() else "")
+
+
+def _review(classification: Classification | None) -> str:
+    """Return the `## Review` section, between blank lines; empty before the change set is classified."""
+    if classification is None:
+        return ""
+    c = classification
+    if c.route == "auto_merge":
+        verdict = f"**Auto-merge** (`{AUTO_MERGE_LABEL}`): no signal asks for a person's review."
+    else:
+        why = "\n".join(f"- {' '.join(r.split())}" for r in c.reasons)
+        verdict = f"**Needs review** (`{NEEDS_REVIEW_LABEL}`):\n\n{why}"
+    signals = [
+        f"- `{s.name}`" + (": " + ", ".join(f"`{p.path}`" for p in s.paths) if s.paths else "") for s in c.signals
+    ]
+    judged = [_judgment("Risk", c.risk, c.risk_reason), _judgment("Door", c.door, c.door_reason)]
+    findings = [f"- {_where(f.file, f.line)}{' '.join(f.message.split())}" for f in c.security_findings]
+    parts = [
+        verdict,
+        "### Signals\n\n" + ("\n".join(signals) or "None."),
+        "### Risk and reversibility\n\n" + "\n".join(judged),
+        "### Security findings\n\n" + ("\n".join(findings) or "None."),
+    ]
+    return "\n## Review\n\n" + "\n\n".join(parts) + "\n"
+
+
 def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     *,
     summary: str,
@@ -87,6 +125,7 @@ def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     criteria: list[CriterionResult] | None = None,
     assumptions: list[str] | None = None,
     spec_ambiguous: bool = False,
+    classification: Classification | None = None,
     pr_count: int = 1,
 ) -> str:
     """
@@ -95,6 +134,8 @@ def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     `pr_count`: how many PRs the change set has, which decides between closing and only linking an issue.
     `assumptions` and `spec_ambiguous`, from the agent sessions, make an `## Assumptions` section after the summary,
     absent when there are none; the description becomes the squash commit's body, so they stay in git history.
+    `classification`, once classify ran, makes a `## Review` section after them: the route and its reasons, the
+    signals with their paths, risk and door with their reasons, and the security findings.
     """
     task_line = task_link(task, repo_url, default_branch)
     if reference := issue_reference(task, pr_count):
@@ -102,6 +143,7 @@ def render_pr_body(  # noqa: PLR0913 - options are keyword-only
     values = {
         "summary": summary.strip() or "(no summary)",
         "assumptions": _assumptions(assumptions or [], spec_ambiguous=spec_ambiguous),
+        "review": _review(classification),
         "task": task_line,
         "acceptance_criteria": _criteria(task, criteria or []),
         "checks": _checks(check_results),

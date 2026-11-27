@@ -3,12 +3,16 @@
 from dataclasses import dataclass, field
 
 from fact.core.activity_contract import (
+    CLASSIFY_SIGNALS,
+    LABEL_CHANGE_SET,
     MERGE_CHANGE_SET,
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     SYNC_BASE,
     WAIT_FOR_CI,
     WAIT_FOR_PR_CLOSED,
+    ClassifySignalsInput,
+    LabelChangeSetInput,
     MergeChangeSetInput,
     MergeResult,
     OpenChangeSetInput,
@@ -18,6 +22,7 @@ from fact.core.activity_contract import (
     WaitForCIInput,
     WaitForPRClosedInput,
 )
+from fact.core.classification import ClassifySignal
 from fact.core.enums import StepOutcome
 from fact.core.types import PRRef, StepResult
 from standard_inputs import PR, REPO
@@ -40,6 +45,7 @@ class FakePRSteps:
     merges: bool = False  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
     merge_script: list[MergeResult] = field(default_factory=list)  # first `merge_change_set` results, before `merges`
     sync_script: list[SyncScript] = field(default_factory=list)  # first `sync_base` results, then `up_to_date`
+    signals: list[ClassifySignal] = field(default_factory=list)  # what `classify_signals` raises
     calls: list[tuple[str, object]] = field(default_factory=list)
 
     def _call(self, name: str, spec: object) -> None:
@@ -99,3 +105,12 @@ class FakePRSteps:
             return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 files conflict", outputs=outputs)
         outputs = {"merged": [REPO] if state == "merged" else [], "conflicts": {}}
         return StepResult(outcome=StepOutcome.PASSED, summary=state, outputs=outputs)
+
+    @activity.defn(name=CLASSIFY_SIGNALS)
+    async def classify_signals(self, spec: ClassifySignalsInput) -> list[ClassifySignal]:
+        self._call(CLASSIFY_SIGNALS, spec)
+        return self.signals
+
+    @activity.defn(name=LABEL_CHANGE_SET)
+    async def label_change_set(self, spec: LabelChangeSetInput) -> None:
+        self._call(LABEL_CHANGE_SET, spec)

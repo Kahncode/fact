@@ -5,7 +5,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fact.core.activity_contract import ChangedPath, ClassifySignal, ClassifySignalsInput
+from fact.core.activity_contract import ClassifySignalsInput
+from fact.core.classification import ChangedPath, ClassifySignal
 from fact.core.settings import ProjectRef, Settings
 from fact.core.types import WorkspaceHandle
 from fact.worker.activities.classify import ClassifyActivities, matches, removes_or_changes

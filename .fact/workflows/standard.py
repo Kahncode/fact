@@ -15,7 +15,11 @@ because it moved on: when a PR conflicts with its base (`mergeable_state` `dirty
 push; GitHub runs no CI on it), and when GitHub refuses the merge as out of date. Both take the same path: merge the
 base (`sync_base`, a merge commit, as the PR is squashed), hand conflicts to a `resolve_conflicts` session that commits
 the merge, loop the checks (with their gate), push and wait for CI again, at most `MAX_BASE_SYNCS` times each before a
-person is asked. Once CI is green, while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head
+person is asked. Once CI is green, `classify` routes the change set: the rules' signals (`classify_signals`) and a
+read-only `classify` session (risk, door, security findings) decide `auto_merge` or `human_review`, and a `label_prs`
+step labels each PR `fact:auto-merge` or `fact:needs-review` and adds a `## Review` section to its description; a
+base sync after that which moves a PR's head classifies again once CI is green, so the label describes what merges. Then,
+while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head
 commit CI passed on) and the run ends `merged`. If the switch is off or GitHub refuses the merge otherwise, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as
 human wait time) until every PR is merged or closed: it ends `merged` if all were merged, else `closed`, and its
 workspace is torn down. However the run ends, `FactWorkflow` comments its cost on the PRs last, once every step is
@@ -38,6 +42,7 @@ from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.sdk.base_sync import RESOLVE_STAGE, SYNC_STAGE
+    from fact.sdk.classify import CLASSIFY_STAGE, LABEL_STAGE
     from fact.sdk.pull_requests import REVIEW_STAGE
     from fact.sdk.review import Review, parse_review, review_context
     from fact.sdk.types import (
@@ -60,8 +65,8 @@ MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
 NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
 APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
-# Interim, until the classify stage and auto-merge exist (issues #13, #14): merge every change set whose CI is green,
-# with no person, so fact can work through its own tasks unattended. #14 replaces this switch with classification.
+# Interim, until auto-merge follows the classification (issue #14): merge every change set whose CI is green, whatever
+# its route, so fact can work through its own tasks unattended. #14 replaces this switch with the classification.
 MERGE_WHEN_GREEN = True
 MAX_BASE_SYNCS = 2  # merges of the base per loop (a conflicting PR, a merge refused as out of date) before a person
 
@@ -72,6 +77,10 @@ def _ended(stage: str, step: StepResult) -> RunResult:
     return RunResult(
         outcome=outcome, summary=limit_text(f"{stage} ended {step.outcome}: {step.summary}", SUMMARY_BYTES)
     )
+
+
+def _heads(prs: list[PRRef]) -> dict[tuple[str, int], str]:
+    return {(pr.repo, pr.number): pr.head_sha for pr in prs}
 
 
 @stages(
@@ -87,6 +96,8 @@ def _ended(stage: str, step: StepResult) -> RunResult:
         Stage("open_pr", "Open PR", StepKind.GITHUB),
         Stage("wait_for_ci", "Wait for CI", StepKind.GITHUB, loops_to="fix_ci"),
         Stage("fix_ci", "Fix CI", StepKind.AGENT, loops_to="open_pr"),
+        Stage(CLASSIFY_STAGE, "Classify", StepKind.AGENT),
+        Stage(LABEL_STAGE, "Label PRs", StepKind.GITHUB),
         Stage(SYNC_STAGE, "Merge base branch", StepKind.SHELL),
         Stage(RESOLVE_STAGE, "Resolve conflicts", StepKind.AGENT, loops_to=SYNC_STAGE),
         Stage(REVIEW_STAGE, "Wait for review", StepKind.GATE),
@@ -138,7 +149,7 @@ class Standard(FactWorkflow):
         await self._learn()
         await self.mark_task_done()
         prs = await self.open_change_set(*self.pr_text(implemented.summary), criteria=review.criteria)
-        return await self._ci_green(prs)
+        return await self._ci_green(prs, review)
 
     async def _approve_plan(self) -> RunResult | None:
         """Ask a person to approve the task as planned: None if approved, else the run's end, `stopped`."""
@@ -178,11 +189,12 @@ class Standard(FactWorkflow):
             if (stuck := await self._ask(SYNC_STAGE, summary)) is not None:
                 return stuck
 
-    async def _ci_green(self, prs: list[PRRef]) -> RunResult:
-        """Wait for CI with fix sessions, asking a person each time it stays red; then merge or wait, and end."""
+    async def _ci_green(self, prs: list[PRRef], review: Review) -> RunResult:
+        """Wait for CI with fix sessions, asking a person each time it stays red; classify, then merge or wait."""
         if (stuck := await self._ci_loop(prs)) is not None:
             return stuck
-        return await self._until_closed(self.prs)
+        await self.classify(self.prs, review)
+        return await self._until_closed(self.prs, review)
 
     async def _ci_loop(self, prs: list[PRRef]) -> RunResult | None:
         """
@@ -219,12 +231,12 @@ class Standard(FactWorkflow):
         await self.push_change_set()
         return None
 
-    async def _until_closed(self, prs: list[PRRef]) -> RunResult:
+    async def _until_closed(self, prs: list[PRRef], review: Review) -> RunResult:
         """
         CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed.
 
         A merge GitHub refuses as out of date takes the base (`_take_base`) and CI again, at most `MAX_BASE_SYNCS`
-        times; any other refusal goes to a person.
+        times, and classifies again if that moved a PR's head; any other refusal goes to a person.
         """
         syncs = 0
         while MERGE_WHEN_GREEN:
@@ -238,6 +250,8 @@ class Standard(FactWorkflow):
                 return stuck
             if (stuck := await self._ci_loop(self.prs)) is not None:
                 return stuck
+            if _heads(self.prs) != _heads(prs):  # the merge, a resolution or a CI fix changed what would merge
+                await self.classify(self.prs, review)
             prs = self.prs
         await self.notify_prs_ready(prs)
         outcome = await self.wait_for_pr_closed(prs)
