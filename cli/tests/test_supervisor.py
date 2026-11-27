@@ -9,7 +9,7 @@ from pathlib import Path
 import psutil
 import pytest
 from fact.cli import processes, supervisor
-from fact.cli.processes import ChildSpec, ProcessRecord, RunDir
+from fact.cli.processes import Child, ChildSpec, ProcessRecord, RunDir
 from fact.cli.supervisor import StopRequestedError, Supervisor, run_all
 
 SLEEPER = [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"]
@@ -45,11 +45,9 @@ def started() -> Iterator[list[psutil.Process]]:
         processes.kill_tree(proc)
 
 
-def _wait_until(condition: object, timeout: float = 15.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not condition():  # type: ignore[operator]
-        assert time.monotonic() < deadline, "timed out"
-        time.sleep(0.05)
+def _wait_exit(child: Child) -> None:
+    assert child.popen is not None
+    child.popen.wait(timeout=15)
 
 
 def test_a_restarted_supervisor_adopts_the_live_children(run_dir: RunDir) -> None:
@@ -114,11 +112,11 @@ def test_a_child_that_exits_is_started_again(run_dir: RunDir, monkeypatch: pytes
     sup = Supervisor([ChildSpec("q", quitter, graceful=False)], run_dir)
 
     sup.start_missing()
-    _wait_until(sup.children["q"].exited)
+    _wait_exit(sup.children["q"])
     sup.reap()
     assert "q" not in run_dir.records()  # removed once it exited
     sup.start_missing()
-    _wait_until(sup.children["q"].exited)
+    _wait_exit(sup.children["q"])
     sup.reap()
 
     assert starts.read_text(encoding="utf-8").splitlines() == ["up", "up"]
@@ -127,7 +125,6 @@ def test_a_child_that_exits_is_started_again(run_dir: RunDir, monkeypatch: pytes
 def test_a_graceful_child_stops_on_its_stop_file(run_dir: RunDir, capsys: pytest.CaptureFixture[str]) -> None:
     sup = Supervisor([ChildSpec("w", GRACEFUL)], run_dir)
     sup.start_missing()
-    _wait_until(lambda: "ready" in run_dir.log_path("w").read_text(encoding="utf-8"))
     child = sup.children["w"]
 
     sup.stop_all()

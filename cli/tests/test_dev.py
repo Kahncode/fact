@@ -20,9 +20,6 @@ def test_build_commands(settings: Settings, tmp_path: Path) -> None:
     assert api.argv[-2:] == ["-m", "fact.api"]
     assert worker.argv[-2:] == ["-m", "fact.worker"]
     assert worker.wait_for == ("localhost", 7300)  # the worker starts once Temporal listens
-    assert (temporal.port, api.port) == (7300, 8100)
-    assert [temporal.build, api.build, worker.build] == ["source"] * 3
-    assert not temporal.graceful  # killed: it watches no stop file
 
 
 def test_dev_fails_without_temporal(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ARG001

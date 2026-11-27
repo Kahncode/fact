@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 import psutil
@@ -150,6 +150,7 @@ def _popen(argv: list[str], env: dict[str, str], log: Path) -> subprocess.Popen[
             breakaway = flags | subprocess.CREATE_BREAKAWAY_FROM_JOB
             return subprocess.Popen(argv, creationflags=breakaway, **kwargs)  # noqa: S603
         except PermissionError:  # the job forbids breaking away
+            sys.stderr.write(f"warning: {argv[0]} starts inside fact dev's job; killing fact dev will kill it too\n")
             return subprocess.Popen(argv, creationflags=flags, **kwargs)  # noqa: S603
 
 
@@ -161,14 +162,14 @@ def start(spec: ChildSpec, run_dir: RunDir) -> Child:
     if spec.graceful:
         env[STOP_FILE_VAR] = str(run_dir.stop_path(spec.name))
     popen = _popen(spec.argv, env, run_dir.log_path(spec.name))
+    record = ProcessRecord(spec.name, spec.build, popen.pid, time.time(), spec.port, list(spec.argv))
+    run_dir.write(spec.name, record)  # at once: a `fact dev` dying now still leaves its child recorded
     proc: psutil.Process | None = None
-    started = time.time()
     try:
         proc = psutil.Process(popen.pid)
-        started = proc.create_time()
+        run_dir.write(spec.name, replace(record, started=proc.create_time()))
     except psutil.Error:  # exited already; the supervisor sees it on its next poll
         pass
-    run_dir.write(spec.name, ProcessRecord(spec.name, spec.build, popen.pid, started, spec.port, list(spec.argv)))
     return Child(spec, proc, popen)
 
 

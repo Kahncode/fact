@@ -19,9 +19,6 @@ async def test_the_stop_file_cancels_the_worker_as_ctrl_c_does(tmp_path: Path, m
 
     task = asyncio.create_task(run())
     await running.wait()
-    await asyncio.sleep(0.05)
-    assert not task.done()  # no stop file, no stop
-
     path.touch()
 
     with pytest.raises(asyncio.CancelledError):

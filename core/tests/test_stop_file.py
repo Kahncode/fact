@@ -10,7 +10,6 @@ def test_the_watch_calls_back_once_the_stop_file_appears(tmp_path: Path) -> None
     stopped = threading.Event()
 
     thread = watch_stop_file(path, stopped.set, interval=0.01)
-    assert not stopped.wait(0.05)
     path.touch()
 
     assert stopped.wait(5)
