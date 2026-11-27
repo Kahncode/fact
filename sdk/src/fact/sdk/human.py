@@ -116,7 +116,10 @@ class HumanSteps:
         Notify how the run ended: `prs_ready` with PRs open, `run_failed` if it failed or needs a person.
 
         A run that waited for its PRs to merge or close was told `prs_ready` before that wait; it ends `run_finished`.
+        A change set fact merged itself (`merged_by_fact`) needs no one, so its `merged` end sends nothing.
         """
+        if result.outcome == RunOutcome.MERGED and self.merged_by_fact:
+            return
         key = self.input.task.key
         link = result.prs[0].url if result.prs else None
         if result.outcome == RunOutcome.PR_OPENED:

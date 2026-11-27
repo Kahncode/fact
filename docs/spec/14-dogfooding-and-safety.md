@@ -3,7 +3,7 @@
 The factory's own repo is its first project, so the running factory must never be the code an agent is editing.
 
 - The factory runs from a pinned checkout: `fact use <ref>` makes a detached worktree of the factory repo at `<data_dir>/pinned/factory/<sha>` and marks it current, and `fact dev --pinned` runs the API and worker from it. Agents only ever work in worktrees under `<data_dir>/workspaces/`; the runner refuses a workspace inside `pinned_dir` or the running factory checkout.
-- Changes to the factory land through a normal run and a human-merged PR, then `fact use <ref>` and a restart of `fact dev --pinned` start the new worker version. Runs in flight stay pinned to the version they started on and finish on the old one (see `06-workflow-authoring.md` for how pinned versions behave across a restart).
+- Changes to the factory land through a normal run and its PR, merged by fact when classified `auto_merge` or by a person after review, then `fact use <ref>` and a restart of `fact dev --pinned` start the new worker version. Runs in flight stay pinned to the version they started on and finish on the old one (see `06-workflow-authoring.md` for how pinned versions behave across a restart).
 - Changes to the factory follow the same classification as any project (decided 26 Nov 2026): fact bootstraps itself, and a low-risk change to fact merges without a person. The rule that the factory's own changes always need a human merge is retired. A new version still only runs once a person pins it with `fact use` and restarts, or once `fact dev --follow <ref>`, which the person started, upgrades to it when no run is active.
 
 **Guardrails for every project**

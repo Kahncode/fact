@@ -51,7 +51,8 @@ async def test_green_path() -> None:
     assert order.index(MARK_TASK_DONE) < order.index(OPEN_CHANGE_SET) < order.index(WAIT_FOR_CI)
     assert order.index(WAIT_FOR_CI) < order.index(CLASSIFY_SIGNALS) < order.index(LABEL_CHANGE_SET)
     assert order.index(LABEL_CHANGE_SET) < order.index(MERGE_CHANGE_SET)
-    assert order[-3:] == [TEARDOWN_WORKSPACE, POST_COST_COMMENT, NOTIFY]  # the cost comment covers every step
+    assert order[-2:] == [TEARDOWN_WORKSPACE, POST_COST_COMMENT]  # the cost comment covers every step
+    assert NOTIFY not in order  # fact merged it: no one needs telling
     assert [(r.task_key, r.event) for r in fakes.of(REPORT_STATUS)] == [
         ("task:M1-99", "run_started"),
         ("task:M1-99", "prs_opened"),

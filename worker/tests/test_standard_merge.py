@@ -110,7 +110,7 @@ async def test_an_auto_merge_change_set_is_merged_with_the_project_method_and_no
     (merged,) = fakes.of(MERGE_CHANGE_SET)
     assert (merged.prs, merged.method) == ([PR], "rebase")
     assert not fakes.of(WAIT_FOR_PR_CLOSED)
-    assert not _prs_ready(fakes)
+    assert not fakes.of(NOTIFY)  # neither `prs_ready` nor `run_finished`
     assert len(fakes.of(TEARDOWN_WORKSPACE)) == 1
 
 
@@ -119,7 +119,9 @@ async def test_a_human_review_change_set_is_not_merged_and_notifies_its_reasons(
     result, _ = await run_standard(fakes, "run-human-review")
 
     assert not fakes.of(MERGE_CHANGE_SET)
-    assert len(fakes.of(LABEL_CHANGE_SET)) == 1  # labelled `fact:needs-review` by classify, nothing to relabel
+    (labelled,) = fakes.of(LABEL_CHANGE_SET)  # labelled `fact:needs-review` by classify, nothing to relabel
+    assert labelled.change_set.classification.route == "human_review"
+    assert labelled.change_set.classification.signals == [SCHEMA]
     (ready,) = _prs_ready(fakes)
     assert "changes the database schema" in ready.body
     names = [n for n, _ in fakes.calls]
