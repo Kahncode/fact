@@ -4,7 +4,10 @@
 Polls the commit's check runs and commit statuses every `poll_interval_s`, heartbeating, until all are complete on two
 polls in a row or `timeout_s` passes; a transient GitHub error only skips a poll. On a timeout, checks that already
 failed are reported as failures, else the step says `timed_out`. A failed GitHub Actions job's log goes to the artifact store; its last `TAIL_BYTES` go in the
-step's `outputs["failures"]` (and as much as fits in its summary), for the fix session.
+step's `outputs["failures"]` (and as much as fits in its summary), for the fix session. While no check has
+appeared, each poll also reads the PR: one that conflicts with its base (`mergeable_state` `dirty`) gets no
+`pull_request` workflow from GitHub, so the step fails at once with `outputs.conflict`; no check at all after
+`no_checks_grace_s` on a PR that does not conflict passes.
 """
 
 import asyncio
@@ -17,6 +20,7 @@ from fact.core.enums import StepKind, StepOutcome
 from fact.core.github import GitHubApp, GitHubError
 from fact.core.types import SUMMARY_MAX_BYTES, PRRef, StepResult, limit_text
 from fact.worker.ci_checks import CICheck, job_log, list_checks
+from fact.worker.pull_requests import merge_state
 from fact.worker.reporting import StepContext, StepReporter
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -100,9 +104,7 @@ class CIActivities:
                     await self._finish(github, spec, step, checks, started)
                     return
                 done_before = done
-                if not checks and waited >= spec.no_checks_grace_s:
-                    step.log("no CI check or status on the commit: nothing to wait for")
-                    step.finish(StepOutcome.PASSED, f"no CI checks on {pr.head_sha[:12]}", {"checks": 0})
+                if not checks and await self._no_checks(github, spec, step, waited):
                     return
             if waited >= spec.timeout_s:
                 await self._finish(github, spec, step, checks, started, waited=waited)
@@ -110,6 +112,41 @@ class CIActivities:
             step.log(f"{sum(not c.done for c in checks)} of {len(checks)} checks pending after {waited:.0f}s")
             _heartbeat(started)
             await asyncio.sleep(self._poll_s)
+
+    @staticmethod
+    async def _no_checks(github: GitHubApp, spec: WaitForCIInput, step: StepContext, waited: float) -> bool:
+        """
+        No check yet: end the step if the PR conflicts with its base, or if no CI came within the grace; else False.
+
+        GitHub starts no `pull_request` workflow on a PR that conflicts with its base (`mergeable_state` `dirty`), so it
+        is read on every poll without checks: a conflict ends `failed_checks` with `outputs.conflict` at once, and the
+        workflow merges the base instead of waiting for a CI that never comes. Past `no_checks_grace_s` without a conflict
+        (any other state, or none known for this head yet), the repository has no CI: `passed`. A transient error
+        reading the PR only skips the poll.
+        """
+        pr = spec.pr
+        try:
+            token = await github.installation_token(pr.repo)
+            async with github.api_client(token.token) as client:
+                state = await merge_state(client, pr.repo, pr.number, pr.head_sha, tries=1)  # the poll retries
+        except GitHubError as exc:
+            if exc.status_code in PERMANENT_STATUSES:
+                raise
+            step.log(f"reading the PR failed, polling again: {exc}")
+            return False
+        except httpx.HTTPError as exc:
+            step.log(f"reading the PR failed, polling again: {type(exc).__name__}: {exc}")
+            return False
+        if state == "dirty":
+            summary = f"{pr.url} conflicts with its base branch, so no CI runs on {pr.head_sha[:12]}"
+            step.log(summary)
+            step.finish(StepOutcome.FAILED_CHECKS, summary, {"checks": 0, "conflict": True})
+            return True
+        if waited < spec.no_checks_grace_s:
+            return False
+        step.log(f"no CI check or status on the commit (mergeable_state {state}): nothing to wait for")
+        step.finish(StepOutcome.PASSED, f"no CI checks on {pr.head_sha[:12]}", {"checks": 0})
+        return True
 
     @staticmethod
     async def _poll(github: GitHubApp, pr: PRRef, step: StepContext) -> list[CICheck] | None:

@@ -8,10 +8,7 @@ from fact.core.activity_contract import (
     AGENT_STEP,
     CONTROL_QUEUE,
     MARK_TASK_DONE,
-    MERGE_CHANGE_SET,
     NOTIFY,
-    OPEN_CHANGE_SET,
-    POST_COST_COMMENT,
     PREPARE_WORKSPACE,
     RECORD_GATE_ANSWERED,
     RECORD_GATE_OPENED,
@@ -22,46 +19,38 @@ from fact.core.activity_contract import (
     SANDBOX_QUEUE,
     SHELL_STEP,
     TEARDOWN_WORKSPACE,
-    WAIT_FOR_CI,
-    WAIT_FOR_PR_CLOSED,
     WRITE_HANDOFF,
     AgentStepInput,
     GateAnsweredInput,
     GateOpenedInput,
     HandoffInput,
     MarkTaskDoneInput,
-    MergeChangeSetInput,
     NotifyInput,
-    OpenChangeSetInput,
-    PostCostCommentInput,
-    PRState,
     ReportStatusInput,
     RunFinishedInput,
     RunStartedInput,
     RunWaitingInput,
     ShellStepInput,
-    WaitForCIInput,
-    WaitForPRClosedInput,
 )
 from fact.core.enums import StepOutcome
 from fact.core.gates import GateDecision
-from fact.core.types import PRRef, RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
+from fact.core.types import RunInput, RunResult, StepResult, WorkspaceHandle, WorkspaceSpec
 from fact.sdk.pull_requests import REVIEW_STAGE
 from fact.worker.loader import sandbox_runner
 from gate_harness import answer
 from standard_env import IDENTITY, OPTIONS, WORKFLOW_QUEUE, load_standard
-from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, PR, run_input
+from standard_inputs import BRANCH, CLEAN_REVIEW, LEARNED, run_input
+from standard_pr_fakes import FakePRSteps
 from standard_results import agent_sessions, checks, finished  # noqa: F401 - re-exported for the tests
 from temporalio import activity
 from temporalio.client import Client, WorkflowHandle, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
-from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 
 @dataclass
-class FakeActivities:
+class FakeActivities(FakePRSteps):
     """Scripted step results. `test_failures` is how many `test` checks fail before one passes."""
 
     test_failures: int = 0
@@ -76,25 +65,14 @@ class FakeActivities:
         default_factory=lambda: StepResult(outcome=StepOutcome.PASSED, outputs=LEARNED)
     )
     test_failures_after_address: int = 0  # `test` failures once `address_review` has run
-    broken: str | None = None  # name of an activity that raises a non-retryable error
     checked_out: str = BRANCH  # the branch `prepare_workspace` reports, as when another workspace holds `BRANCH`
-    ci_failures: int = 0  # `wait_for_ci` steps that fail before one passes
-    ci_timed_out: bool = False  # `wait_for_ci` gives up on a CI that never finishes
     fix_ci_outcome: StepOutcome = StepOutcome.PASSED
-    fix_ci_commits: bool = True  # False: a `fix_ci` session that passes but commits nothing, so the head stays
-    pr_state: PRState = "merged"  # how `wait_for_pr_closed` says each PR ended
-    merges: bool = False  # whether `merge_change_set` merges; False: GitHub refuses, so the run waits for a person
+    resolve_outcome: StepOutcome = StepOutcome.PASSED  # how each `resolve_conflicts` session ends
+    test_failures_after_resolve: int = 0  # `test` failures once a `resolve_conflicts` session has run
     # How `record_gate_opened` answers each gate, in order, then reject; None: the test answers them itself.
     # Answering inside the activity keeps the time-skipping server busy, so it never skips to the workflow's timeout.
     gate_decisions: list[GateDecision] | None = field(default_factory=list)
     client: Client | None = None  # set by `started_standard`, to answer gates
-    calls: list[tuple[str, object]] = field(default_factory=list)
-
-    def _call(self, name: str, spec: object) -> None:
-        self.calls.append((name, spec))
-        if name == self.broken:
-            msg = f"{name} is broken"
-            raise ApplicationError(msg, non_retryable=True)
 
     @activity.defn(name=RECORD_RUN_STARTED)
     async def record_run_started(self, spec: RunStartedInput) -> None:
@@ -164,8 +142,12 @@ class FakeActivities:
             if isinstance(self.learn, Exception):
                 raise self.learn
             return self.learn
-        if spec.prompt_name == "fix_ci":
-            return StepResult(outcome=self.fix_ci_outcome, summary="fixed CI")
+        fixes = {"fix_ci": (self.fix_ci_outcome, "fixed CI"), "resolve_conflicts": (self.resolve_outcome, "resolved")}
+        if spec.prompt_name == "resolve_conflicts":
+            self.test_failures += self.test_failures_after_resolve
+        if spec.prompt_name in fixes:
+            outcome, summary = fixes[spec.prompt_name]
+            return StepResult(outcome=outcome, summary=summary)
         if spec.prompt_name == "address_review":
             self.test_failures += self.test_failures_after_address
             return StepResult(outcome=self.address_outcome, summary="addressed", outputs={"summary": "addressed"})
@@ -189,42 +171,6 @@ class FakeActivities:
         self._call(MARK_TASK_DONE, spec)
         return True
 
-    @activity.defn(name=OPEN_CHANGE_SET)
-    async def open_change_set(self, spec: OpenChangeSetInput) -> list[PRRef]:
-        self._call(OPEN_CHANGE_SET, spec)
-        pushes = len(self.of(OPEN_CHANGE_SET))
-        fixed = pushes - 1 if self.fix_ci_commits else 0
-        return [PR if fixed == 0 else PR.model_copy(update={"head_sha": f"fix{fixed}"})]
-
-    @activity.defn(name=POST_COST_COMMENT)
-    async def post_cost_comment(self, spec: PostCostCommentInput) -> None:
-        self._call(POST_COST_COMMENT, spec)
-
-    @activity.defn(name=WAIT_FOR_CI)
-    async def wait_for_ci(self, spec: WaitForCIInput) -> StepResult:
-        self._call(WAIT_FOR_CI, spec)
-        if self.ci_timed_out:
-            outputs = {"timed_out": True}
-            return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="CI still running", outputs=outputs)
-        if self.ci_failures > 0:
-            self.ci_failures -= 1
-            failure = {"name": "test (windows)", "conclusion": "failure", "url": "https://ci/1", "log_tail": "E boom"}
-            return StepResult(outcome=StepOutcome.FAILED_CHECKS, summary="1 failed", outputs={"failures": [failure]})
-        return StepResult(outcome=StepOutcome.PASSED, summary="CI passed")
-
-    @activity.defn(name=WAIT_FOR_PR_CLOSED)
-    async def wait_for_pr_closed(self, spec: WaitForPRClosedInput) -> list[PRState]:
-        self._call(WAIT_FOR_PR_CLOSED, spec)
-        return [self.pr_state for _ in spec.prs]
-
-    @activity.defn(name=MERGE_CHANGE_SET)
-    async def merge_change_set(self, spec: MergeChangeSetInput) -> bool:
-        self._call(MERGE_CHANGE_SET, spec)
-        return self.merges
-
-    def of(self, name: str) -> list:
-        return [arg for n, arg in self.calls if n == name]
-
     def gates(self, name: str) -> list:
         """Return the calls of a gate activity for gates a person answers, without the review wait."""
         return [g for g in self.of(name) if g.kind != REVIEW_STAGE]
@@ -244,6 +190,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.wait_for_ci,
         fakes.wait_for_pr_closed,
         fakes.merge_change_set,
+        fakes.sync_base,
         fakes.record_gate_opened,
         fakes.record_gate_answered,
         fakes.notify,
@@ -264,6 +211,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
 _standard = load_standard()
 STANDARD = _standard.Standard
 MAX_FIX_ATTEMPTS = _standard.MAX_FIX_ATTEMPTS
+MAX_BASE_SYNCS = _standard.MAX_BASE_SYNCS
 
 
 @asynccontextmanager

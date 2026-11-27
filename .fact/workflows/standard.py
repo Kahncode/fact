@@ -7,30 +7,37 @@ Prepare the workspace, run each repository's setup commands, implement, loop lin
 green, then review once: a separate session checks the change against the task's acceptance criteria and the review
 checklist. An unmet criterion or a medium or high finding sends the change to an `address_review` session, then
 through the check loop again. Then a `learn` session updates the repositories' context (`CLAUDE.md`, `docs/`,
-READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch, open the PR (with
-the review's criteria table). Then wait for CI on the PR's head commit: a failure goes to a `fix_ci` session with
-the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most `MAX_CI_FIX_ATTEMPTS`
-times. Once CI is green, while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head commit CI passed on) and the run ends `merged`. If the switch is off or
-GitHub refuses the merge, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as human wait time) until every PR is merged or
-closed: it ends `merged` if all were merged, else `closed`, and its workspace is torn down. However the run ends,
-`FactWorkflow` comments its cost on the PRs last, once every step is recorded.
+READMEs) on the same branch and writes the PR title and summary; mark the task done on the branch and open the PR
+(with the review's criteria table). Then wait for CI on the PR's head commit: a failure goes to a `fix_ci` session
+with the failing jobs' logs, which commits a fix that is pushed to the PR, then CI again, at most
+`MAX_CI_FIX_ATTEMPTS` times. The base branch is merged into the run's branch only when GitHub says it must be, never
+because it moved on: when a PR conflicts with its base (`mergeable_state` `dirty`, read by `wait_for_ci` after every
+push; GitHub runs no CI on it), and when GitHub refuses the merge as out of date. Both take the same path: merge the
+base (`sync_base`, a merge commit, as the PR is squashed), hand conflicts to a `resolve_conflicts` session that commits
+the merge, loop the checks (with their gate), push and wait for CI again, at most `MAX_BASE_SYNCS` times each before a
+person is asked. Once CI is green, while `MERGE_WHEN_GREEN` is on, fact merges the PRs itself (squash, at the head
+commit CI passed on) and the run ends `merged`. If the switch is off or GitHub refuses the merge otherwise, a person is told the PRs are ready, and the run waits (stage `wait_for_review`, a gate-like step counted as
+human wait time) until every PR is merged or closed: it ends `merged` if all were merged, else `closed`, and its
+workspace is torn down. However the run ends, `FactWorkflow` comments its cost on the PRs last, once every step is
+recorded.
 
-A failing setup ends the run `failed`. If the checks never go green, or CI stays red or never finishes, a `needs_human`
-gate opens: approve runs that loop once more (instructions sent with `steer` reach its fix sessions), reject ends the
-run `needs_human`, with no PR for the checks and with the PR open for CI. An agent reporting itself blocked ends the run
+A failing setup ends the run `failed`. If the checks never go green, conflicts stay unresolved, or CI stays red or
+never finishes, a `needs_human` gate opens: approve runs that loop once more (instructions sent with `steer` reach
+its fix sessions), reject ends the run `needs_human`, with no PR for the checks and with the PR open for CI. An agent reporting itself blocked ends the run
 `needs_human` with no PR. An agent session that errors, including a review without a valid structured answer, ends the
 run `failed`. A `learn` session that does not pass, or whose activity fails, is the exception: its docs are not worth
 losing the change over, so the PR still opens with the implement session's title and summary (else the task's
 conventional title).
 
-A person is notified when a gate opens, when the PRs are ready for review (CI green, not merged by fact), and when the run ends `failed` or
-`needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`).
+A person is notified when a gate opens, when the PRs are ready for review (CI green, not merged by fact), and when the
+run ends `failed` or `needs_human` (`run_failed`) or `merged`, `closed` or `stopped` (`run_finished`).
 """
 
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
+    from fact.sdk.base_sync import RESOLVE_STAGE, SYNC_STAGE
     from fact.sdk.pull_requests import REVIEW_STAGE
     from fact.sdk.review import Review, parse_review, review_context
     from fact.sdk.types import (
@@ -56,6 +63,7 @@ APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
 # Interim, until the classify stage and auto-merge exist (issues #13, #14): merge every change set whose CI is green,
 # with no person, so fact can work through its own tasks unattended. #14 replaces this switch with classification.
 MERGE_WHEN_GREEN = True
+MAX_BASE_SYNCS = 2  # merges of the base per loop (a conflicting PR, a merge refused as out of date) before a person
 
 
 def _ended(stage: str, step: StepResult) -> RunResult:
@@ -79,6 +87,8 @@ def _ended(stage: str, step: StepResult) -> RunResult:
         Stage("open_pr", "Open PR", StepKind.GITHUB),
         Stage("wait_for_ci", "Wait for CI", StepKind.GITHUB, loops_to="fix_ci"),
         Stage("fix_ci", "Fix CI", StepKind.AGENT, loops_to="open_pr"),
+        Stage(SYNC_STAGE, "Merge base branch", StepKind.SHELL),
+        Stage(RESOLVE_STAGE, "Resolve conflicts", StepKind.AGENT, loops_to=SYNC_STAGE),
         Stage(REVIEW_STAGE, "Wait for review", StepKind.GATE),
         Stage(NEEDS_HUMAN, "Needs a person", StepKind.GATE),
     ]
@@ -121,6 +131,10 @@ class Standard(FactWorkflow):
             return _ended("review", reviewed)
         if (stuck := await self._address(review)) is not None:
             return stuck
+        return await self._ship(implemented, review)
+
+    async def _ship(self, implemented: StepResult, review: Review) -> RunResult:
+        """Update the context of the reviewed change, open the PR and see it through CI."""
         await self._learn()
         await self.mark_task_done()
         prs = await self.open_change_set(*self.pr_text(implemented.summary), criteria=review.criteria)
@@ -152,22 +166,79 @@ class Standard(FactWorkflow):
             if (rejected := await self._ask("checks", summary)) is not None:
                 return rejected
 
+    async def _synced(self) -> RunResult | None:
+        """Merge the base branch; once an agent resolved conflicts, loop the checks again. None when all is well."""
+        while True:
+            synced = await self.sync_with_base(RESOLVE_STAGE)
+            if synced == "resolved":
+                return await self._checks_green()
+            if synced != "needs_human":
+                return None
+            summary = "conflicts with the base branch still unresolved after the resolve sessions"
+            if (stuck := await self._ask(SYNC_STAGE, summary)) is not None:
+                return stuck
+
     async def _ci_green(self, prs: list[PRRef]) -> RunResult:
-        """Wait for CI with fix sessions, asking a person each time it stays red; then wait for a merge, and end."""
+        """Wait for CI with fix sessions, asking a person each time it stays red; then merge or wait, and end."""
+        if (stuck := await self._ci_loop(prs)) is not None:
+            return stuck
+        return await self._until_closed(self.prs)
+
+    async def _ci_loop(self, prs: list[PRRef]) -> RunResult | None:
+        """
+        Loop CI with fix sessions, asking a person when it stays red; None once green.
+
+        A PR that conflicts with its base takes the base (`_take_base`) and CI again, at most `MAX_BASE_SYNCS` times
+        before a person is asked; approving gives it as many more.
+        """
+        syncs = 0
         while True:
             ci = await self.until_ci_green(prs, fix_prompt="fix_ci", max_attempts=MAX_CI_FIX_ATTEMPTS)
             prs = self.prs
-            if ci == StepOutcome.PASSED:
-                break
-            summary = f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {', '.join(pr.url for pr in prs)}"
-            if (stuck := await self._ask("wait_for_ci", summary)) is not None:
+            if ci == "passed":
+                return None
+            if ci == "conflict" and syncs < MAX_BASE_SYNCS:
+                syncs += 1
+                if (stuck := await self._take_base()) is not None:
+                    return stuck
+                prs = self.prs
+                continue
+            urls = ", ".join(pr.url for pr in prs)
+            if ci == "conflict":
+                loop, summary = SYNC_STAGE, f"still conflicting with the base branch after {syncs} merges: {urls}"
+            else:
+                loop, summary = "wait_for_ci", f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}"
+            if (stuck := await self._ask(loop, summary)) is not None:
                 return stuck
-        return await self._until_closed(prs)
+            syncs = 0
+
+    async def _take_base(self) -> RunResult | None:
+        """Merge the base branch (conflicts resolved, then the checks looped) and push it; None once pushed."""
+        if (stuck := await self._synced()) is not None:
+            return stuck
+        await self.push_change_set()
+        return None
 
     async def _until_closed(self, prs: list[PRRef]) -> RunResult:
-        """CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed."""
-        if MERGE_WHEN_GREEN and await self.merge_change_set(prs):
-            return RunResult(outcome=RunOutcome.MERGED, prs=prs, summary=", ".join(pr.url for pr in prs))
+        """
+        CI is green: merge (`MERGE_WHEN_GREEN`), else tell a person and wait until every PR is merged or closed.
+
+        A merge GitHub refuses as out of date takes the base (`_take_base`) and CI again, at most `MAX_BASE_SYNCS`
+        times; any other refusal goes to a person.
+        """
+        syncs = 0
+        while MERGE_WHEN_GREEN:
+            merged = await self.merge_change_set(prs)
+            if merged == "merged":
+                return RunResult(outcome=RunOutcome.MERGED, prs=prs, summary=", ".join(pr.url for pr in prs))
+            if merged != "out_of_date" or syncs == MAX_BASE_SYNCS:
+                break
+            syncs += 1
+            if (stuck := await self._take_base()) is not None:
+                return stuck
+            if (stuck := await self._ci_loop(self.prs)) is not None:
+                return stuck
+            prs = self.prs
         await self.notify_prs_ready(prs)
         outcome = await self.wait_for_pr_closed(prs)
         return RunResult(outcome=outcome, prs=prs, summary=", ".join(pr.url for pr in prs))
