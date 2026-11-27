@@ -14,5 +14,5 @@ Rules:
 
 - Until the M5 planner, agents create leaf issues `fact:ready` and parent issues `fact:planned` (`docs/agents/issue-tracker.md`). Only the person sets a parent `fact:ready`.
 - `fact:needs-human` belongs to the factory: it means fact will not touch the issue until a person answers. Triage never sets or removes it. `fact:running` is retired.
-- Every issue also gets one `type:*` (`feature`, `bug`, `chore`, `incident`, `epic`) and, unless it is an epic, one `complexity:*` (`trivial`, `standard`, `complex`) label. The default complexity is `standard`. A `priority:*` label (`urgent`, `high`, `medium`, `low`) is optional; none means `medium`.
+- Every issue that runs gets one work type (`type:feature`, `bug`, `chore`, `incident`) and one `complexity:*` (`trivial`, `standard`, `complex`) label. Parents also get `type:epic` (a parent of epics always does); a parent with no work type carries `type:epic` alone and is closed without a run. The default complexity is `standard`. A `priority:*` label (`urgent`, `high`, `medium`, `low`) is optional; none means `medium`.
 - These labels already exist (`uv run fact github labels sync Kahncode/fact`); don't create new triage labels.
