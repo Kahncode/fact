@@ -13,3 +13,4 @@ The factory's own repo is its first project, so the running factory must never b
 - Agents get only the secrets a step needs; model keys and the GitHub token stay with the worker.
 - Steps that turn agent permission checks off run in the Docker runner (from v1).
 - The token cannot bypass branch protection; there are no pushes to default branches.
+- fact acts only on people who can already write to the repository: a review or comment from anyone else (on a public repository, any GitHub account) is ignored, so it can neither merge a PR nor steer an agent (`07-reference-workflow.md`, Only maintainers count).
