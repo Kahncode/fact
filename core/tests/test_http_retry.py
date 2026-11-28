@@ -2,7 +2,7 @@
 
 import httpx
 import pytest
-from fact.core.http_retry import AsyncRetryTransport, RetryPolicy, RetryTransport
+from fact.core.http_retry import CLI_POLICY, AsyncRetryTransport, RetryPolicy, RetryTransport
 
 POLICY = RetryPolicy(budget_s=60.0)
 
@@ -66,4 +66,14 @@ def test_other_answers_are_not_retried(status: int) -> None:
     transport = RetryTransport(POLICY, httpx.MockTransport(lambda _: httpx.Response(status)), sleep=clock.sleep)
     with httpx.Client(transport=transport) as client:
         assert client.get("http://api/x").status_code == status
+    assert clock.slept == []
+
+
+def test_cli_does_not_resend_a_post_the_api_answered() -> None:
+    """`POST /runs/start` answers 502 after recording a failed run: sending it again would record another."""
+    clock = Clock()
+    api = httpx.MockTransport(lambda _: httpx.Response(502))
+    transport = RetryTransport(CLI_POLICY, api, sleep=clock.sleep, clock=clock)
+    with httpx.Client(transport=transport) as client:
+        assert client.post("http://api/runs/start", json={"a": 1}).status_code == 502  # noqa: PLR2004
     assert clock.slept == []
