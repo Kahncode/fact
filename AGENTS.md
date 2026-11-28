@@ -14,7 +14,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 
 - **Design:** `docs/spec/`, one file per section. Start from `docs/spec/README.md` and read only what your task points to.
 - **Architecture:** `docs/ARCHITECTURE.md`, index of components and what exists in code today.
-- **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` (new entries go there; design decisions are in `docs/spec/16-decisions.md`).
+- **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` and `docs/decisions-3.md` (new entries go in `docs/decisions-3.md`; design decisions are in `docs/spec/16-decisions.md`).
 - **Work:** GitHub issues on `Kahncode/fact` (`fact:ready` issues are tasks the scheduler may start; labels in `docs/spec/12-integrations.md`). `tasks/backlog.md` holds ideas and problems not yet planned. The file tasks under `tasks/` are the M0–M2 bootstrap; `tasks/README.md` explains their format.
 
 ---

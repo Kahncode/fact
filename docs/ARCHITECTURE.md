@@ -275,3 +275,4 @@ No `docs/<subsystem>.md` deep-dive files exist yet. Design documentation lives i
 | Decisions and open questions (design) | `docs/spec/16-decisions.md` |
 | Implementation decisions log, open items | `docs/decisions.md` |
 | Implementation decisions log, continued (from M2-07) | `docs/decisions-2.md` |
+| Implementation decisions log, continued (from #137) | `docs/decisions-3.md` |

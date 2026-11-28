@@ -6,7 +6,7 @@ How the engineering skills consume fact's domain documentation. fact is single-c
 
 - **Glossary**: `docs/spec/05-domain-model.md` (the **Terms** paragraph and the entity table). Label and task-source terms are in `docs/spec/12-integrations.md`.
 - **Design decisions** (the ADR log for design): `docs/spec/16-decisions.md`.
-- **Implementation decisions**: `docs/decisions.md` (full, read-only) continued in `docs/decisions-2.md`, append-only, one `### [YYYY-MM-DD HH:MM] Title` entry with **What:** and **Why:**.
+- **Implementation decisions**: `docs/decisions.md` (full, read-only) continued in `docs/decisions-2.md` (full) and `docs/decisions-3.md`, append-only, one `### [YYYY-MM-DD HH:MM] Title` entry with **What:** and **Why:**.
 - **Spec index**: `docs/spec/README.md`; read only the sections your work touches.
 
 ## Writing
@@ -19,7 +19,7 @@ How the engineering skills consume fact's domain documentation. fact is single-c
 
 **Planning goes straight to `main`.** Plan in the `planning` worktree on the `planning` branch. At the start of a session, `git fetch origin` and `git rebase origin/main` (never merge: these are docs). Uncommitted changes you find there are planning too, by the person or another session in the same worktree: commit them with yours, don't set them aside. Commit the session's spec changes there, rebase on `origin/main` again and `git push origin planning:main`; if the push is rejected, fetch, rebase and push again. CI skips docs-only pushes to `main`. Push before creating the tasks that rely on the spec, so no run starts without it.
 
-Implementation decisions are not planning output: `docs/decisions.md` and `docs/decisions-2.md` record why the code was built the way it was, and only implementers write them. Append to `docs/decisions-2.md` in its existing format (when it reaches 300 lines, start `docs/decisions-3.md`); never edit or reorder past entries. Grilling never writes there.
+Implementation decisions are not planning output: `docs/decisions.md`, `docs/decisions-2.md` and `docs/decisions-3.md` record why the code was built the way it was, and only implementers write them. Append to `docs/decisions-3.md` in its existing format (when it reaches 300 lines, start `docs/decisions-4.md`); never edit or reorder past entries. Grilling never writes there.
 
 ## Use the glossary's vocabulary
 
