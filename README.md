@@ -28,7 +28,7 @@ uv run fact use main
 uv run fact dev --pinned
 ```
 
-`fact use <ref>` checks the ref out (from `origin` when it exists there) as a separate copy under `<data_dir>/pinned/factory/<sha>` and installs its dependencies; `fact dev --pinned` runs the API and worker from that copy while still reading your `fact.yaml` and `.env`. To pick up merged changes, run `fact use main` again and restart `fact dev --pinned`, but only once runs have ended: a run still in progress or waiting for review when the worker restarts on new code stalls (after merging a run's PR, wait until `fact status` shows it `merged`, within about a minute; stop the others with `fact stop`, below). See `docs/spec/14-dogfooding-and-safety.md` and `docs/ARCHITECTURE.md`.
+`fact use <ref>` checks the ref out (from `origin` when it exists there) as a separate copy under `<data_dir>/pinned/factory/<sha>` and installs its dependencies; `fact dev --pinned` runs the API and worker from that copy while still reading your `fact.yaml` and `.env`. To pick up merged changes, run `fact use main` again while `fact dev --pinned` runs: within 15 s it restarts the API from the new pin and starts a new worker generation next to the old ones. New runs start on the new generation; a run already going (waiting for review, say) ends on the worker of the generation that started it, which stops by itself once it has no open run. After `fact shutdown` or a reboot, `fact dev --pinned` starts every generation that still has runs. See `docs/spec/14-dogfooding-and-safety.md` and `docs/ARCHITECTURE.md`.
 
 ## Starting a run
 
