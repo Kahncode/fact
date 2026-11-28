@@ -41,6 +41,7 @@ class TaskCheck:
     task: Task
     missing_deps: list[str]
     gated_by: str | None = None  # the nearest ancestor not marked ready
+    closed: bool = False  # closed in its source (`TaskSource.is_closed`): no run starts
 
 
 def _git(repo: Path, *args: str) -> bytes:
@@ -122,7 +123,11 @@ async def project_tasks(settings: Settings, ref: ProjectRef) -> AsyncIterator[Pr
 
 
 async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
-    """Read task `key`, which of its dependencies are not done and its ancestor not ready; None for no such task."""
+    """
+    Read task `key` with its unfinished dependencies, ancestor not ready and closed state; None for no such task.
+
+    Read afresh on every start, never from a tick's listing, which may be older than the issue's close.
+    """
     task = await source.get(key)
     if task is None:
         return None
@@ -131,4 +136,5 @@ async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
         for d in task.depends_on
         if not await source.deps_done(task.model_copy(update={"depends_on": [d]}))
     ]
-    return TaskCheck(task=task, missing_deps=missing, gated_by=await source.not_ready_ancestor(task.key))
+    gated_by = await source.not_ready_ancestor(task.key)
+    return TaskCheck(task=task, missing_deps=missing, gated_by=gated_by, closed=await source.is_closed(task.key))

@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from http import HTTPStatus
 from pathlib import Path
 
+import httpx
 import pytest
 from fact.api.routers import run_start as run_start_router
 from fact.api.run_start import find_task, run_input
@@ -194,3 +195,24 @@ async def test_start_refuses_an_issue_whose_ancestor_is_blocked(
     body = {"task_key": "gh:acme/app#31", "override_deps": True}
     response = await client.post("/api/v1/runs/start", json=body)
     assert response.status_code == HTTPStatus.CREATED, response.text
+
+
+async def test_no_run_starts_on_an_issue_closed_since_the_listing(
+    app: FastAPI, client: AsyncClient, github: FakeIssues
+) -> None:
+    listed = github.handle
+
+    def stale(request: httpx.Request) -> httpx.Response:  # the list still shows #12 open, the issue is closed
+        response = listed(request)
+        if request.url.path == "/repos/acme/app/issues":
+            return httpx.Response(200, json=[*response.json(), {**github.issues[12], "state": "open"}])
+        return response
+
+    github.handle = stale  # type: ignore[method-assign]
+    github.issues[12]["state"] = "closed"
+    temporal = _fakes(app, github)
+    result = await run_tick(app.state)
+    assert (result.started, temporal.started) == ([], [])
+    response = await client.post("/api/v1/runs/start", json={"task_key": "gh:acme/app#12"})
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert "is closed" in response.text
