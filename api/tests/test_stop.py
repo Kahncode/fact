@@ -69,7 +69,7 @@ async def test_stop_cancels_the_workflow_with_the_reason(
         handle = await env.client.start_workflow(Waits.run, id="run-stop-1", task_queue=QUEUE)
         stopped = await client.post(f"/api/v1/runs/{run_id}/stop", json={"reason": "newer workflow"})
         assert stopped.status_code == HTTPStatus.ACCEPTED, stopped.text
-        assert stopped.json() == {"run_id": run_id, "human_touches": 1}
+        assert stopped.json() == {"run_id": run_id, "human_touches": 1, "hold_error": ""}
         assert await handle.result() == "stopped: newer workflow"
 
 

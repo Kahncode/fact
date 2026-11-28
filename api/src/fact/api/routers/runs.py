@@ -12,8 +12,8 @@ from fact.api.run_schemas import (
     StepOut,
     StepUpdate,
 )
-from fact.api.run_totals import recompute_totals
-from fact.core.enums import RunStatus, StepOutcome, StepStatus
+from fact.api.run_totals import close_running_steps, recompute_totals
+from fact.core.enums import RunStatus, StepStatus
 from fact.core.models import Event, Project, Run, Step
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
@@ -84,21 +84,9 @@ async def update_run(run_id: str, body: RunUpdate, session: Session) -> RunOut:
     for field, value in _changes(body, RUN_NULLABLE).items():
         setattr(run, field, value)
     if run.status == RunStatus.FINISHED:
-        await _close_running_steps(session, run)
+        await close_running_steps(session, run)
     await session.commit()
     return RunOut.model_validate(run)
-
-
-async def _close_running_steps(session: AsyncSession, run: Run) -> None:
-    """End the steps a finished run left `running` as `failed_error`: they lost their worker."""
-    stuck = (await session.scalars(select(Step).where(Step.run_id == run.id, Step.status == StepStatus.RUNNING))).all()
-    for step in stuck:
-        step.status = StepStatus.FINISHED
-        step.outcome = StepOutcome.FAILED_ERROR
-        step.ended_at = run.ended_at
-    if stuck:
-        await session.flush()
-        await recompute_totals(session, run)
 
 
 @router.get("/runs")
