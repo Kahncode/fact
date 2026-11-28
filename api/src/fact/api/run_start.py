@@ -177,7 +177,6 @@ def run_input(found: FoundTask, run_id: str, run_url: str = "", handoff_ref: str
         auto_merge=found.config.auto_merge,
         merge_method=found.config.merge_method,
         review_spec_ambiguous=found.config.classify.review_spec_ambiguous,
-        default_sandbox=found.config.runner_pool.default_sandbox,
     )
 
 

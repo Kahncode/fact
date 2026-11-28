@@ -24,13 +24,16 @@ PREPARE_STAGE = "prepare"
 
 
 class WorkspaceActivities:
-    def __init__(self, runner: Runner, reporter: StepReporter) -> None:
+    def __init__(self, runner: Runner, reporter: StepReporter, default_sandbox: str | None = None) -> None:
         self._runner = runner
         self._reporter = reporter
+        self._default_sandbox = default_sandbox  # the pool default of the version these activities serve
 
     @activity.defn(name=PREPARE_WORKSPACE)
     async def prepare_workspace(self, spec: WorkspaceSpec) -> WorkspaceHandle:
         attempt = activity.info().attempt if activity.in_activity() else 1
+        if spec.sandbox is None:  # the workflow names none: its own version's default, never another's
+            spec = spec.model_copy(update={"sandbox": self._default_sandbox})
         async with self._reporter.step(spec.run_id, PREPARE_STAGE, StepKind.SHELL, attempt) as step:
             step.log(f"preparing workspace for {spec.task_key}: {', '.join(r.full_name for r in spec.repos)}")
             handle = await self._runner.prepare(spec)  # a stale attempt is cancelled at its next heartbeat

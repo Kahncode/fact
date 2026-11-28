@@ -14,7 +14,8 @@ REPO_FILE = "repo.yaml"
 DEFAULT_MAX_CONCURRENT_RUNS = 2  # a runner pool's runs queued, running or waiting at once, unless configured
 
 Command = list[str]  # an argv list, never a shell string
-SANDBOX_NAME = r"^[a-z0-9][a-z0-9._-]*$"  # a folder under `.fact/sandboxes/`, and part of its Docker image tag
+# a folder under `.fact/sandboxes/`, and a path component of its Docker image tag: Docker's own pattern for one
+SANDBOX_NAME = r"^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$"
 DOCKER_ONLY_FIELDS = frozenset({"memory", "cpus", "pids", "run_args", "default_sandbox"})
 
 

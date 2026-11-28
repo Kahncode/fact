@@ -74,6 +74,13 @@ def test_docker_pool_parses(tmp_path: Path) -> None:
     assert loaded.default_sandbox == "python"
 
 
+@pytest.mark.parametrize("name", ["python-", "py.", "a..b", "-py", "Py"])
+def test_a_sandbox_name_docker_refuses_in_a_tag_is_refused(tmp_path: Path, name: str) -> None:
+    _write(tmp_path, "project.yaml", BASE + f"runner_pool: {{kind: docker, default_sandbox: '{name}'}}\n")
+    with pytest.raises(ConfigError, match="default_sandbox"):
+        load_project_config(tmp_path)
+
+
 def test_docker_only_field_refused_on_local(tmp_path: Path) -> None:
     _write(tmp_path, "project.yaml", BASE + "runner_pool: {kind: local, memory: 4g}\n")
     with pytest.raises(ConfigError, match="memory: only for kind docker"):

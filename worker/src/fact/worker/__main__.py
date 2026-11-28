@@ -108,11 +108,19 @@ def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
 
 
 def factory_activities(
-    settings: Settings, http: httpx.AsyncClient, runner: LocalRunner, github: GitHubApp | None
+    settings: Settings,
+    http: httpx.AsyncClient,
+    runner: LocalRunner,
+    github: GitHubApp | None,
+    default_sandbox: str | None = None,
 ) -> list[Activity]:
-    """Every activity the worker registers; `activity_workers` puts each on the queue of its spec's zone."""
+    """
+    Every activity a project version's workers register; `activity_workers` puts each on the queue of its spec's zone.
+
+    `default_sandbox` is that version's `runner_pool.default_sandbox`, for a workflow naming no sandbox.
+    """
     reporter = StepReporter(settings.api_url, http, log_dir=settings.data_dir / "step-logs")
-    workspace = WorkspaceActivities(runner, reporter)
+    workspace = WorkspaceActivities(runner, reporter, default_sandbox)
     harness = ClaudeCodeHarness()
     agent = AgentActivities({harness.name: harness}, reporter)
     change_set = ChangeSetActivities(github, reporter)
@@ -172,8 +180,13 @@ async def run(generation: str | None = None) -> None:
     projects = served.projects
     async with api_http(HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         await notify_refused(http, settings.api_url, served.refused)
-        activities = factory_activities(settings, http, runner, github)
-        workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
+        workers = [
+            w
+            for p in projects
+            for w in _project_workers(
+                client, p, factory_activities(settings, http, runner, github, p.runner_pool.default_sandbox), runner
+            )
+        ]
         for worker in workers:
             await stack.enter_async_context(worker)
         await make_current(client, served)

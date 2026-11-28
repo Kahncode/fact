@@ -132,18 +132,20 @@ async def test_a_worker_refuses_another_pins_generation(one_project: Settings, r
         await serve(one_project, runner, other.id)
 
 
-async def test_a_refused_version_sends_one_error_notification_per_error() -> None:
+async def test_a_refused_version_sends_one_error_notification_per_version() -> None:
     sent: list[dict] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
         return httpx.Response(201, json={"id": len(sent)})
 
-    refused = [Refused("acme", "sandbox 'base' failed to build")]
+    sha = "a" * 40
+    first = Refused("acme", "sandbox 'base' failed to build: #5 DONE 0.4s", sha, "base")
+    restart = Refused("acme", "sandbox 'base' failed to build: #5 DONE 0.7s", sha, "base")  # build output differs
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
-        await notify_refused(http, "http://api.test", refused)
-        await notify_refused(http, "http://api.test", refused)
+        await notify_refused(http, "http://api.test", [first])
+        await notify_refused(http, "http://api.test", [restart])
 
     assert sent[0]["kind"] == "error"
-    assert sent[0]["body"] == "sandbox 'base' failed to build"
+    assert sent[0]["body"] == first.error
     assert sent[0]["dedupe_key"] == sent[1]["dedupe_key"]  # the API keeps one per key: a restart repeats nothing

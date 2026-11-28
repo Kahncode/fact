@@ -178,13 +178,14 @@ async def test_a_failed_build_refuses_the_version_only(settings: Settings, tmp_p
 
 
 async def test_a_missing_sandbox_folder_refuses_the_version(settings: Settings, home: Home, project: str) -> None:
-    home.push(_sandbox_files(names=("tiny",)))  # no `base`, the pool's default
+    sha = home.push(_sandbox_files(names=("tiny",)))  # no `base`, the pool's default
     runner = LocalRunner(settings, remote_url=lambda _: _url(home))
     refused: list[Refused] = []
     settings = settings.model_copy(update={"projects": [ProjectRef(name=project, home="acme/home")]})
 
     assert await load_projects(settings, runner, "f" * 40, refused=refused) == []
     assert "sandbox 'base' has no folder .fact/sandboxes/base/" in refused[0].error
+    assert (refused[0].home_sha, refused[0].sandbox) == (sha, "base")  # the refusal's dedupe key
 
 
 async def test_docker_unavailable_stops_the_worker(

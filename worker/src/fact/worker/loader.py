@@ -54,6 +54,11 @@ RemoteUrl = Callable[[str], str]  # `owner/repo` to its clone URL
 class WorkflowLoadError(Exception):
     """A project's workflows could not be checked out or imported; the message names the project or file."""
 
+    def __init__(self, message: str, *, home_sha: str | None = None, sandbox: str | None = None) -> None:
+        super().__init__(message)
+        self.home_sha = home_sha  # the version refused, once known
+        self.sandbox = sandbox  # the sandbox whose folder or build failed, if that is why
+
 
 @dataclass(frozen=True)
 class ProjectWorkflows:
@@ -213,10 +218,14 @@ async def load_project(  # noqa: PLR0913
     pinned_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 - one directory, instant
     if sha is None:
         sha = await default_branch_sha(url, pinned_dir)
-    checkout = await pinned_checkout(url, pinned_dir, project, sha)
-    pool = runner_pool_of(checkout)
-    workflows = load_workflows(project, checkout, sha)
-    images = await _sandbox_images(project, checkout, pool, workflows) if pool.kind == "docker" else {}
+    try:
+        checkout = await pinned_checkout(url, pinned_dir, project, sha)
+        pool = runner_pool_of(checkout)
+        workflows = load_workflows(project, checkout, sha)
+        images = await _sandbox_images(project, checkout, pool, workflows) if pool.kind == "docker" else {}
+    except WorkflowLoadError as exc:
+        exc.home_sha = sha
+        raise
     names = [cls.__name__ for cls in workflows]
     log.info("project_workflows_loaded", project=project, home_sha=sha, workflows=names, checkout=str(checkout))
     return ProjectWorkflows(project, home, sha, checkout, version_id(factory, sha), workflows, pool, images)
@@ -249,4 +258,4 @@ async def _sandbox_images(
     try:
         return await build_sandboxes(project, checkout, names)
     except SandboxError as exc:
-        raise WorkflowLoadError(str(exc)) from exc
+        raise WorkflowLoadError(str(exc), sandbox=exc.sandbox) from exc

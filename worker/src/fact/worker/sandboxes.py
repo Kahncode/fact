@@ -33,6 +33,10 @@ LABEL_NAME = "fact.sandbox.name"
 class SandboxError(RuntimeError):
     """A sandbox folder is missing or its image failed to build; the message names the project and the sandbox."""
 
+    def __init__(self, message: str, sandbox: str) -> None:
+        super().__init__(message)
+        self.sandbox = sandbox
+
 
 class DockerUnavailableError(RuntimeError):
     """A project uses the `docker` pool but `docker info` fails: the worker cannot serve it, so it does not start."""
@@ -99,7 +103,7 @@ async def _build(project: str, name: str, folder: Path, tag: str) -> None:
             code = out.exit_code
     if code != 0:
         msg = f"project {project}: sandbox {name!r} failed to build (exit {code}): " + "\n".join(tail)
-        raise SandboxError(msg)
+        raise SandboxError(msg, name)
     log.info("sandbox_built", project=project, sandbox=name, tag=tag)
 
 
@@ -113,7 +117,7 @@ async def build_sandboxes(project: str, checkout: Path, names: Iterable[str]) ->
     for name, folder in folders.items():
         if not folder.is_dir():
             msg = f"project {project}: sandbox {name!r} has no folder {SANDBOXES_SUBDIR.as_posix()}/{name}/"
-            raise SandboxError(msg)
+            raise SandboxError(msg, name)
     if not folders:
         return {}
     await check_docker(checkout)

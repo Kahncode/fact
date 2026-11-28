@@ -167,7 +167,7 @@ class FactWorkflow(
             run_id=run.run_id,
             task_key=run.task.key,
             repos=run.repos,
-            sandbox=self.sandbox or run.default_sandbox,
+            sandbox=self.sandbox,  # None: the worker maps it to the pool default of the run's own version
             sandbox_args=list(self.sandbox_args),
         )
         self._handle = await self._activity(PREPARE_WORKSPACE, spec, WorkspaceHandle)

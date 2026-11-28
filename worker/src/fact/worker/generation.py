@@ -39,6 +39,8 @@ class GenerationMismatchError(RuntimeError):
 class Refused:
     project: str
     error: str
+    home_sha: str | None = None  # the version refused, once known
+    sandbox: str | None = None  # the sandbox that could not be built, if that is why
 
 
 @dataclass(frozen=True)
@@ -81,7 +83,8 @@ async def load_projects(  # noqa: PLR0913 - options are keyword-only
         except (WorkflowLoadError, RunnerError) as exc:
             log.error("workflow_load_failed", project=ref.name, error=str(exc))  # noqa: TRY400 - the message is enough
             if refused is not None:
-                refused.append(Refused(ref.name, str(exc)))
+                home_sha, sandbox = getattr(exc, "home_sha", None), getattr(exc, "sandbox", None)
+                refused.append(Refused(ref.name, str(exc), home_sha, sandbox))
             continue
         if not project.workflows:
             log.warning("no_workflows", project=ref.name, checkout=str(project.checkout))
@@ -131,10 +134,17 @@ async def make_current(client: Client, served: Served) -> None:
         await set_current_version(client, project)  # failing here beats runs that never start
 
 
+def _refusal_key(item: Refused) -> str:
+    """Key a refusal by its version, not its message: a failed build's output differs at every attempt."""
+    if item.home_sha is None:  # refused before its SHA was known (the home unreachable): the message is all there is
+        return f"version_refused:{item.project}:{hashlib.sha256(item.error.encode()).hexdigest()[:16]}"
+    return f"version_refused:{item.project}:{item.home_sha}:{item.sandbox or ''}"
+
+
 async def notify_refused(http: httpx.AsyncClient, api_url: str, refused: list[Refused]) -> None:
-    """Best effort: one `error` notification per refused project and error, so a restart does not repeat it."""
+    """Best effort: one `error` notification per refused version (and sandbox), so a restart does not repeat it."""
     for item in refused:
-        key = f"version_refused:{item.project}:{hashlib.sha256(item.error.encode()).hexdigest()[:16]}"
+        key = _refusal_key(item)
         body = {
             "kind": NotificationKind.ERROR.value,
             "title": f"Project {item.project}: the worker refused its version"[:300],
