@@ -5,8 +5,9 @@ At start it adopts every recorded process still alive (same pid and start time) 
 stops a live one whose command differs (another build), and removes the records of the others. Then, every poll, it
 starts what is missing (once `wait_for` accepts connections), starts again a child that exited (after
 `RESTART_DELAY_S`) and prints each child's log prefixed by its name. Killing `fact dev` leaves the children running
-for the next one to adopt; Ctrl-C, or a restarter raising `StopRequestedError` (`fact shutdown`), stops them all, last
-spec first.
+for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children or a child exiting
+with its record removed by someone else (`fact shutdown`), or a restarter raising `StopRequestedError` stops them all,
+last spec first; runs stay open in Temporal.
 """
 
 import contextlib
@@ -32,7 +33,7 @@ _print_lock = threading.Lock()
 
 
 class StopRequestedError(Exception):
-    """Raised by a restarter to stop every child and return 0; its message says why (`fact shutdown`)."""
+    """Raised to stop every child and return 0; its message says why."""
 
 
 # Called on every poll; returns the specs of children to restart (matched by name), or None to keep them running.
@@ -144,16 +145,29 @@ class Supervisor:
             self._track(start(spec, self.run_dir), offset)
 
     def reap(self) -> None:
-        """Forget the children that exited, to be started again after `RESTART_DELAY_S`."""
+        """
+        Forget the children that exited, to be started again after `RESTART_DELAY_S`.
+
+        A child whose record someone else removed was stopped by `fact shutdown`, which removes the stop file with
+        the record once the child exited, possibly before `check_stop_files` saw it: raise `StopRequestedError`.
+        """
+        asked: list[str] = []
         for name, child in list(self.children.items()):
             if not child.exited():
                 continue
+            removed = not self.run_dir.record_path(name).exists()
             stop(child, self.run_dir)  # reaps it and removes its record
             self._forget(name)
+            if removed:
+                asked.append(name)
+                continue
             code = child.exit_code()
             how = f"exited with code {code}" if code is not None else "exited"
             self.log(f"{name} {how}; starting it again in {RESTART_DELAY_S:g} s")
             self._not_before[name] = time.monotonic() + RESTART_DELAY_S
+        if asked:
+            msg = f"{', '.join(asked)} stopped by fact shutdown: stopping every process"
+            raise StopRequestedError(msg)
 
     def replace(self, specs: Sequence[ChildSpec]) -> None:
         """Stop the children named in `specs` and run `specs` in their place; the others keep running."""
@@ -171,8 +185,15 @@ class Supervisor:
                 stop(child, self.run_dir)
                 self._forget(name)
 
+    def check_stop_files(self) -> None:
+        """Raise `StopRequestedError` once a child's stop file appears: `stop` removes its own before returning."""
+        if asked := [name for name in self.children if self.run_dir.stop_path(name).exists()]:
+            msg = f"stop requested for {', '.join(asked)} (fact shutdown): stopping every process"
+            raise StopRequestedError(msg)
+
     def loop(self, restarter: Restarter | None) -> None:
         while True:
+            self.check_stop_files()  # before `reap`, so a child that stopped on request is not started again
             self.reap()
             self.start_missing()
             if restarter is not None and (replacements := restarter()):
@@ -198,7 +219,7 @@ def _stop_signals(handler: object) -> Iterator[None]:
 
 def run_all(specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | None = None) -> int:
     """
-    Adopt or start `specs` and keep them running until Ctrl-C (130) or `StopRequestedError` (0), then stop them.
+    Adopt or start `specs` and keep them running until Ctrl-C (130) or a stop request (0), then stop them.
 
     `restarter`, polled every loop, may return specs to restart some children with (`fact dev --follow`).
     """
@@ -214,4 +235,5 @@ def run_all(specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | 
         supervisor.log(str(e))
     with _stop_signals(signal.SIG_IGN):  # a second Ctrl-C must not abandon the stop half way
         supervisor.stop_all()
+    supervisor.log("stopped; open runs carry on at the next `fact dev`")
     return code

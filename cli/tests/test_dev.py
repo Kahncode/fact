@@ -6,7 +6,6 @@ import typer
 from fact.cli import dev
 from fact.cli.dev_lock import DevLock
 from fact.cli.main import app
-from fact.cli.shutdown import ShutdownWatch
 from fact.core.settings import Settings
 from typer.testing import CliRunner
 
@@ -39,7 +38,7 @@ def test_dev_creates_data_dir_and_exits_with_the_supervisor_code(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, supervisor_code: int, exit_code: int
 ) -> None:
     monkeypatch.setattr(dev.shutil, "which", lambda _: "temporal")
-    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir, _restarter: supervisor_code)
+    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir: supervisor_code)
 
     result = CliRunner().invoke(app, ["dev"])
 
@@ -111,8 +110,7 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     started: list[list[str]] = []
 
-    def fake_run_all(specs: list, _run_dir: object, restarter: object) -> int:
-        assert isinstance(restarter, ShutdownWatch)  # plain and pinned runs exit on `fact shutdown` too
+    def fake_run_all(specs: list, _run_dir: object) -> int:
         started.extend(s.argv for s in specs)
         return 130
 

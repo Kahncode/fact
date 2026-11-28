@@ -8,17 +8,17 @@ until `GET /scheduler/active` counts no run (queued, running or waiting, human w
 The API comes back with its scheduler on; if it was off before the upgrade, the follower turns it off again.
 
 A failed check (git, `uv sync`, the API) is printed and retried at the next check.
-
-The follower also polls the `ShutdownWatch` (`fact shutdown`): while `shutdown` is set it never pins or upgrades.
 """
 
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
+from fact.cli import projects
 from fact.cli.processes import ChildSpec
-from fact.cli.shutdown import ShutdownWatch, call_scheduler
+from fact.cli.runs import API
 from fact.cli.use import PinError, latest, pin
 from fact.core.settings import REPO_ROOT, Settings
 
@@ -28,6 +28,14 @@ CHECK_INTERVAL_S = 60.0
 RESTORE_INTERVAL_S = 1.0
 # what a check can raise: git or uv failing (PinError), the API down or answering oddly, a file lock while pinning
 CHECK_ERRORS = (PinError, httpx.HTTPError, KeyError, TypeError, ValueError, OSError)
+
+
+def call_scheduler(method: str, path: str) -> dict[str, Any]:
+    """Call `/api/v1/scheduler<path>`; errors are raised for the caller to retry at its next check."""
+    with projects.make_client() as client:
+        response = client.request(method, f"{API}/scheduler{path}")
+    response.raise_for_status()
+    return response.json()
 
 
 def short(sha: str) -> str:
@@ -48,11 +56,9 @@ class Follower:
         log: Callable[[str], None],
         repo: Path = REPO_ROOT,
         clock: Callable[[], float] = time.monotonic,
-        shutdown: ShutdownWatch | None = None,
     ) -> None:
         self._settings, self._ref, self._uv, self._repo = settings, ref, uv, repo
         self._commands, self._log, self._clock = commands, log, clock
-        self._shutdown = shutdown if shutdown is not None else ShutdownWatch(log, clock)
         self.pinned = pinned
         self.pending: str | None = None  # the SHA `ref` moved to, while the upgrade waits for runs to end
         self._resume_on = True
@@ -64,8 +70,7 @@ class Follower:
         now = self._clock()
         if self._restore_at is not None and now >= self._restore_at:
             self._restore_off(now)
-        self._shutdown()  # raises once a shutdown has no run left to wait for
-        if self._shutdown.shutdown or now < self._next:  # a shutdown never pins nor upgrades
+        if now < self._next:
             return None
         self._next = now + CHECK_INTERVAL_S
         try:

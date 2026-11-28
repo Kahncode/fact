@@ -5,18 +5,16 @@ import pytest
 from fact.cli import follow, projects
 from fact.cli.follow import CHECK_INTERVAL_S, Follower
 from fact.cli.processes import ChildSpec
-from fact.cli.shutdown import POLL_INTERVAL_S, ShutdownWatch
-from fact.cli.supervisor import StopRequestedError
 from fact.core.settings import Settings
 
 OLD, NEW = "a" * 40, "b" * 40
 
 
 class FakeScheduler:
-    """The API's scheduler switch, shutdown flag and active-run count, keeping state across calls."""
+    """The API's scheduler switch and active-run count, keeping state across calls."""
 
     def __init__(self, *, on: bool = True, active: int = 0) -> None:
-        self.on, self.active, self.up, self.shutdown = on, active, True, False
+        self.on, self.active, self.up = on, active, True
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         if not self.up:
@@ -25,10 +23,9 @@ class FakeScheduler:
         path = request.url.path.removeprefix("/api/v1/scheduler")
         if request.method == "POST":
             self.on = path == "/on"
-            self.shutdown = path == "/shutdown" or (self.shutdown and path != "/on")
         if path == "/active":
             return httpx.Response(200, json={"active": self.active})
-        return httpx.Response(200, json={"on": self.on, "shutdown": self.shutdown})
+        return httpx.Response(200, json={"on": self.on})
 
 
 class Clock:
@@ -133,31 +130,3 @@ def test_a_failed_check_keeps_the_upgrade_pending(
     assert _tick(follower, clock) is None
     assert follower.pending == NEW
     assert not scheduler.on
-
-
-def test_shutdown_waits_for_active_runs_then_stops(scheduler: FakeScheduler) -> None:
-    clock, lines = Clock(), []
-    watch = ShutdownWatch(lines.append, clock)
-    scheduler.shutdown, scheduler.active = True, 2
-    for _ in range(2):
-        clock.now += POLL_INTERVAL_S
-        watch()  # runs remain: everything keeps running
-    assert lines == ["shutdown waits for 2 active run(s) to end"]  # printed once, when the count changes
-
-    scheduler.active = 0
-    clock.now += POLL_INTERVAL_S
-    with pytest.raises(StopRequestedError):
-        watch()
-
-
-def test_follow_never_upgrades_during_a_shutdown(
-    settings: Settings, scheduler: FakeScheduler, remote: dict[str, str]
-) -> None:
-    clock = Clock()
-    follower = _follower(settings, clock)
-    remote["main"] = NEW
-    scheduler.shutdown, scheduler.active = True, 1
-
-    assert _tick(follower, clock) is None
-    assert follower.pinned == OLD
-    assert follower.pending is None

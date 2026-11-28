@@ -86,15 +86,6 @@ async def test_dev_loop_is_on_at_start_and_follows_the_switch(app: FastAPI, clie
     task.cancel()
 
 
-async def test_shutdown_turns_off_until_on_cancels_it(client: AsyncClient) -> None:
-    shutdown = (await client.post("/api/v1/scheduler/shutdown")).json()
-    assert (shutdown["on"], shutdown["shutdown"]) == (False, True)
-    state = (await client.get("/api/v1/scheduler")).json()
-    assert (state["on"], state["shutdown"]) == (False, True)
-    resumed = (await client.post("/api/v1/scheduler/on")).json()
-    assert (resumed["on"], resumed["shutdown"]) == (True, False)
-
-
 @pytest.fixture
 async def prod_app(settings: Settings) -> AsyncIterator[FastAPI]:
     application = create_app(settings.model_copy(update={"env": AppEnv.PROD}))
@@ -109,7 +100,6 @@ async def test_prod_has_no_loop_and_no_switch(prod_app: FastAPI) -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         assert (await client.post("/api/v1/scheduler/on")).status_code == HTTPStatus.NOT_FOUND
         assert (await client.post("/api/v1/scheduler/off")).status_code == HTTPStatus.NOT_FOUND
-        assert (await client.post("/api/v1/scheduler/shutdown")).status_code == HTTPStatus.NOT_FOUND
         state = (await client.get("/api/v1/scheduler")).json()
         assert (state["in_process"], state["on"]) == (False, None)
         tick = await client.post("/api/v1/scheduler/tick")
