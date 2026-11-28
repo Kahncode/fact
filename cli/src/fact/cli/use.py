@@ -11,14 +11,13 @@ worktrees live under `workspaces_dir`.
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from fact.cli.removal import make_writable_and_retry
 from fact.core.settings import REPO_ROOT, Settings, get_settings
 
 CURRENT_FILE = "current"
@@ -116,19 +115,13 @@ def resolve_ref(repo: Path, ref: str) -> str:
     raise PinError(msg)
 
 
-def _make_writable_and_retry(func: Callable[[str], object], path: str, _exc: BaseException) -> None:
-    """Git leaves read-only files (`.git`, objects); on Windows `rmtree` needs them writable."""
-    Path(path).chmod(stat.S_IWRITE)
-    func(path)
-
-
 def _checkout(repo: Path, checkout: Path, sha: str) -> None:
     """Create the detached worktree at `checkout`, or keep it when it is already at `sha`."""
     if (checkout / ".git").exists() and _try(["git", "rev-parse", "HEAD"], checkout) == sha:
         return
     if checkout.exists():
         try:
-            shutil.rmtree(checkout, onexc=_make_writable_and_retry)
+            shutil.rmtree(checkout, onexc=make_writable_and_retry)
         except OSError as exc:
             msg = f"cannot remove stale checkout {checkout}: {exc}; stop `fact dev --pinned` and retry"
             raise PinError(msg) from exc

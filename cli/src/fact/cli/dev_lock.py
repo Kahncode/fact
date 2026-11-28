@@ -57,6 +57,15 @@ class DevLock:
         fh.flush()
         self._fh = fh
 
+    def held(self) -> bool:
+        """Return whether another process holds the lock now; creates and changes nothing."""
+        try:
+            fh = self.path.open("r+b")
+        except FileNotFoundError:
+            return False
+        with fh:
+            return not _try_lock(fh)  # closing the file releases a lock taken here
+
     def _holder(self) -> str:
         with contextlib.suppress(OSError):
             return self.path.read_text(encoding="utf-8").strip()

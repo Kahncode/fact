@@ -40,7 +40,7 @@ def test_dev_creates_data_dir_and_exits_with_the_supervisor_code(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, supervisor_code: int, exit_code: int
 ) -> None:
     monkeypatch.setattr(dev.shutil, "which", lambda _: "temporal")
-    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir: supervisor_code)
+    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir, _restarter: supervisor_code)
 
     result = CliRunner().invoke(app, ["dev"])
 

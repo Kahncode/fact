@@ -30,6 +30,7 @@ from fact.cli.generations import Generations
 from fact.cli.processes import RunDir
 from fact.cli.relaunch import SelfRestart, launch
 from fact.cli.supervisor import INTERRUPTED, Restarter, chain, port_open, run_all
+from fact.cli.temporal_admin import NamespaceRetention
 from fact.cli.use import PinError, current_pin, pin, venv_python
 from fact.core.settings import REPO_ROOT, Settings, get_settings
 
@@ -113,13 +114,17 @@ def _supervise(  # noqa: PLR0913
     def log(line: str) -> None:
         emit("fact", width, line)
 
+    retention = NamespaceRetention(settings, temporal_endpoint(settings), log)
     if checkout is None:
-        return run_all(build_commands(settings, temporal_exe), run_dir(settings))
+        return run_all(build_commands(settings, temporal_exe), run_dir(settings), retention)
     workers = generations(settings, log)
     commands = build_commands(settings, temporal_exe, checkout, workers=workers.initial(checkout, run_dir(settings)))
     width = max(len(c.name) for c in commands)  # the supervisor's prefix width
     running = REPO_ROOT.name if launcher is not None else None  # a launched `fact dev` runs from its pin
-    restarters: list[Restarter] = [SelfRestart(settings, running=running, repo=source, log=log, launcher=launcher)]
+    restarters: list[Restarter] = [
+        SelfRestart(settings, running=running, repo=source, log=log, launcher=launcher),
+        retention,
+    ]
     if follow is not None:
         typer.echo(f"Following {follow}: a new generation each time it or a project's home branch moves")
         restarters.append(_follower(settings, follow, workers, source, log))
