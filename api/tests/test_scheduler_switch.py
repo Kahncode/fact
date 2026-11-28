@@ -1,7 +1,8 @@
 """
 Where the scheduler ticks: a loop in the API in dev, only `POST /scheduler/tick` elsewhere.
 
-In dev the loop is on at start and switched by `fact scheduler on|off`; elsewhere there is no loop and no switch.
+In dev the loop is on on a fresh database and switched by `fact scheduler on|off`, which an API restart keeps; elsewhere
+there is no loop and no switch.
 """
 
 import asyncio
@@ -84,6 +85,31 @@ async def test_dev_loop_is_on_at_start_and_follows_the_switch(app: FastAPI, clie
     await clock.interval()
     assert len(ticks) == 3  # noqa: PLR2004
     task.cancel()
+
+
+async def test_off_survives_an_api_restart(settings: Settings) -> None:
+    first = create_app(settings)
+    async with first.router.lifespan_context(first):
+        transport = ASGITransport(app=first, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            assert (await client.post("/api/v1/scheduler/off")).json()["on"] is False
+
+    restarted = create_app(settings)
+    async with restarted.router.lifespan_context(restarted):
+        transport = ASGITransport(app=restarted, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            assert (await client.get("/api/v1/scheduler")).json()["on"] is False
+        clock, ticks = _Clock(), []
+
+        async def tick(_state: State) -> TickResult:
+            ticks.append(1)
+            return TickResult()
+
+        task = asyncio.create_task(scheduler_loop(restarted.state, tick=tick, sleep=clock.sleep))
+        await asyncio.wait_for(clock.asleep.get(), WAIT_S)
+        await clock.interval()
+        assert ticks == []
+        task.cancel()
 
 
 @pytest.fixture

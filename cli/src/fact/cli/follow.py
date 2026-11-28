@@ -5,7 +5,8 @@ Every `CHECK_INTERVAL_S` the follower fetches `origin` and resolves `<ref>`. Whe
 upgrade is pending: the scheduler is turned off (`POST /scheduler/off`) so no new run starts, and the follower waits
 until `GET /scheduler/active` counts no run (queued, running or waiting, human waits included). Then it pins `<ref>`
 (`fact use`) and hands the supervisor the API and worker commands for the new checkout; Temporal keeps running.
-The API comes back with its scheduler on; if it was off before the upgrade, the follower turns it off again.
+The scheduler's switch is kept in the database, so the API comes back with it off; if it was on before the upgrade, the
+follower turns it back on once the restarted API answers.
 
 A failed check (git, `uv sync`, the API) is printed and retried at the next check.
 """
@@ -23,8 +24,7 @@ from fact.cli.use import PinError, latest, pin
 from fact.core.settings import REPO_ROOT, Settings
 
 CHECK_INTERVAL_S = 60.0
-# The restarted API starts with its scheduler on and ticks first after `scheduler_interval_seconds` (30); retrying
-# every second turns it back off well before that.
+# how often to try turning the scheduler back on while the restarted API is not answering yet
 RESTORE_INTERVAL_S = 1.0
 # what a check can raise: git or uv failing (PinError), the API down or answering oddly, a file lock while pinning
 CHECK_ERRORS = (PinError, httpx.HTTPError, KeyError, TypeError, ValueError, OSError)
@@ -62,14 +62,14 @@ class Follower:
         self.pinned = pinned
         self.pending: str | None = None  # the SHA `ref` moved to, while the upgrade waits for runs to end
         self._resume_on = True
-        self._restore_at: float | None = None  # when to try turning the scheduler back off after a restart
+        self._restore_at: float | None = None  # when to try turning the scheduler back on after a restart
         self._active: int | None = None
         self._next = clock() + CHECK_INTERVAL_S
 
     def __call__(self) -> list[ChildSpec] | None:
         now = self._clock()
         if self._restore_at is not None and now >= self._restore_at:
-            self._restore_off(now)
+            self._restore_on(now)
         if now < self._next:
             return None
         self._next = now + CHECK_INTERVAL_S
@@ -97,16 +97,16 @@ class Follower:
         self._log(f"no run active: upgrading to {self._ref}")
         checkout = pin(self._settings, self._ref, self._uv, self._repo)
         self.pinned, self.pending, self._active = checkout.name, None, None
-        self._restore_at = None if self._resume_on else self._clock()
+        self._restore_at = self._clock() if self._resume_on else None
         self._log(f"restarting the API and worker on {short(checkout.name)}")
         return self._commands(checkout)
 
-    def _restore_off(self, now: float) -> None:
-        """Turn the scheduler back off once the restarted API answers; it is not up yet on the first tries."""
+    def _restore_on(self, now: float) -> None:
+        """Turn the scheduler back on once the restarted API answers; it is not up yet on the first tries."""
         self._restore_at = now + RESTORE_INTERVAL_S
         try:
-            call_scheduler("POST", "/off")
+            call_scheduler("POST", "/on")
         except CHECK_ERRORS:  # not up yet
             return
         self._restore_at = None
-        self._log("scheduler kept off, as it was before the upgrade")
+        self._log("scheduler back on, as it was before the upgrade")

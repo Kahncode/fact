@@ -4,6 +4,7 @@ import httpx
 import pytest
 from fact.core.artifacts import InvalidArtifactKeyError
 from fact.core.enums import StepKind, StepOutcome
+from fact.core.http_retry import WORKER_POLICY, AsyncRetryTransport
 from fact.core.types import Usage
 from fact.worker.reporting import StepReporter
 from httpx import AsyncClient
@@ -134,6 +135,44 @@ async def test_upload_retried_once(client: AsyncClient, run_id: str, tmp_path: P
     assert s.result is not None
     assert s.result.log_ref is not None
     assert (await client.get(f"/api/v1/artifacts/{s.result.log_ref}")).text == "x\n"
+
+
+async def test_a_step_reporting_while_the_api_restarts_is_recorded_once_it_is_back(
+    client: AsyncClient, run_id: str, tmp_path: Path
+) -> None:
+    real = client._transport  # noqa: SLF001
+    clock = {"now": 0.0}
+    back_at = 40.0  # a slow restart, within the worker's 60 s
+    restarting = {"put": True}
+
+    async def sleep(seconds: float) -> None:
+        clock["now"] += seconds
+
+    class Restarting(httpx.AsyncBaseTransport):
+        """Refuses connections until `back_at`, then answers 503 to the first upload (still starting)."""
+
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            if clock["now"] < back_at:
+                msg = "refused"
+                raise httpx.ConnectError(msg, request=request)
+            if request.method == "PUT" and restarting.pop("put", False):
+                return httpx.Response(503)
+            return await real.handle_async_request(request)
+
+    transport = AsyncRetryTransport(WORKER_POLICY, Restarting(), sleep=sleep, clock=lambda: clock["now"])
+    async with AsyncClient(transport=transport, base_url=BASE) as http:
+        reporter = StepReporter(BASE, http, log_dir=tmp_path / "logs", sleep=sleep)
+        async with reporter.step(run_id, "implement", StepKind.SHELL, 1) as s:
+            s.log("x")
+            s.finish(StepOutcome.PASSED)
+
+    assert clock["now"] >= back_at
+    (step,) = await _steps(client, run_id)
+    assert (step["status"], step["outcome"]) == ("finished", "passed")
+    assert s.result is not None
+    assert s.result.log_ref is not None
+    assert step["log_ref"] == s.result.log_ref
+    assert (await client.get(f"/api/v1/artifacts/{step['log_ref']}")).text == "x\n"
 
 
 async def test_unsafe_stage_id_refused_before_disk(client: AsyncClient, run_id: str, tmp_path: Path) -> None:

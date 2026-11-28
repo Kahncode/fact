@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 import httpx
 import typer
+from fact.core.http_retry import CLI_POLICY, RetryTransport
 from fact.core.settings import get_settings
 
 HTTP_TIMEOUT_S = 10.0
@@ -12,8 +13,13 @@ app = typer.Typer(no_args_is_help=True, help="Projects registered in fact.yaml."
 
 
 def make_client() -> httpx.Client:
-    """HTTP client for the API; tests replace this to inject an `httpx.MockTransport`."""
-    return httpx.Client(base_url=get_settings().api_url, timeout=HTTP_TIMEOUT_S)
+    """
+    HTTP client for the API, retrying a few seconds while it restarts (`CLI_POLICY`).
+
+    Tests replace this to inject an `httpx.MockTransport`.
+    """
+    transport = RetryTransport(CLI_POLICY)
+    return httpx.Client(base_url=get_settings().api_url, timeout=HTTP_TIMEOUT_S, transport=transport)
 
 
 def format_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:

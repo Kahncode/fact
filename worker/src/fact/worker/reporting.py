@@ -4,12 +4,15 @@ Step reporter: the one way an activity reports a step to the factory API.
 `StepReporter.step(...)` creates the step row, binds `run_id` and `step_id` to logs, keeps the step's output in a local
 log file, and on exit uploads that file, patches the step with its outcome and usage, and returns a `StepResult`.
 
-Steps never depend on the API being up: every API call is best effort (one retry), failures are logged, and the log
-file stays on disk.
+Steps never depend on the API being up: every API call is best effort, failures are logged, and the log file stays on
+disk. The worker's client retries while the API restarts (`fact.core.http_retry`, `api_http`); on top of that each call
+is retried once, and a streamed upload the transport cannot send again is retried here on 502/503/504 for as long.
 """
 
+import asyncio
 import tempfile
-from collections.abc import AsyncIterator
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +22,7 @@ import httpx
 from fact.core.artifacts import step_key
 from fact.core.claude_usage import ClaudeUsage
 from fact.core.enums import StepKind, StepOutcome, StepStatus
+from fact.core.http_retry import RETRY_STATUSES, WORKER_POLICY, RetryPolicy
 from fact.core.logging import bind_run, get_logger
 from fact.core.types import SUMMARY_MAX_BYTES, StepResult, Usage, limit_text
 
@@ -132,10 +136,19 @@ def _usage_fields(usage: Usage) -> dict[str, Any]:
 
 
 class StepReporter:
-    def __init__(self, api_base_url: str, http_client: httpx.AsyncClient, log_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        api_base_url: str,
+        http_client: httpx.AsyncClient,
+        log_dir: Path | None = None,
+        *,
+        policy: RetryPolicy = WORKER_POLICY,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._base = api_base_url.rstrip("/") + API_PREFIX
         self._http = http_client
         self._log_dir = log_dir or DEFAULT_LOG_DIR
+        self._policy, self._sleep = policy, sleep
 
     @asynccontextmanager
     async def step(  # noqa: PLR0913, PLR0917
@@ -262,16 +275,22 @@ class StepReporter:
         return response is not None
 
     async def _send(self, what: str, method: str, path: str, **kwargs: Any) -> httpx.Response | None:  # noqa: ANN401
-        """One API call with one retry. Never raises on API trouble: returns None and logs a warning."""
-        for attempt in range(RETRIES + 1):
-            args = {k: (v() if callable(v) else v) for k, v in kwargs.items()}
+        """One API call with one retry (more while the API restarts). Never raises: returns None and logs a warning."""
+        deadline, delay, retries = time.monotonic() + self._policy.budget_s, self._policy.first_delay_s, 0
+        while True:
+            args = {k: (v() if callable(v) else v) for k, v in kwargs.items()}  # a fresh upload stream each attempt
             try:
                 response = await self._http.request(method, self._base + path, **args)
                 response.raise_for_status()
             except (httpx.HTTPError, OSError) as exc:
-                log.warning("report_failed", what=what, attempt=attempt + 1, error=str(exc) or type(exc).__name__)
-                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < SERVER_ERROR:
-                    break  # a 4xx will not succeed on retry
+                log.warning("report_failed", what=what, attempt=retries + 1, error=str(exc) or type(exc).__name__)
+                status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                if status in RETRY_STATUSES and time.monotonic() < deadline:  # the API restarting
+                    await self._sleep(delay)
+                    delay = self._policy.next_delay(delay)
+                    continue
+                if (status is not None and status < SERVER_ERROR) or retries >= RETRIES:
+                    return None  # a 4xx will not succeed on retry
+                retries += 1
             else:
                 return response
-        return None

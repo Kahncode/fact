@@ -91,6 +91,12 @@ def test_upgrades_once_main_moved_and_no_run_is_active(
     assert restarted[0].argv == [str(settings.pinned_dir / "factory" / NEW)]
     assert follower.pinned == NEW
     assert follower.pending is None
+    scheduler.up = False  # the restarted API keeps the switch off, and is not answering yet
+    follower()
+    scheduler.up = True
+    clock.now += 1
+    follower()
+    assert scheduler.on  # on again, as it was before the upgrade
 
 
 def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
@@ -101,10 +107,6 @@ def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
     scheduler.on = False
     remote["main"] = NEW
     assert _tick(follower, clock) is not None
-    scheduler.on, scheduler.up = True, False  # the restarted API starts with it on, and is not answering yet
-
-    follower()
-    scheduler.up = True
     clock.now += 1
     follower()
 
