@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fact.core.settings import REPO_ROOT, ProjectRef, Settings
 from fact.sdk.workflow import FactWorkflow
-from fact.worker.__main__ import DuplicateVersionError, load_projects
+from fact.worker.generation import DuplicateVersionError, load_projects
 from fact.worker.loader import (
     WorkflowLoadError,
     factory_sha,
@@ -188,7 +188,7 @@ async def test_load_projects_skips_a_project_that_fails(
 ) -> None:
     home.push({".fact/workflows/broken.py": "raise RuntimeError('boom')\n"})  # every project's home is this repo
 
-    assert await load_projects(settings, runner) == []
+    assert await load_projects(settings, runner, "f" * 40) == []
 
 
 def test_files_that_map_to_one_module_name_are_refused(tmp_path: Path) -> None:
@@ -208,4 +208,4 @@ async def test_load_projects_refuses_two_projects_with_one_build_id(
     twins = [ProjectRef(name=_project(), home=HOME), ProjectRef(name=_project(), home=HOME)]
 
     with pytest.raises(DuplicateVersionError, match="share build id"):
-        await load_projects(settings.model_copy(update={"projects": twins}), runner)
+        await load_projects(settings.model_copy(update={"projects": twins}), runner, "f" * 40)
