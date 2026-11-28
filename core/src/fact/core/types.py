@@ -60,6 +60,8 @@ class WorkspaceSpec(_Model):
     run_id: str
     task_key: str
     repos: list[RepoCheckout]
+    sandbox: str | None = None  # the workflow's sandbox (`.fact/sandboxes/<name>/`); None: its version's pool default
+    sandbox_args: list[str] = Field(default_factory=list)  # the workflow's extra `docker run` arguments
 
 
 class WorkspaceHandle(_Model):

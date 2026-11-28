@@ -70,6 +70,8 @@ class FactWorkflow(
     """Base class for project workflows: bookkeeping and step helpers; agents, PRs, review, gates, stop in mixins."""
 
     stage_manifest: ClassVar[tuple[Stage, ...]] = ()
+    sandbox: ClassVar[str | None] = None  # `.fact/sandboxes/<name>/` of the home repository; None: the pool's default
+    sandbox_args: ClassVar[tuple[str, ...]] = ()  # extra `docker run` arguments, after the pool's `run_args`
 
     def __init__(self) -> None:
         super().__init__()
@@ -161,7 +163,13 @@ class FactWorkflow(
         if self._handle is not None:
             return self._handle
         run = self.input
-        spec = WorkspaceSpec(run_id=run.run_id, task_key=run.task.key, repos=run.repos)
+        spec = WorkspaceSpec(
+            run_id=run.run_id,
+            task_key=run.task.key,
+            repos=run.repos,
+            sandbox=self.sandbox,  # None: the worker maps it to the pool default of the run's own version
+            sandbox_args=list(self.sandbox_args),
+        )
         self._handle = await self._activity(PREPARE_WORKSPACE, spec, WorkspaceHandle)
         return self._handle
 
