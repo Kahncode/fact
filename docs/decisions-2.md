@@ -1,6 +1,6 @@
 # Decisions (continued)
 
-Continuation of `docs/decisions.md`, which reached the 300-line limit; earlier entries are there. Design-level decisions are in `docs/spec/16-decisions.md`. Entries are append-only.
+Continuation of `docs/decisions.md`, which reached the 300-line limit; earlier entries are there. This file is full (300-line limit): new entries go in `docs/decisions-3.md`, starting with `fact cleanup` (#137). Design-level decisions are in `docs/spec/16-decisions.md`. Entries are append-only.
 
 ## Decisions
 

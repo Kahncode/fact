@@ -3,6 +3,11 @@
 
 An OS file lock, so the OS releases it when its process dies however it dies; the file holds the holder's pid for the
 message a second `fact dev` prints. On Windows the lock covers one byte far past the pid, so the pid stays readable.
+
+`<data_dir>/fact-dev.pin` names the pin a `fact dev --in-pin` holding the lock runs from (its code and `.venv`), so
+`fact cleanup` keeps that pin: it has no process record, and it stays on an older pin while newer ones leave `cli/`
+and `core/` alone. The holder writes it (or deletes it, from the source tree) after taking the lock; it counts only
+while the lock is held.
 """
 
 import contextlib
@@ -12,6 +17,7 @@ from pathlib import Path
 from typing import IO
 
 LOCK_NAME = "fact-dev.lock"
+PIN_NAME = "fact-dev.pin"
 _WINDOWS_LOCK_OFFSET = 1 << 20
 
 
@@ -57,6 +63,15 @@ class DevLock:
         fh.flush()
         self._fh = fh
 
+    def held(self) -> bool:
+        """Return whether another process holds the lock now; creates and changes nothing."""
+        try:
+            fh = self.path.open("r+b")
+        except FileNotFoundError:
+            return False
+        with fh:
+            return not _try_lock(fh)  # closing the file releases a lock taken here
+
     def _holder(self) -> str:
         with contextlib.suppress(OSError):
             return self.path.read_text(encoding="utf-8").strip()
@@ -67,3 +82,21 @@ class DevLock:
         if self._fh is not None:
             self._fh.close()
             self._fh = None
+
+
+def record_pin(data_dir: Path, pin: str | None) -> None:
+    """Name the pin the `fact dev` holding the lock runs from; None (from the source tree) clears it."""
+    path = data_dir / PIN_NAME
+    if pin is None:
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(f"{pin}\n", encoding="utf-8")
+
+
+def running_pin(data_dir: Path) -> str | None:
+    """Return the pin a running `fact dev` runs from, None when none runs or it runs from the source tree."""
+    if not DevLock(data_dir / LOCK_NAME).held():
+        return None
+    with contextlib.suppress(OSError):
+        return (data_dir / PIN_NAME).read_text(encoding="utf-8").strip() or None
+    return None

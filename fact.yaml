@@ -8,6 +8,7 @@ data_dir: ~/.fact
 temporal:
   address: localhost:7233
   namespace: default
+  retention_days: 30 # `fact dev` sets it on the namespace: Temporal deletes closed workflow histories after it
 api:
   host: 127.0.0.1
   port: 8000

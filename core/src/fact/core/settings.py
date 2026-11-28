@@ -49,6 +49,7 @@ class TemporalSettings(_Section):
     address: str = "localhost:7233"
     namespace: str = "default"
     ui_url: str = "http://localhost:8233"  # Temporal Web UI, for run links
+    retention_days: int = Field(default=30, ge=1)  # `fact dev` sets it on the namespace: closed histories go after it
 
 
 class ApiSettings(_Section):

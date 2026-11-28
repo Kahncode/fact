@@ -14,7 +14,7 @@ fact is a software factory: a service that turns tracker issues into reviewed Gi
 
 - **Design:** `docs/spec/`, one file per section. Start from `docs/spec/README.md` and read only what your task points to.
 - **Architecture:** `docs/ARCHITECTURE.md`, index of components and what exists in code today.
-- **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` (new entries go there; design decisions are in `docs/spec/16-decisions.md`).
+- **Decisions:** `docs/decisions.md`, implementation decisions, continued in `docs/decisions-2.md` and `docs/decisions-3.md` (new entries go in `docs/decisions-3.md`; design decisions are in `docs/spec/16-decisions.md`).
 - **Work:** GitHub issues on `Kahncode/fact` (`fact:ready` issues are tasks the scheduler may start; labels in `docs/spec/12-integrations.md`). `tasks/backlog.md` holds ideas and problems not yet planned. The file tasks under `tasks/` are the M0–M2 bootstrap; `tasks/README.md` explains their format.
 
 ---
@@ -90,6 +90,9 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
 | Stop a run at once, without its stop handling (terminates the workflow; works with no worker for its version; no handoff note, the workspace is kept and its path printed) | `uv run fact stop <run> --force` (`--reason`) |
 | Turn the scheduler on/off (dev only), show it and preview its next tick | `uv run fact scheduler on\|off\|status` |
 | Stop the factory's processes now (workers, then API, then Temporal; works with or without `fact dev`, which exits 0; Ctrl-C on `fact dev` does the same); open runs carry on at the next `fact dev` | `uv run fact shutdown` |
+| Remove drained versions: pins (`pinned/factory/<sha>`, `pinned/projects/<project>/<sha>`) no current, running or draining generation (nor the running `fact dev`) uses, their Temporal versions and generation records, `.trash-` leftovers, exited processes' records (only while `fact dev` is stopped), then `git worktree prune`; safe at any time | `uv run fact cleanup` (`--dry-run`) |
+| Also delete the artifacts and step logs of runs that ended before the cutoff (open runs never; their database rows and costs stay) | `uv run fact cleanup --older-than 30d` |
+| Wipe the factory's data under `data_dir` (database, `temporal.db`, artifacts, step logs, workspaces, `repos/`, pins, `run/`); refuses while `fact dev` runs; `.env`, the source tree and GitHub labels stay (`fact:needs-human` issues stay held) | `uv run fact reset` (`--yes`, `--dry-run`) |
 | Run every ready task    | `uv run fact dev` (the scheduler is on unless `fact scheduler off` turned it off; an API restart keeps it) |
 | List unread notifications | `uv run fact inbox` (`--all` includes read)   |
 | Mark a notification read | `uv run fact inbox read <id>`                  |

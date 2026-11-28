@@ -30,6 +30,8 @@ uv run fact dev --pinned
 
 `fact use <ref>` checks the ref out (from `origin` when it exists there) as a separate copy under `<data_dir>/pinned/factory/<sha>` and installs its dependencies; `fact dev --pinned` runs the API and worker from that copy while still reading your `fact.yaml` and `.env`. To pick up merged changes, run `fact use main` again while `fact dev --pinned` runs: within 15 s it restarts the API from the new pin and starts a new worker generation next to the old ones. New runs start on the new generation; a run already going (waiting for review, say) ends on the worker of the generation that started it, which stops by itself once it has no open run. After `fact shutdown` or a reboot, `fact dev --pinned` starts every generation that still has runs. See `docs/spec/14-dogfooding-and-safety.md` and `docs/ARCHITECTURE.md`.
 
+Old pins and drained versions pile up with each upgrade: `uv run fact cleanup` removes those no running or draining generation uses (safe at any time), and `--older-than 30d` also deletes the artifacts and step logs of runs that ended before then, keeping their costs. `uv run fact reset` wipes the factory's data to start from scratch (with `fact dev` stopped; GitHub labels stay). Each takes `--dry-run`.
+
 ## Starting a run
 
 With `fact dev` running, start the project's workflow for a task and follow it:

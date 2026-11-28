@@ -37,6 +37,11 @@ def step_key(run_id: str, stage_id: str, attempt: int, name: str) -> str:
     return key
 
 
+def run_prefix(run_id: str) -> str:
+    """Key prefix `runs/<run>`: the folder of every artifact of a run."""
+    return validate_key(f"runs/{run_id}")
+
+
 def handoff_key(run_id: str) -> str:
     """Key `runs/<run>/handoff.md` of the note a stopped run leaves for the next run of its task."""
     key = f"runs/{run_id}/handoff.md"
