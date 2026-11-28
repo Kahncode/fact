@@ -39,6 +39,9 @@ def _shared_processors() -> list[Processor]:
     ]
 
 
+QUIET_LIBRARIES = ("httpx", "httpcore", "hpack", "aiosqlite")
+
+
 def configure_logging(
     env: AppEnv | str,
     level: str = "INFO",
@@ -48,6 +51,8 @@ def configure_logging(
 ) -> None:
     """
     Configure structlog and the stdlib root logger. Safe to call more than once: the last call wins.
+
+    `level` applies to fact's own loggers; `QUIET_LIBRARIES` log only warnings and errors at any level.
 
     Console renderer (colored when stdout is a terminal) when `env` is `local` or `test`, JSON renderer otherwise.
     JSON lines also carry the call site (file, function, line). `gcp` renames fields for Google Cloud Logging
@@ -82,6 +87,8 @@ def configure_logging(
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level.upper())
+    for name in QUIET_LIBRARIES:  # a line per request, connection step or query: only their warnings
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
