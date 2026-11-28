@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from docker_env import needs_docker
 from fact.core.settings import ProjectRef, Settings
 from fact.worker import sandboxes
 from fact.worker.generation import Refused, load_projects
@@ -48,21 +49,6 @@ SCRATCH = "FROM scratch\nCOPY marker.txt /marker.txt\n"  # builds offline, witho
 def _git(*args: str, cwd: Path) -> str:
     result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)  # noqa: S603, S607
     return result.stdout.strip()
-
-
-def _linux_docker() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    info = subprocess.run(
-        ["docker", "info", "--format", "{{.OSType}}"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return info.returncode == 0 and info.stdout.strip() == "linux"
-
-
-needs_docker = pytest.mark.skipif(not _linux_docker(), reason="needs Docker running Linux containers")
 
 
 class Home:

@@ -145,6 +145,19 @@ async def test_concurrent_calls_mint_once(gh: GitHubApp, fake: FakeGitHub) -> No
     assert {t.token for t in tokens} == {"ghs_secret_0"}
 
 
+async def test_repositories_token_is_scoped_and_cached_apart(gh: GitHubApp, fake: FakeGitHub) -> None:
+    fake.installed.add("kahncode/site")
+    full = await gh.installation_token("Kahncode/fact")
+    read = await gh.repositories_token(["Kahncode/site", "Kahncode/fact"], {"contents": "read"})
+
+    assert read.token != full.token
+    assert json.loads(fake.requests[-1].content) == {
+        "repositories": ["fact", "site"],
+        "permissions": {"contents": "read"},
+    }
+    assert await gh.repositories_token(["kahncode/fact", "Kahncode/site"], {"contents": "read"}) is read
+
+
 async def test_installation_token_not_installed(gh: GitHubApp) -> None:
     with pytest.raises(GitHubNotFoundError, match="installed") as exc:
         await gh.installation_token("someone/else")

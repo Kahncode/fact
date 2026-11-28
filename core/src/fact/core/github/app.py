@@ -6,7 +6,7 @@ Token values are never logged and never appear in `repr()`.
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -176,28 +176,52 @@ class GitHubApp:
 
         The token can reach only that repository. Concurrent calls for one repository mint once.
         """
-        key = full_name.lower()
+        return await self.repositories_token([full_name])
+
+    async def repositories_token(
+        self, full_names: Sequence[str], permissions: Mapping[str, str] | None = None
+    ) -> InstallationToken:
+        """
+        Mint one token reaching only `full_names` (one installation's), with only `permissions` when given.
+
+        Without `permissions` it has every permission of the installation. Reused until 5 minutes before it expires;
+        concurrent calls for the same repositories and permissions mint once. `GitHubError` when the repositories
+        belong to different installations.
+        """
+        names = sorted({name.lower(): name for name in full_names}.values(), key=str.lower)
+        if not names:
+            msg = "a token needs at least one repository"
+            raise ValueError(msg)
+        perms = dict(sorted((permissions or {}).items()))
+        key = ",".join(names).lower() + ("|" + ",".join(f"{k}:{v}" for k, v in perms.items()) if perms else "")
         if cached := self._cached_token(key):
             return cached
         async with self._locks.setdefault(key, asyncio.Lock()):
             if cached := self._cached_token(key):
                 return cached
-            installation = await self.installation(full_name)
-            _, repo = split_full_name(full_name)
+            installation = await self._shared_installation(names)
+            body: dict[str, object] = {"repositories": [split_full_name(name)[1] for name in names]}
+            if perms:
+                body["permissions"] = perms
             async with self.api_client(self.app_jwt()) as client:
-                response = await client.post(
-                    f"/app/installations/{installation.id}/access_tokens", json={"repositories": [repo]}
-                )
-                body = response.json()
-            token = InstallationToken(body["token"], _parse_time(body["expires_at"]), installation)
+                answer = (await client.post(f"/app/installations/{installation.id}/access_tokens", json=body)).json()
+            token = InstallationToken(answer["token"], _parse_time(answer["expires_at"]), installation)
             self._tokens[key] = token
         log.info(
             "github installation token minted",
-            repo=full_name,
+            repos=names,
+            permissions=perms or None,
             installation_id=installation.id,
             expires_at=token.expires_at.isoformat(),
         )
         return token
+
+    async def _shared_installation(self, full_names: Sequence[str]) -> Installation:
+        installations = [await self.installation(name) for name in full_names]
+        if any(i.id != installations[0].id for i in installations):
+            msg = f"{', '.join(full_names)} are not all in one installation of the App; one token cannot reach them"
+            raise GitHubError(msg)
+        return installations[0]
 
     async def bot_identity(self) -> BotIdentity:
         """
