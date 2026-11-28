@@ -58,6 +58,7 @@ class ApiSettings(_Section):
 
 class ConcurrencySettings(_Section):
     scheduler_interval_seconds: float = Field(default=30.0, gt=0)  # dev only: the API's tick loop runs this often
+    listing_max_age_seconds: float = Field(default=300.0, ge=0)  # a tick lists a project's tasks again past this age
     max_failed_runs: int = Field(default=3, ge=1)  # the scheduler stops restarting a task after this many failed runs
 
 

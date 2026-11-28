@@ -12,16 +12,18 @@ from pathlib import Path
 
 import pytest
 from fact.api import scheduler
+from fact.api.listings import Listings
 from fact.api.scheduler import run_tick
 from fact.api.usage_gate import UsageGate
 from fact.core.claude_usage import ClaudeUsage, UsageUnavailableError
 from fact.core.scheduler import ReadyTasks, TickResult
-from fact.core.settings import CONFIG_VAR, Settings, reset_settings
+from fact.core.settings import CONFIG_VAR, ProjectRef, Settings, reset_settings
 from fastapi import FastAPI
 from httpx import AsyncClient
 from scheduler_env import FakeTemporal, FakeUsage, add_run, five_hour, write_config
 from sqlalchemy.ext.asyncio import AsyncSession
 from structlog.testing import capture_logs
+from task_repo import PROJECT
 
 
 @pytest.fixture
@@ -75,8 +77,8 @@ async def test_tick_skips_a_start_the_api_refuses(
 ) -> None:
     real = scheduler.find_ready
 
-    async def stale(settings: Settings, session: AsyncSession, *, close_parents: bool = False) -> ReadyTasks:
-        ready = await real(settings, session, close_parents=close_parents)
+    async def stale(settings: Settings, session: AsyncSession, listings: Listings, *, tick: bool = False) -> ReadyTasks:
+        ready = await real(settings, session, listings, tick=tick)
         await add_run(client, 1, "task:M2-01")  # `fact run` lands after the tick's read
         return ready
 
@@ -85,6 +87,7 @@ async def test_tick_skips_a_start_the_api_refuses(
     result = await run_tick(app.state)
     assert result.failed == ["task:M2-01"]  # 409: it has a run now
     assert result.started == temporal.started == ["run-task-M2-02-1", "run-task-M1-02-1"]
+    assert PROJECT not in app.state.scheduler.listings.kept  # wrong about M2-01: listed again next tick
 
 
 async def test_overlapping_ticks_start_each_task_once(app: FastAPI) -> None:
@@ -120,3 +123,45 @@ async def test_unreadable_usage_logs_an_error_and_starts(app: FastAPI) -> None:
         result = await run_tick(app.state)
     assert len(result.started) == 3  # noqa: PLR2004
     assert any(e["event"] == "claude_usage_unavailable" and e["log_level"] == "error" for e in logs)
+
+
+def _count_listings(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    listed: list[str] = []
+    real = scheduler._ready_in  # noqa: SLF001
+
+    async def counted(settings: Settings, ref: ProjectRef, *, close_parents: bool = False) -> tuple[list, int]:
+        listed.append(ref.name)
+        return await real(settings, ref, close_parents=close_parents)
+
+    monkeypatch.setattr(scheduler, "_ready_in", counted)
+    return listed
+
+
+@pytest.mark.parametrize("cap", [5])
+async def test_a_tick_lists_a_project_again_only_once_its_listing_is_old(
+    app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed, now = _count_listings(monkeypatch), datetime(2026, 11, 28, tzinfo=UTC)
+    app.state.scheduler.listings.clock = lambda: now
+    _fakes(app)
+    await run_tick(app.state)
+    await run_tick(app.state)
+    assert listed.count(PROJECT) == 1
+    preview = (await client.get("/api/v1/scheduler/preview")).json()
+    assert listed.count(PROJECT) == 1  # the preview plans from the kept listing
+    listed_at = next(p for p in preview["projects"] if p["project"] == PROJECT)["listed_at"]
+    assert datetime.fromisoformat(listed_at) == now
+    now += timedelta(seconds=app.state.settings.concurrency.listing_max_age_seconds + 1)
+    await run_tick(app.state)
+    assert listed.count(PROJECT) == 2  # noqa: PLR2004
+
+
+@pytest.mark.parametrize("cap", [1])
+async def test_a_tick_lists_no_project_whose_pool_is_full(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
+    listed, now = _count_listings(monkeypatch), datetime(2026, 11, 28, tzinfo=UTC)
+    app.state.scheduler.listings.clock = lambda: now
+    _fakes(app)
+    assert len((await run_tick(app.state)).started) == 1  # the pool's one slot
+    now += timedelta(days=1)
+    await run_tick(app.state)
+    assert listed.count(PROJECT) == 1

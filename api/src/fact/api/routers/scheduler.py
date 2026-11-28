@@ -68,7 +68,7 @@ async def scheduler_preview(request: Request, session: Session) -> SchedulerPrev
     """List the ready tasks in the order the next tick would start them, and why each one waits, if it does."""
     settings: Settings = request.app.state.settings
     runtime: SchedulerRuntime = request.app.state.scheduler
-    return preview(await find_ready(settings, session), runtime.gate.last)
+    return preview(await find_ready(settings, session, runtime.listings), runtime.gate.last)
 
 
 @router.get("/scheduler/active")

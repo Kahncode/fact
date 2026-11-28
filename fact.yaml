@@ -15,6 +15,7 @@ api:
 # (`fact scheduler on|off`); elsewhere only POST /api/v1/scheduler/tick (an outside cron or webhook) runs a tick.
 concurrency:
   scheduler_interval_seconds: 30
+  listing_max_age_seconds: 300 # a tick reads a project's ready tasks again past this age (each start reads its task afresh)
   max_failed_runs: 3 # the scheduler stops restarting a task after this many failed runs in a row; `fact run` resets
 # The scheduler starts no run while a Claude usage window is inside its reserve (the share left to you). The gate
 # is off with usage_gate: false, or when ANTHROPIC_API_KEY is set for the API (API billing, no windows).

@@ -17,6 +17,7 @@ take turns (in name order), each offering its next task, and each fills only its
 import re
 from collections import deque
 from collections.abc import Sequence
+from datetime import datetime
 from enum import StrEnum
 
 from fact.core.enums import RunOutcome, RunStatus, RunTrigger
@@ -64,6 +65,7 @@ class ProjectLoad(_Model):
     project: str
     active: int  # runs queued, running or waiting
     max_concurrent_runs: int  # its runner pool's cap
+    listed_at: datetime | None = None  # when its ready tasks were last read from its task source
 
 
 class ReadyTasks(_Model):
