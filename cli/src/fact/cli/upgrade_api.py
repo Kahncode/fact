@@ -34,7 +34,7 @@ class UpgradeApi(Protocol):
     def set_scheduler(self, *, on: bool) -> None: ...
     def open_runs(self, project_names: list[str]) -> list[OpenRun]: ...
     def stop(self, run_id: str, reason: str) -> None: ...
-    def finished(self, run_id: str) -> bool: ...
+    def outcome(self, run_id: str) -> str | None: ...
     def start(self, task_key: str, project: str) -> str | None: ...
 
 
@@ -77,8 +77,10 @@ class HttpUpgradeApi:
             msg = f"stopping {run_id} answered {response.status_code}: {response.text[:300]}"
             raise UpgradeApiError(msg)
 
-    def finished(self, run_id: str) -> bool:
-        return self._json("GET", f"/runs/{quote(run_id, safe='')}")["status"] == RunStatus.FINISHED
+    def outcome(self, run_id: str) -> str | None:
+        """Return the run's outcome once it finished (`stopped` or another), or None while it is open."""
+        run = self._json("GET", f"/runs/{quote(run_id, safe='')}")
+        return (run["outcome"] or "") if run["status"] == RunStatus.FINISHED else None
 
     def start(self, task_key: str, project: str) -> str | None:
         """

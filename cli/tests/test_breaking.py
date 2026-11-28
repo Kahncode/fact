@@ -11,9 +11,10 @@ from fact.cli.follow import Follower
 from fact.cli.generations import Generations
 from fact.cli.processes import ChildSpec, RunDir
 from fact.cli.supervisor import Changes
-from fact.cli.upgrade_api import HttpUpgradeApi, OpenRun
+from fact.cli.upgrade_api import HttpUpgradeApi, OpenRun, UpgradeApiError
 from fact.cli.use import current_pin
 from fact.core import generations
+from fact.core.enums import RunOutcome
 from fact.core.migration_rules import VERSIONS
 from fact.core.settings import ProjectRef, Settings
 from follow_fakes import NEW, OLD, Clock, Remote, make_workers, started
@@ -22,12 +23,17 @@ RUNS = [OpenRun("r1", "gh:o/acme#1", "acme"), OpenRun("r2", "gh:o/acme#2", "acme
 
 
 class FakeApi:
-    """The API as the upgrade sees it: two open runs, which end `stopped` once `finish` says so."""
+    """The API as the upgrade sees it: open runs, which end `stopped` (or `ended`'s outcome) once `finish` says so."""
 
     def __init__(self, *, scheduler: bool = True) -> None:
-        self.scheduler, self.stopping, self.done, self.started = scheduler, list[str](), set[str](), list[str]()
+        self.scheduler, self.stopping, self.started = scheduler, list[str](), list[str]()
+        self.runs, self.outcomes, self.ended = list(RUNS), dict[str, str](), dict[str, str]()
+        self.down = False
 
     def scheduler_on(self) -> bool:
+        if self.down:
+            msg = "cannot reach the API"
+            raise UpgradeApiError(msg)
         return self.scheduler
 
     def set_scheduler(self, *, on: bool) -> None:
@@ -36,17 +42,17 @@ class FakeApi:
     def open_runs(self, project_names: list[str]) -> list[OpenRun]:
         assert project_names == ["acme"]
         assert not self.scheduler  # off first: no run starts while they are listed
-        return RUNS
+        return [r for r in self.runs if r.run_id not in self.outcomes]
 
     def stop(self, run_id: str, reason: str) -> None:
         assert reason == REASON
         self.stopping.append(run_id)
 
-    def finished(self, run_id: str) -> bool:
-        return run_id in self.done
+    def outcome(self, run_id: str) -> str | None:
+        return self.outcomes.get(run_id)
 
     def finish(self) -> None:
-        self.done |= set(self.stopping)
+        self.outcomes |= {r: self.ended.get(r, RunOutcome.STOPPED) for r in self.stopping}
 
     def start(self, task_key: str, project: str) -> str | None:
         assert project == "acme"
@@ -203,6 +209,63 @@ def test_a_task_restarted_before_a_crash_is_not_started_twice(
     factory.tick()
 
     assert api.started == ["gh:o/acme#2"]
+
+
+def _finish_upgrade(factory: Factory, workers: Generations) -> None:
+    factory.tick()
+    started(workers, {"acme": "c" * 40})
+    factory.tick()
+    factory.tick()
+
+
+def test_a_run_started_as_the_scheduler_went_off_is_stopped_and_started_again_too(
+    project_settings: Settings, workers: Generations, remote: MigratingRemote
+) -> None:
+    api = FakeApi()
+    factory = _factory(project_settings, workers, remote, api)
+    factory.tick()
+    api.runs.append(OpenRun("r3", "gh:o/acme#3", "acme"))  # a scheduler tick under way started it after the listing
+    api.finish()
+
+    assert factory.tick() is None  # r3 recorded
+    assert factory.tick() is None
+    assert api.stopping == ["r1", "r2", "r3"]
+    assert current_pin(project_settings).name == OLD  # not upgraded while r3 runs on the old generation
+
+    api.finish()
+    _finish_upgrade(factory, workers)
+
+    assert api.started == ["gh:o/acme#1", "gh:o/acme#2", "gh:o/acme#3"]
+
+
+def test_a_run_that_ended_otherwise_while_stopping_is_not_started_again(
+    project_settings: Settings, workers: Generations, remote: MigratingRemote
+) -> None:
+    api = FakeApi()
+    api.ended = {"r1": RunOutcome.MERGED}
+    factory = _factory(project_settings, workers, remote, api)
+    factory.tick()
+    api.finish()
+    _finish_upgrade(factory, workers)
+
+    assert api.started == ["gh:o/acme#2"]
+    assert not factory.breaking.active
+
+
+def test_the_api_down_as_a_breaking_upgrade_begins_is_retried_at_the_next_check(
+    project_settings: Settings, workers: Generations, remote: MigratingRemote
+) -> None:
+    api = FakeApi()
+    api.down = True
+    factory = Factory(project_settings, workers, remote, api)
+    remote.main = NEW
+
+    assert factory.tick() is None  # printed, not raised: `fact dev --follow` keeps going
+    assert not factory.breaking.active
+
+    api.down = False
+    factory.tick()
+    assert factory.breaking.active
 
 
 def test_an_upgrade_with_only_additive_migrations_stops_no_run(

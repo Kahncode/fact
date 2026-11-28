@@ -7,7 +7,9 @@ supervisor, then moves it on every `CHECK_INTERVAL_S`, each phase recorded in `<
 `fact dev` that starts with the file finishes it:
 
 1. `stopping`: turn the scheduler off (its state before is recorded first), record the open runs and their tasks,
-   `fact stop` each (reason `breaking upgrade`) and wait until each shows `stopped`;
+   `fact stop` each (reason `breaking upgrade`) and wait until each ended; a run that ended another way (merged,
+   closed, needs a person) is dropped, not started again. Once all ended, the open runs are listed again: a run a
+   scheduler tick under way started after the first listing is recorded and stopped too;
 2. `upgrading`: make the new pin current and start its generation (the API restarts from it and migrates); once its
    worker is through its start, stop the older generations;
 3. `restarting`: start each recorded task again as a manual start (which releases its hold; the new run gets the
@@ -29,6 +31,7 @@ from fact.cli.supervisor import Changes
 from fact.cli.upgrade_api import HttpUpgradeApi, OpenRun, UpgradeApi, UpgradeApiError
 from fact.cli.use import PinError, current_pin, factory_checkout, set_current
 from fact.core import generations
+from fact.core.enums import RunOutcome
 from fact.core.settings import Settings
 
 CHECK_INTERVAL_S = 5.0
@@ -115,25 +118,46 @@ class BreakingUpgrade:
         return None
 
     def _stopped(self, state: UpgradeState) -> bool:
-        """Stop the recorded runs; return whether every one shows `stopped` (moving on to `upgrading`)."""
+        """Stop the recorded runs; return whether every one ended (moving on to `upgrading`)."""
         if state.runs is None:
             self._api.set_scheduler(on=False)
-            state.runs = self._api.open_runs([p.name for p in self._settings.projects])
+            state.runs = self._api.open_runs(self._projects())
             write_state(self.path, state)
             self._log(f"scheduler off; stopping {len(state.runs)} open runs: {_keys(state.runs)}")
-        waiting = []
-        for run in state.runs:
-            if run.run_id not in self._asked:
-                self._api.stop(run.run_id, REASON)
-                self._asked.add(run.run_id)
-            if not self._api.finished(run.run_id):
-                waiting.append(run)
-        if waiting:
+        if not self._ended(state):
+            return False
+        # a scheduler tick under way as the switch went off may have started a run after the listing
+        recorded = {r.run_id for r in state.runs}
+        if late := [r for r in self._api.open_runs(self._projects()) if r.run_id not in recorded]:
+            state.runs += late
+            write_state(self.path, state)
+            self._log(f"stopping {len(late)} runs started as the scheduler went off: {_keys(late)}")
             return False
         state.phase = UPGRADING
         write_state(self.path, state)
         self._log("every open run stopped: upgrading")
         return True
+
+    def _ended(self, state: UpgradeState) -> bool:
+        """Ask each recorded run to stop; return whether each ended. One that ended otherwise is not started again."""
+        waiting, ended_otherwise = False, []
+        for run in state.runs or []:
+            if run.run_id not in self._asked:
+                self._api.stop(run.run_id, REASON)
+                self._asked.add(run.run_id)
+            outcome = self._api.outcome(run.run_id)
+            if outcome is None:
+                waiting = True
+            elif outcome != RunOutcome.STOPPED:
+                ended_otherwise.append(run)
+                self._log(f"{run.task_key}: ended {outcome or 'with no outcome'} while stopping; not started again")
+        if ended_otherwise:
+            state.runs = [r for r in state.runs or [] if r not in ended_otherwise]
+            write_state(self.path, state)
+        return not waiting
+
+    def _projects(self) -> list[str]:
+        return [p.name for p in self._settings.projects]
 
     def _upgrade(self, state: UpgradeState) -> Changes | None:
         """Make the pin current and start its generation; once its worker started, stop the older ones."""

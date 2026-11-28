@@ -14,7 +14,7 @@ open runs, upgrades and starts their tasks again. No check runs while a breaking
 While the newest generation's worker is not through its start, nothing is added; if it fails to start, `fact dev`
 deletes it (`Generations.exited`), the previous one stays current, and the next check tries again. A project the
 newest generation does not hold (it failed to load) counts as moved once its home moves after the follower's last
-check. A failed check (git, `uv sync`) is printed and retried at the next one.
+check. A failed check (git, `uv sync`, the API) is printed and retried at the next one.
 """
 
 import time
@@ -24,6 +24,7 @@ from pathlib import Path
 from fact.cli.breaking import BreakingUpgrade
 from fact.cli.generations import Generations
 from fact.cli.supervisor import Changes
+from fact.cli.upgrade_api import UpgradeApiError
 from fact.cli.use import PinError, current_pin, factory_checkout, github_url, latest, prepare, remote_head, set_current
 from fact.core import generations
 from fact.core.generations import Generation
@@ -31,8 +32,9 @@ from fact.core.migration_rules import breaking_between
 from fact.core.settings import REPO_ROOT, Settings
 
 CHECK_INTERVAL_S = 60.0
-# what a check can raise: git or uv failing (PinError), a file lock while pinning
-CHECK_ERRORS = (PinError, OSError)
+# what a check can raise: git or uv failing (PinError), a file lock while pinning, the API down as a breaking upgrade
+# begins (UpgradeApiError: it reads the scheduler's state before writing `upgrade.json`)
+CHECK_ERRORS = (PinError, OSError, UpgradeApiError)
 
 HomeResolver = Callable[[str], str]  # a project's home `owner/repo` to its default branch's SHA now
 
