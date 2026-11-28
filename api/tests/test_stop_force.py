@@ -62,6 +62,8 @@ async def test_force_stop_terminates_with_no_worker_and_holds_the_issue(
     app.state.temporal = _Connection(env.client)
     run_id = await _run(client, "run-force-1")
     handle = await env.client.start_workflow("waits", id="run-force-1", task_queue="no-worker-serves-this")
+    step = {"stage_id": "implement", "kind": "agent", "attempt": 1, "started_at": "2026-01-01T00:00:00Z"}
+    step_id = (await client.post(f"/api/v1/runs/{run_id}/steps", json=step)).json()["id"]
 
     stopped = await client.post(f"/api/v1/runs/{run_id}/stop", json={"reason": "old version", "force": True})
 
@@ -73,6 +75,10 @@ async def test_force_stop_terminates_with_no_worker_and_holds_the_issue(
         assert run is not None
         assert (run.status, run.outcome) == (RunStatus.FINISHED, RunOutcome.STOPPED)
         assert run.ended_at is not None
+    steps = {s["id"]: s for s in (await client.get(f"/api/v1/runs/{run_id}")).json()["steps"]}
+    assert (steps[step_id]["status"], steps[step_id]["outcome"]) == ("finished", "failed_error")
+    held = [n for n in (await client.get("/api/v1/notifications")).json() if n["kind"] == "task_held"]
+    assert [n["dedupe_key"] for n in held] == [f"{run_id}:held"]
     assert github.labels(12) >= {"fact:needs-human", "fact:ready"}
     assert ("POST", "/repos/acme/app/issues/12/comments") in github.writes
 

@@ -11,11 +11,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fact.api.deps import get_session
+from fact.api.failure_cap import held_key
 from fact.api.run_start import temporal_link
+from fact.api.run_totals import close_running_steps
 from fact.api.task_ref import TaskReadError, project_tasks
 from fact.api.temporal import temporal_client
 from fact.core.activity_contract import ReportStatusInput
-from fact.core.enums import RunOutcome, RunStatus
+from fact.core.enums import NotificationKind, RunOutcome, RunStatus
 from fact.core.gates import (
     ANSWER_GATE,
     NOTE_MAX_CHARS,
@@ -26,14 +28,15 @@ from fact.core.gates import (
     GateDecision,
     WorkflowStatus,
 )
+from fact.core.holds import HELD_ENDS, held_text, held_title
 from fact.core.logging import get_logger
-from fact.core.models import Event, Project, Run
+from fact.core.models import Event, Notification, Project, Run
 from fact.core.project_config import ConfigError
 from fact.core.settings import Settings
 from fact.core.tasks.events import report
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.client import WorkflowHandle, WorkflowQueryFailedError, WorkflowUpdateFailedError
 from temporalio.exceptions import FailureError
@@ -169,7 +172,11 @@ async def stop(run_id: str, body: StopIn, request: Request, session: Session) ->
 async def _force_stop(
     settings: Settings, session: AsyncSession, run: Run, handle: WorkflowHandle, note: str
 ) -> Stopped:
-    """Terminate the workflow, record the run `stopped` (reason `forced`), then hold its task as a stopped run does."""
+    """
+    Terminate the workflow, record the run `stopped` (reason `forced`), then hold its task as a stopped run does.
+
+    As `PATCH /runs/{id}` does for a finished run, the steps left `running` end `failed_error`: no worker will.
+    """
     try:
         await handle.terminate(reason=note or FORCED)
     except RPCError as exc:
@@ -179,11 +186,31 @@ async def _force_stop(
     run.status = RunStatus.FINISHED
     run.outcome = RunOutcome.STOPPED
     run.ended_at = datetime.now(UTC)
+    await close_running_steps(session, run)
     session.add(Event(run_id=run.id, type="run_stopped", payload={"reason": FORCED, "note": note}))
+    await _notify_held(session, run, temporal_link(settings, run.workflow_id))
     await session.commit()
     log.info("run_stopped", run_id=run.id, reason=FORCED, note=note)
     touched = await _touch(session, run)
     return Stopped(**touched.model_dump(), hold_error=await _hold(settings, session, run, note))
+
+
+async def _notify_held(session: AsyncSession, run: Run, link: str) -> None:
+    """Add the one `task_held` notification a stopped run's `report_end` sends, unless the workflow already did."""
+    reason = HELD_ENDS["stopped"]
+    key = held_key(run.id)
+    if await session.scalar(select(Notification.id).where(Notification.dedupe_key == key)) is not None:
+        return
+    session.add(
+        Notification(
+            run_id=run.id,
+            kind=NotificationKind.TASK_HELD,
+            title=held_title(run.task_key, reason)[:300],
+            body=held_text(run.task_key, reason),
+            link=link,
+            dedupe_key=key,
+        )
+    )
 
 
 async def _hold(settings: Settings, session: AsyncSession, run: Run, note: str) -> str:
