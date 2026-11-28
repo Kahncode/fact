@@ -22,6 +22,7 @@ from fact.worker.loader import sandbox_runner
 from gate_harness import POLL_S, open_gate, until_status
 from standard_harness import STANDARD, FakeActivities, finished, run_standard, started_standard
 from standard_inputs import PR, run_input
+from standard_question_fakes import blocked
 from temporalio import activity
 from temporalio.client import WorkflowHandle, WorkflowHistory
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -65,7 +66,7 @@ def _before(fakes: FakeActivities, *names: str) -> bool:
 
 
 async def test_stop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
-    fakes = FakeActivities(test_failures=100, gate_decisions=None)
+    fakes = FakeActivities(implement_script=[blocked("v1 or v2?")], gate_decisions=None)
     async with started_standard(fakes, "run-stop-gate") as (_, handle):
         await open_gate(handle)
         await handle.cancel(reason="restart on the new prompts")
@@ -85,8 +86,8 @@ async def test_stop_at_a_gate_leaves_a_handoff_and_no_workspace() -> None:
         "needs_human",
         1,
     )
-    assert [(s.stage_id, s.outcome) for s in note.steps][:2] == [("implement", "passed"), ("implement", "passed")]
-    assert note.steps[0].summary == "implement done"
+    assert [(s.stage_id, s.outcome) for s in note.steps] == [("implement", StepOutcome.NEEDS_HUMAN)]
+    assert note.steps[0].summary == "which API?"
     assert fakes.of(OPEN_CHANGE_SET) == []
     notified = [n.kind for n in fakes.of("notify") if n.kind != NotificationKind.GATE_WAITING]
     assert sorted(notified) == [NotificationKind.RUN_FINISHED, NotificationKind.TASK_HELD]

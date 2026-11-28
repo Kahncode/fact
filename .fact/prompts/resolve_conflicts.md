@@ -37,4 +37,5 @@ End with the structured answer:
 - `status`: `done` only when the merge is committed with no conflict left; `blocked` when you could not resolve it, such as two changes that cannot both hold and need a person to choose.
 - `summary`: which files conflicted, and how you resolved each.
 - `blocker`: when blocked, what stopped you and what would unblock it.
+- `question`: when blocked because you need information or a decision only a person can give (the task is unclear, two readings change what gets built): the question to ask them, self-contained, as you would ask it on the issue. fact asks it on the task and resumes this session with the answer. Leave it out for any other blocker.
 - `retryable`: when blocked, `true` only if the cause was temporary and outside your control (network, rate limit, a flaky service). A conflict that needs a person's choice is never retryable.

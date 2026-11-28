@@ -1,6 +1,9 @@
-"""`fact.sdk.converse.parse_conversation`: a conversation session's answer, or why it gave none usable."""
+"""`fact.sdk.converse.parse_conversation`: a conversation session's answer, or why it gave none usable; its replies."""
+
+from datetime import UTC, datetime
 
 import pytest
+from fact.core.activity_contract import Comment
 from fact.core.enums import StepOutcome
 from fact.core.types import StepResult
 from fact.sdk.converse import parse_conversation
@@ -35,3 +38,12 @@ def test_an_unusable_answer_fails_the_step(step: StepResult) -> None:
 def test_a_session_that_did_not_pass_is_returned_as_is() -> None:
     blocked = StepResult(outcome=StepOutcome.NEEDS_HUMAN, summary="blocked")
     assert parse_conversation(blocked, DECISIONS) == (blocked, None)
+
+
+def test_one_reply_answers_the_latest_comment_read() -> None:
+    at = datetime(2026, 11, 27, tzinfo=UTC)
+    comments = [Comment(id=i, kind="comment", author="octo", body="?", created_at=at) for i in (41, 42)]
+    _, answer = parse_conversation(_passed(decision="ask", reply="which one?"), ("ask",))
+    assert answer is not None
+    assert [(r.comment_id, r.body) for r in answer.to_post(comments)] == [(42, "which one?")]
+    assert answer.to_post([]) == []  # nothing read, nothing to answer

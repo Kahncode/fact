@@ -39,6 +39,7 @@ from fact.core.activity_inputs import (
     WaitForCIInput,
 )
 from fact.core.review_inputs import (
+    AppSlugInput,
     CollectCommentsInput,
     Comment,
     CommentKind,
@@ -47,6 +48,7 @@ from fact.core.review_inputs import (
     RequestReviewInput,
     ReviewEvent,
     ReviewEventKind,
+    WaitForAnswerInput,
     WaitForReviewInput,
 )
 from fact.core.types import MergeMethod
@@ -55,6 +57,8 @@ __all__ = [
     "ACTIVITY_SPECS",
     "AGENT_INTERRUPTED",
     "AGENT_STEP",
+    "ANSWER_TIMEOUT",
+    "APP_SLUG",
     "CLASSIFY_SIGNALS",
     "COLLECT_COMMENTS",
     "CONTROL_DURATION",
@@ -84,12 +88,14 @@ __all__ = [
     "SHELL_STEP",
     "SYNC_BASE",
     "TEARDOWN_WORKSPACE",
+    "WAIT_FOR_ANSWER",
     "WAIT_FOR_CI",
     "WAIT_FOR_REVIEW",
     "WORKFLOW_QUEUE_PREFIX",
     "WRITE_HANDOFF",
     "ActivitySpec",
     "AgentStepInput",
+    "AppSlugInput",
     "Cancellation",
     "Check",
     "CheckResult",
@@ -124,6 +130,7 @@ __all__ = [
     "SyncBaseInput",
     "TaskEvent",
     "UnknownActivityError",
+    "WaitForAnswerInput",
     "WaitForCIInput",
     "WaitForReviewInput",
     "Zone",
@@ -159,6 +166,8 @@ LABEL_CHANGE_SET = "label_change_set"
 COLLECT_COMMENTS = "collect_comments"
 POST_REPLIES = "post_replies"
 REQUEST_REVIEW = "request_review"
+WAIT_FOR_ANSWER = "wait_for_answer"
+APP_SLUG = "app_slug"
 
 # `agent_step` fails with this ApplicationError type when the worker stops during the session; `details[0]` is the
 # session id to resume. A worker that dies outright surfaces as a heartbeat timeout whose last heartbeat details carry
@@ -201,6 +210,7 @@ class ActivitySpec:
 
 CONTROL_DURATION = timedelta(minutes=10)
 REVIEW_TIMEOUT = timedelta(days=30)  # all of a run's waits for review together; then the run fails
+ANSWER_TIMEOUT = timedelta(days=30)  # one wait for comments answering a question; the gate itself stays open
 _CONTROL = ActivitySpec("control", CONTROL_DURATION)
 
 ACTIVITY_SPECS: dict[str, ActivitySpec] = {
@@ -230,6 +240,8 @@ ACTIVITY_SPECS: dict[str, ActivitySpec] = {
     COLLECT_COMMENTS: _CONTROL,
     POST_REPLIES: _CONTROL,
     REQUEST_REVIEW: _CONTROL,
+    WAIT_FOR_ANSWER: ActivitySpec("control", ANSWER_TIMEOUT, LONG_WAIT_RETRY),
+    APP_SLUG: _CONTROL,
 }
 
 

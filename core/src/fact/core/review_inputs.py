@@ -66,6 +66,7 @@ class CollectCommentsInput(_Input):
     pull_request: bool = True  # False: an issue, which has only conversation comments
     since: datetime | None = None  # only comments made since; None: all of them
     review_id: int | None = None  # this review's body and inline comments are taken whatever `since` says
+    mentioning_app: bool = False  # only comments that mention the GitHub App (`@<slug>`, case-insensitive)
 
 
 class PostRepliesInput(_Input):
@@ -75,6 +76,20 @@ class PostRepliesInput(_Input):
     comments: list[Comment]  # what the session read: says where each reply goes
     replies: list[Reply]
     key: str  # one per conversation, so a retried attempt never posts a reply twice
+
+
+class WaitForAnswerInput(_Input):
+    """Wait for maintainers' comments mentioning the App on an issue, made since `since` and not in `handled`."""
+
+    run_id: str
+    repo: str
+    number: int  # the issue's
+    since: datetime  # when the question was asked
+    handled: list[int] = Field(default_factory=list)  # comment ids an `answer` session already read
+
+
+class AppSlugInput(_Input):
+    run_id: str
 
 
 class RequestReviewInput(_Input):

@@ -27,6 +27,13 @@ BASE_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "summary": {"type": "string", "description": "A few lines of markdown: what you did and why."},
         "blocker": {"type": "string", "description": "When blocked: what stopped you and what would unblock it."},
+        "question": {
+            "type": "string",
+            "description": (
+                "When blocked because you need information or a decision only a person can give: the question to ask"
+                " them on the task, self-contained. fact asks it and resumes you with the answer. Leave out otherwise."
+            ),
+        },
         "retryable": {
             "type": "boolean",
             "description": (

@@ -4,8 +4,9 @@ import httpx
 import pytest
 from fact.cli import follow, projects
 from fact.cli.follow import CHECK_INTERVAL_S, Follower
+from fact.cli.processes import ChildSpec
 from fact.cli.shutdown import POLL_INTERVAL_S, ShutdownWatch
-from fact.cli.supervisor import ChildSpec, StopRequestedError
+from fact.cli.supervisor import StopRequestedError
 from fact.core.settings import Settings
 
 OLD, NEW = "a" * 40, "b" * 40

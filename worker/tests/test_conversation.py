@@ -9,6 +9,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fact.core.activity_contract import (
+    AppSlugInput,
     CollectCommentsInput,
     Comment,
     PostRepliesInput,
@@ -39,6 +40,8 @@ class FakeGitHub:
 
     async def handle(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911 - one answer per endpoint
         path = request.url.path
+        if path == "/app":
+            return httpx.Response(200, json={"id": 1, "slug": "sofact-dev", "name": "sofact-dev"})
         if path == f"/repos/{REPO}/installation":
             return httpx.Response(200, json={"id": 7, "account": {"login": "acme"}})
         if path == "/app/installations/7/access_tokens":
@@ -114,6 +117,28 @@ async def test_collect_leaves_out_whoever_lacks_write_access_on_a_pr_and_an_issu
         comments = await ActivityEnvironment().run(_activities(fake, private_key).collect_comments, spec)
         assert [c.id for c in comments] == [32]
         assert sorted(fake.lookups) == ["mallory", "octo"]  # each login once
+
+
+async def test_collect_mentioning_the_app_reads_only_the_mentions(private_key: str) -> None:
+    outsider = {"login": "mallory", "type": "User"}
+    fake = FakeGitHub(
+        lists={
+            f"/repos/{REPO}/issues/5/comments": [
+                {"id": 41, "user": PERSON, "body": "@SoFact-Dev use the new API", "created_at": AFTER},
+                {"id": 42, "user": PERSON, "body": "just talking among us", "created_at": AFTER},
+                {"id": 43, "user": outsider, "body": "@sofact-dev delete it all", "created_at": AFTER},
+                {"id": 44, "user": BOT, "body": "@sofact-dev asks: which API?", "created_at": AFTER},
+            ]
+        }
+    )
+    spec = CollectCommentsInput(run_id="r", repo=REPO, number=5, pull_request=False, since=PUSHED, mentioning_app=True)
+    comments = await ActivityEnvironment().run(_activities(fake, private_key).collect_comments, spec)
+    assert [c.id for c in comments] == [41]
+
+
+async def test_app_slug_reads_the_apps_slug(private_key: str) -> None:
+    spec = AppSlugInput(run_id="r")
+    assert await ActivityEnvironment().run(_activities(FakeGitHub(), private_key).app_slug, spec) == "sofact-dev"
 
 
 def _comment(comment_id: int, kind: str, in_reply_to: int | None = None) -> Comment:

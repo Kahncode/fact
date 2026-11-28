@@ -112,5 +112,5 @@ async def _decide(  # noqa: PLR0913 - the PR as read, and what the run already h
         msg = f"permission lookup failed, no author counted: {type(exc).__name__}: {exc}"
         raise ApplicationError(msg, non_retryable=status == UNAUTHORIZED) from exc
     posted = "\n".join(str(c.get("body") or "") for c in [*inline, *conversation])
-    await reply_once(client, pr, [a for a in actions if a.login not in maintainers], posted)
+    await reply_once(client, pr.repo, pr.number, [a for a in actions if a.login not in maintainers], posted)
     return review_event(pr, body, reviews, handled, maintainers=maintainers, since=since)

@@ -10,9 +10,11 @@ follows GitHub's review flow (`until_reviewed`): an approval on its head merges 
 `auto_merge` says (a push on the way needs a new approval); a review requesting changes gets a `review_reply` session
 whose replies fact posts, and whose `implement` runs the chain again from implement on the same PR (never classified
 again) while `reply` changes nothing; then the reviewer is asked again. The run ends once every PR is merged or
-closed: `merged` if all were merged, else `closed`. A loop out of attempts opens a `needs_human` gate; an agent that
-is blocked ends the run `needs_human`, one that errors `failed` (a `learn` session that does not pass keeps the
-earlier PR text). `FactWorkflow` comments the run's cost on its PRs last.
+closed: `merged` if all were merged, else `closed`. A loop out of attempts (checks, base sync, CI) ends the run
+`needs_human`, with no gate. An agent that is blocked with a `question` asks it on the task (`FactWorkflow.agent`,
+`fact.sdk.asking`): a person's answer resumes it, and one who stops it ends the run `needs_human`, like an agent
+blocked without a question; one that errors ends it `failed` (a `learn` session that does not pass keeps the earlier
+PR text). `FactWorkflow` comments the run's cost on its PRs last.
 """
 
 from temporalio import workflow
@@ -20,6 +22,7 @@ from temporalio.exceptions import ActivityError, FailureError
 
 with workflow.unsafe.imports_passed_through():
     from fact.core.classification import Classification
+    from fact.sdk.asking import ANSWER_STAGE, QUESTION_KIND
     from fact.sdk.base_sync import RESOLVE_STAGE, SYNC_STAGE
     from fact.sdk.classify import CLASSIFY_STAGE, LABEL_STAGE
     from fact.sdk.review import Review, parse_review, review_context
@@ -43,7 +46,6 @@ CHECKS: list[Check] = ["lint", "test"]
 MAX_FIX_ATTEMPTS = 3
 MAX_CI_FIX_ATTEMPTS = 2
 SUMMARY_BYTES = 1024
-NEEDS_HUMAN = "needs_human"  # the gate kind, and its stage
 APPROVE_PLAN = "approve_plan"  # the plan approval gate's id, kind and stage
 AUTO_MERGE_OFF = "auto-merge is off for this project"
 MERGE_REFUSED = "GitHub refused the merge (such as branch protection requiring an approval, or CI not green)"
@@ -80,15 +82,12 @@ def _heads(prs: list[PRRef]) -> dict[tuple[str, int], str]:
         Stage(RESOLVE_STAGE, "Resolve conflicts", StepKind.AGENT, loops_to=SYNC_STAGE),
         Stage(REVIEW_STAGE, "Wait for review", StepKind.GATE),
         Stage(REVIEW_REPLY_STAGE, "Reply to review", StepKind.AGENT, loops_to="implement"),
-        Stage(NEEDS_HUMAN, "Needs a person", StepKind.GATE),
+        Stage(QUESTION_KIND, "Ask a person", StepKind.GATE),
+        Stage(ANSWER_STAGE, "Read the answer", StepKind.AGENT),
     ]
 )
 @workflow.defn(name="standard")
 class Standard(FactWorkflow):
-    def __init__(self) -> None:
-        super().__init__()
-        self._gates = 0  # `needs_human` gates opened so far, for unique gate ids
-
     @workflow.run
     async def run(self, run_input: RunInput) -> RunResult:
         try:
@@ -150,27 +149,21 @@ class Standard(FactWorkflow):
         return RunResult(outcome=RunOutcome.STOPPED, summary=limit_text(text, SUMMARY_BYTES))
 
     async def _checks_green(self) -> RunResult | None:
-        """Loop the checks with fix sessions, and ask a person each time they stay red; None once they are green."""
-        while True:
-            checks = await self.until_green(CHECKS, fix_prompt="fix_checks", max_attempts=MAX_FIX_ATTEMPTS)
-            if checks == StepOutcome.PASSED:
-                return None
-            failed = ", ".join(c.name for c in self.check_results if c.outcome != StepOutcome.PASSED)
-            summary = f"checks still failing after {MAX_FIX_ATTEMPTS} fix sessions: {failed}"
-            if (rejected := await self._ask("checks", summary)) is not None:
-                return rejected
+        """Loop the checks with fix sessions; None once they are green, else the run's end, `needs_human`."""
+        checks = await self.until_green(CHECKS, fix_prompt="fix_checks", max_attempts=MAX_FIX_ATTEMPTS)
+        if checks == StepOutcome.PASSED:
+            return None
+        failed = ", ".join(c.name for c in self.check_results if c.outcome != StepOutcome.PASSED)
+        return self._stuck(f"checks still failing after {MAX_FIX_ATTEMPTS} fix sessions: {failed}")
 
     async def _synced(self) -> RunResult | None:
         """Merge the base branch; once an agent resolved conflicts, loop the checks again. None when all is well."""
-        while True:
-            synced = await self.sync_with_base(RESOLVE_STAGE)
-            if synced == "resolved":
-                return await self._checks_green()
-            if synced != "needs_human":
-                return None
-            summary = "conflicts with the base branch still unresolved after the resolve sessions"
-            if (stuck := await self._ask(SYNC_STAGE, summary)) is not None:
-                return stuck
+        synced = await self.sync_with_base(RESOLVE_STAGE)
+        if synced == "resolved":
+            return await self._checks_green()
+        if synced != "needs_human":
+            return None
+        return self._stuck("conflicts with the base branch still unresolved after the resolve sessions")
 
     async def _ci_green(self, prs: list[PRRef], review: Review) -> RunResult:
         """Wait for CI with fix sessions, asking a person each time it stays red; classify, then merge or wait."""
@@ -180,7 +173,7 @@ class Standard(FactWorkflow):
         return await self._until_closed(self.prs, review, classification)
 
     async def _ci_loop(self, prs: list[PRRef]) -> RunResult | None:
-        """Loop CI with fix sessions (a conflicting PR takes the base), asking a person when stuck; None once green."""
+        """Loop CI with fix sessions (a conflicting PR takes the base); None once green, else the run's end."""
         syncs = 0
         while True:
             ci = await self.until_ci_green(prs, fix_prompt="fix_ci", max_attempts=MAX_CI_FIX_ATTEMPTS)
@@ -195,12 +188,8 @@ class Standard(FactWorkflow):
                 continue
             urls = ", ".join(pr.url for pr in prs)
             if ci == "conflict":
-                loop, summary = SYNC_STAGE, f"still conflicting with the base branch after {syncs} merges: {urls}"
-            else:
-                loop, summary = "wait_for_ci", f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}"
-            if (stuck := await self._ask(loop, summary)) is not None:
-                return stuck
-            syncs = 0
+                return self._stuck(f"still conflicting with the base branch after {syncs} merges: {urls}")
+            return self._stuck(f"CI not green after up to {MAX_CI_FIX_ATTEMPTS} fix sessions: {urls}")
 
     async def _take_base(self) -> RunResult | None:
         """Merge the base branch (conflicts resolved, then the checks looped) and push it; None once pushed."""
@@ -268,14 +257,9 @@ class Standard(FactWorkflow):
         await self.request_review(event.pr, [event.reviewer])
         return None
 
-    async def _ask(self, loop: str, summary: str) -> RunResult | None:
-        """Open a `needs_human` gate on an exhausted loop: None if approved (run it again), else the run's end."""
-        self._gates += 1
-        answer = await self.gate(f"{loop}-{self._gates}", NEEDS_HUMAN, {"loop": loop, "summary": summary})
-        if answer.decision == GateDecision.APPROVE:
-            return None
-        text = f"{summary}; rejected: {answer.note}" if answer.note else summary
-        return RunResult(outcome=RunOutcome.NEEDS_HUMAN, prs=self.prs, summary=limit_text(text, SUMMARY_BYTES))
+    def _stuck(self, summary: str) -> RunResult:
+        """End the run `needs_human` on a loop out of attempts; the run-end hold says why on the task."""
+        return RunResult(outcome=RunOutcome.NEEDS_HUMAN, prs=self.prs, summary=limit_text(summary, SUMMARY_BYTES))
 
     async def _address(self, review: Review) -> RunResult | None:
         """One round in v0: if the review asks for changes, address them and loop the checks; None when all is well."""

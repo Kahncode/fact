@@ -1,4 +1,9 @@
-"""`fact dev`: Temporal dev server, API and worker in one command."""
+"""
+`fact dev`: Temporal dev server, API and worker in one command.
+
+They run detached, tracked in `<data_dir>/run/` (`fact.cli.processes`), so restarting `fact dev` adopts them and
+touches no running work; `<data_dir>/fact-dev.lock` (`fact.cli.dev_lock`) refuses a second `fact dev`.
+"""
 
 import os
 import shutil
@@ -8,9 +13,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
 from fact.cli.follow import Follower
+from fact.cli.processes import SOURCE_BUILD, ChildSpec, RunDir
 from fact.cli.shutdown import ShutdownWatch
-from fact.cli.supervisor import INTERRUPTED, ChildSpec, emit, run_all
+from fact.cli.supervisor import INTERRUPTED, emit, run_all
 from fact.cli.use import PinError, current_pin, pin
 from fact.core.settings import Settings, get_settings
 
@@ -64,10 +71,16 @@ def factory_commands(
     path = deactivated_path(os.environ if environ is None else environ)
     if path is not None:
         env["PATH"] = path
+    build = SOURCE_BUILD if pinned is None else pinned.name
     return [
-        ChildSpec("api", [*python, "-m", "fact.api"], env=env, unset=VENV_VARS),
+        ChildSpec("api", [*python, "-m", "fact.api"], build=build, port=settings.api.port, env=env, unset=VENV_VARS),
         ChildSpec(
-            "worker", [*python, "-m", "fact.worker"], wait_for=temporal_endpoint(settings), env=env, unset=VENV_VARS
+            "worker",
+            [*python, "-m", "fact.worker"],
+            build=build,
+            wait_for=temporal_endpoint(settings),
+            env=env,
+            unset=VENV_VARS,
         ),
     ]
 
@@ -88,7 +101,9 @@ def build_commands(
         "--ui-port",
         str(TEMPORAL_UI_PORT),
     ]
-    return [ChildSpec("temporal", temporal), *factory_commands(settings, pinned, environ)]
+    factory = factory_commands(settings, pinned, environ)
+    # killed, not stopped gracefully: it has no stop file to watch
+    return [ChildSpec("temporal", temporal, build=factory[0].build, port=temporal_port, graceful=False), *factory]
 
 
 def _pinned_or_exit(settings: Settings) -> Path:
@@ -132,30 +147,11 @@ def _follower(settings: Settings, ref: str, checkout: Path, log: Callable[[str],
     )
 
 
-def dev(
-    *,
-    pinned: Annotated[
-        bool, typer.Option("--pinned", help="Run the API and worker from the version pinned with `fact use`.")
-    ] = False,
-    follow: Annotated[
-        str | None,
-        typer.Option(
-            "--follow",
-            metavar="REF",
-            help="Run pinned and upgrade (`fact use REF`, restart) each time REF moves, once no run is active.",
-        ),
-    ] = None,
-) -> None:
-    """Start Temporal, the API and the worker; Ctrl-C stops all three, and so does `fact shutdown` once no run is active."""
-    temporal_exe = shutil.which("temporal")
-    if temporal_exe is None:
-        typer.echo(
-            "error: `temporal` is not on PATH. Install the Temporal CLI: https://docs.temporal.io/cli#install",
-            err=True,
-        )
-        raise typer.Exit(1)
-    settings = get_settings()
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
+def run_dir(settings: Settings) -> RunDir:
+    return RunDir(settings.data_dir / "run")
+
+
+def _supervise(settings: Settings, temporal_exe: str, follow: str | None, *, pinned: bool) -> int:
     if follow is not None:
         _follow_pin(settings, follow)
     checkout = _pinned_or_exit(settings) if pinned or follow is not None else None
@@ -170,7 +166,46 @@ def dev(
 
     if follow is not None and checkout is not None:
         typer.echo(f"Following {follow}: upgrading once it moves and no run is active")
-        code = run_all(commands, _follower(settings, follow, checkout, log))
-    else:
-        code = run_all(commands, ShutdownWatch(log))
+        return run_all(commands, run_dir(settings), _follower(settings, follow, checkout, log))
+    return run_all(commands, run_dir(settings), ShutdownWatch(log))
+
+
+def dev(
+    *,
+    pinned: Annotated[
+        bool, typer.Option("--pinned", help="Run the API and worker from the version pinned with `fact use`.")
+    ] = False,
+    follow: Annotated[
+        str | None,
+        typer.Option(
+            "--follow",
+            metavar="REF",
+            help="Run pinned and upgrade (`fact use REF`, restart) each time REF moves, once no run is active.",
+        ),
+    ] = None,
+) -> None:
+    """
+    Start Temporal, the API and the worker, or adopt those still running; keep them running.
+
+    Ctrl-C stops all three, and so does `fact shutdown` once no run is active. Killing `fact dev` leaves them running.
+    """
+    temporal_exe = shutil.which("temporal")
+    if temporal_exe is None:
+        typer.echo(
+            "error: `temporal` is not on PATH. Install the Temporal CLI: https://docs.temporal.io/cli#install",
+            err=True,
+        )
+        raise typer.Exit(1)
+    settings = get_settings()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    lock = DevLock(settings.data_dir / LOCK_NAME)
+    try:
+        lock.acquire()
+    except AlreadyRunningError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    try:
+        code = _supervise(settings, temporal_exe, follow, pinned=pinned)
+    finally:
+        lock.release()
     raise typer.Exit(0 if code == INTERRUPTED else code)

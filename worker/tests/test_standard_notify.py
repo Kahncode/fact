@@ -5,11 +5,12 @@ from fact.core.activity_contract import NOTIFY, PREPARE_WORKSPACE, NotifyInput
 from fact.core.enums import NotificationKind, RunOutcome, StepOutcome
 from fact.core.gates import GateDecision
 from fact.core.types import StepResult
-from standard_harness import MAX_FIX_ATTEMPTS, FakeActivities, finished, run_standard
+from standard_harness import FakeActivities, finished, run_standard
 from standard_inputs import PR, RUN_URL
+from standard_question_fakes import blocked
 from temporalio.client import WorkflowFailureError
 
-ROUNDS = MAX_FIX_ATTEMPTS + 1  # check rounds in one `until_green`
+APPROVE = GateDecision.APPROVE
 
 
 def _sent(fakes: FakeActivities) -> list[tuple[NotificationKind, str]]:
@@ -25,13 +26,13 @@ async def test_a_change_set_fact_cannot_merge_notifies_its_prs_are_ready_then_me
 
 
 async def test_each_gate_notifies_once_then_the_end() -> None:
-    fakes = FakeActivities(test_failures=2 * ROUNDS, gate_decisions=[GateDecision.APPROVE])
+    fakes = FakeActivities(implement_script=[blocked("v1 or v2?"), blocked("Colour?")], gate_decisions=[APPROVE])
     result, _ = await run_standard(fakes, "run-notify-gates")
 
     assert result.outcome == RunOutcome.NEEDS_HUMAN  # the second gate is rejected
     assert _sent(fakes) == [
-        (NotificationKind.GATE_WAITING, "run-1:gate:checks-1"),
-        (NotificationKind.GATE_WAITING, "run-1:gate:checks-2"),
+        (NotificationKind.GATE_WAITING, "run-1:gate:implement-question-1"),
+        (NotificationKind.GATE_WAITING, "run-1:gate:implement-question-2"),
         (NotificationKind.TASK_HELD, "run-1:held"),  # needs_human holds the task
         (NotificationKind.RUN_FAILED, "run-1:run_failed"),
     ]
