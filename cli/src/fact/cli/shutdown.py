@@ -5,7 +5,8 @@ It acts on the records in `<data_dir>/run/` (`fact.cli.processes`), so it works 
 writes the stop file of every worker and waits for them to exit, then the API's (and any other recorded process's),
 then stops Temporal, last. A process still alive after `STOP_TIMEOUT_S` has its tree killed. A worker's graceful stop
 ends a running agent step `AGENT_INTERRUPTED`, so the next `fact dev` resumes its session; runs stay open in Temporal.
-A running `fact dev` sees a stop file it did not write and stops everything itself, then exits 0.
+A running `fact dev` sees a stop file it did not write, or a child exited with its record removed, and stops
+everything itself, then exits 0.
 """
 
 from collections.abc import Callable

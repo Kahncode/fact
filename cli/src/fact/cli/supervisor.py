@@ -5,8 +5,9 @@ At start it adopts every recorded process still alive (same pid and start time) 
 stops a live one whose command differs (another build), and removes the records of the others. Then, every poll, it
 starts what is missing (once `wait_for` accepts connections), starts again a child that exited (after
 `RESTART_DELAY_S`) and prints each child's log prefixed by its name. Killing `fact dev` leaves the children running
-for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children (`fact shutdown`),
-or a restarter raising `StopRequestedError` stops them all, last spec first; runs stay open in Temporal.
+for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children or a child exiting
+with its record removed by someone else (`fact shutdown`), or a restarter raising `StopRequestedError` stops them all,
+last spec first; runs stay open in Temporal.
 """
 
 import contextlib
@@ -144,16 +145,29 @@ class Supervisor:
             self._track(start(spec, self.run_dir), offset)
 
     def reap(self) -> None:
-        """Forget the children that exited, to be started again after `RESTART_DELAY_S`."""
+        """
+        Forget the children that exited, to be started again after `RESTART_DELAY_S`.
+
+        A child whose record someone else removed was stopped by `fact shutdown`, which removes the stop file with
+        the record once the child exited, possibly before `check_stop_files` saw it: raise `StopRequestedError`.
+        """
+        asked: list[str] = []
         for name, child in list(self.children.items()):
             if not child.exited():
                 continue
+            removed = not self.run_dir.record_path(name).exists()
             stop(child, self.run_dir)  # reaps it and removes its record
             self._forget(name)
+            if removed:
+                asked.append(name)
+                continue
             code = child.exit_code()
             how = f"exited with code {code}" if code is not None else "exited"
             self.log(f"{name} {how}; starting it again in {RESTART_DELAY_S:g} s")
             self._not_before[name] = time.monotonic() + RESTART_DELAY_S
+        if asked:
+            msg = f"{', '.join(asked)} stopped by fact shutdown: stopping every process"
+            raise StopRequestedError(msg)
 
     def replace(self, specs: Sequence[ChildSpec]) -> None:
         """Stop the children named in `specs` and run `specs` in their place; the others keep running."""

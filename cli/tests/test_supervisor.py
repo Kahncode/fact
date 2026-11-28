@@ -1,6 +1,7 @@
 # ruff: noqa: PLR2004
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from dataclasses import replace
@@ -10,6 +11,7 @@ import psutil
 import pytest
 from fact.cli import processes, supervisor
 from fact.cli.processes import Child, ChildSpec, ProcessRecord, RunDir
+from fact.cli.shutdown import stop_recorded
 from fact.cli.supervisor import StopRequestedError, Supervisor, run_all
 
 SLEEPER = [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"]
@@ -173,6 +175,30 @@ def test_a_stop_file_written_by_fact_shutdown_stops_every_child_and_returns_0(
     assert "worker   | stopped gracefully" in out
     assert out.count("worker   | ready") == 1  # never started again
     assert "fact     | stopped; open runs carry on at the next `fact dev`" in out
+
+
+def test_fact_shutdown_during_a_slow_restarter_is_not_undone(
+    run_dir: RunDir, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression: `fact shutdown` removed the stop file with the record while `fact dev` was busy (`--follow`'s git
+    # fetch), so `fact dev` never saw it and started the stopped children again.
+    monkeypatch.setattr(supervisor, "RESTART_DELAY_S", 0.0)
+    done = threading.Event()
+
+    def restarter() -> None:
+        log = run_dir.log_path("worker")
+        if done.is_set():
+            if "worker" in run_dir.records():  # started again: the shutdown was undone
+                raise KeyboardInterrupt
+        elif log.exists() and "ready" in log.read_text(encoding="utf-8"):
+            shutdown = threading.Thread(target=stop_recorded, args=(run_dir, lambda _: None))
+            shutdown.start()
+            shutdown.join(timeout=30)  # the slow restarter: busy until `fact shutdown` is done
+            done.set()
+
+    assert run_all([_sleeper("temporal"), ChildSpec("worker", GRACEFUL)], run_dir, restarter) == 0
+    assert run_dir.records() == {}
+    assert capsys.readouterr().out.count("worker   | ready") == 1
 
 
 def test_ctrl_c_stops_every_child_and_returns_130(run_dir: RunDir) -> None:
