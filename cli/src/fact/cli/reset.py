@@ -4,7 +4,7 @@
 It deletes the factory database, `temporal.db`, the artifact store, `step-logs/`, `workspaces/`, `repos/`, `pinned/`
 and `run/`, then runs `git worktree prune` in the source tree (the factory pins were its worktrees). `.env`, the
 source tree and anything else in `data_dir` stay. It refuses while `fact dev` holds its lock (and holds it itself
-meanwhile, so none starts), and while a recorded factory process still runs (`fact shutdown` stops them). GitHub keeps
+meanwhile, so none starts; `--dry-run` only checks it), and while a recorded factory process still runs (`fact shutdown` stops them). GitHub keeps
 its labels: issues held with `fact:needs-human` stay held.
 """
 
@@ -15,7 +15,7 @@ import typer
 from fact.cli.cleanup import prune_worktrees
 from fact.cli.cleanup_pins import live_records
 from fact.cli.dev import run_dir
-from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
+from fact.cli.dev_lock import LOCK_NAME, PIN_NAME, AlreadyRunningError, DevLock
 from fact.cli.removal import Report, delete
 from fact.cli.retention import STEP_LOGS
 from fact.core.settings import REPO_ROOT, Settings, get_settings
@@ -39,6 +39,7 @@ def factory_data(settings: Settings) -> list[tuple[Path, str]]:
         (data / "repos", "the clones"),
         (settings.pinned_dir, "the pinned versions"),
         (data / "run", "the process records, logs and generations"),
+        (data / PIN_NAME, "the pin `fact dev` last ran from"),
     ]
     return paths
 
@@ -75,10 +76,15 @@ def reset(
     """Delete the factory's data (database, Temporal, artifacts, logs, workspaces, pins) to start from scratch."""
     settings = get_settings()
     lock = DevLock(settings.data_dir / LOCK_NAME)
-    try:
-        lock.acquire()
-    except AlreadyRunningError as exc:
-        _refuse(f"{exc}; stop it (`fact shutdown`) before `fact reset`")
+    stop_first = "stop it (`fact shutdown`) before `fact reset`"
+    if dry_run:  # only look: taking the lock would create and write the lock file
+        if lock.held():
+            _refuse(f"fact dev is already running (holding {lock.path}); {stop_first}")
+    else:
+        try:
+            lock.acquire()
+        except AlreadyRunningError as exc:
+            _refuse(f"{exc}; {stop_first}")
     try:
         if live := live_records(run_dir(settings)):
             _refuse(f"factory processes still run ({', '.join(live)}); stop them with `fact shutdown` first")

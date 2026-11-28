@@ -55,13 +55,33 @@ def test_reset_yes_leaves_no_factory_data(data: Path, source: Path) -> None:
     assert "fact:needs-human" in result.output
 
 
-@pytest.mark.parametrize("args", [["reset", "--dry-run"], ["reset"]], ids=["dry-run", "declined"])
-def test_reset_dry_run_or_declined_changes_nothing(data: Path, source: Path, args: list[str]) -> None:  # noqa: ARG001
+def test_reset_dry_run_changes_nothing(data: Path, source: Path) -> None:  # noqa: ARG001
     before = _left(data)
 
-    CliRunner().invoke(app, args, input="n\n")
+    result = CliRunner().invoke(app, ["reset", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert _left(data) == before
+
+
+def test_reset_declined_changes_nothing_but_the_lock(data: Path, source: Path) -> None:  # noqa: ARG001
+    before = _left(data)
+
+    CliRunner().invoke(app, ["reset"], input="n\n")
 
     assert _left(data) == before | {LOCK_NAME}
+
+
+def test_reset_dry_run_refuses_while_fact_dev_runs(data: Path, source: Path) -> None:  # noqa: ARG001
+    lock = DevLock(data / LOCK_NAME)
+    lock.acquire()
+    try:
+        result = CliRunner().invoke(app, ["reset", "--dry-run"])
+    finally:
+        lock.release()
+
+    assert result.exit_code == 1
+    assert "already running" in result.output
 
 
 def test_reset_refuses_while_fact_dev_runs(data: Path, source: Path) -> None:  # noqa: ARG001

@@ -24,7 +24,7 @@ from fact.cli.dev_commands import (
     temporal_endpoint,
     worker_command,
 )
-from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
+from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock, record_pin
 from fact.cli.follow import Follower
 from fact.cli.generations import Generations
 from fact.cli.processes import RunDir
@@ -131,7 +131,8 @@ def _supervise(  # noqa: PLR0913
     return run_all(commands, run_dir(settings), chain(*restarters, workers), workers.exited)
 
 
-def _locked(settings: Settings, body: Callable[[], int]) -> int:
+def _locked(settings: Settings, body: Callable[[], int], *, pin: str | None = None) -> int:
+    """Run `body` holding the dev lock; `pin` is the pin this process runs from, kept by `fact cleanup` meanwhile."""
     lock = DevLock(settings.data_dir / LOCK_NAME)
     try:
         lock.acquire()
@@ -139,6 +140,7 @@ def _locked(settings: Settings, body: Callable[[], int]) -> int:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
     try:
+        record_pin(settings.data_dir, pin)
         return body()
     finally:
         lock.release()
@@ -206,5 +208,5 @@ def dev(
         def body() -> int:
             return _supervise(settings, temporal_exe, follow, pinned=pinned, source=tree, launcher=launcher)
 
-        code = _locked(settings, body)
+        code = _locked(settings, body, pin=REPO_ROOT.name if in_pin else None)  # `--in-pin` runs from its pin
     raise typer.Exit(0 if code == INTERRUPTED else code)

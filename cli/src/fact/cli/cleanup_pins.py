@@ -5,7 +5,8 @@ The newest generation is current and always kept. An older one is kept while its
 of its versions current, ramping or `DRAINING` (runs pinned to it, `fact.cli.drainage`); while Temporal cannot be
 asked, every older one is kept. The others are drained: their versions are deleted from Temporal (one Temporal
 refuses to delete keeps its generation for the next cleanup), then their generation records, then every pin no kept
-generation names. A pin no generation names at all is kept while it is recent (`fact use` or a worker building it now)
+generation names. The pin a running `fact dev --in-pin` runs from is kept (`fact.cli.dev_lock.running_pin`). A pin
+no generation names at all is kept while it is recent (`fact use` or a worker building it now)
 or, for a project pin, while a worker from the source tree runs (it records no generation). `.trash-` folders left by
 an earlier cleanup are deleted.
 """
@@ -17,6 +18,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from fact.cli.dev_lock import running_pin
 from fact.cli.drainage import Version
 from fact.cli.generations import worker_name
 from fact.cli.processes import SOURCE_BUILD, ProcessRecord, RunDir, find_process
@@ -150,7 +152,7 @@ def _sweep_factory(pins: _Pins, root: Path, report: Report) -> None:
         elif not _SHA.match(path.name):
             continue  # not a pin of ours
         elif path.name in pins.factory:
-            report.keep(label, "current, or used by a kept generation or a running process")
+            report.keep(label, "current, or used by a kept generation, a running process or `fact dev`")
         elif (why := _why_removed(pins, factory=path.name)) == ORPHAN and _recent(path, pins.now):
             report.keep(label, "no generation uses it yet, but it is recent (a pin in progress?)")
         else:
@@ -180,8 +182,7 @@ def sweep_pins(settings: Settings, state: State, decision: Decision, report: Rep
     """Remove every pin and `.trash-` folder under `pinned_dir` that nothing kept needs."""
     kept = [g for g, _ in decision.keep]
     factory = {g.factory for g in kept} | {r.build for r in state.live.values() if r.build != SOURCE_BUILD}
-    if state.current is not None:
-        factory.add(state.current)
+    factory |= {sha for sha in (state.current, running_pin(settings.data_dir)) if sha is not None}
     source_worker = any(r.build == SOURCE_BUILD and r.role.startswith("worker") for r in state.live.values())
     pins = _Pins(
         factory=factory,

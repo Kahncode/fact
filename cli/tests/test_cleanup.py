@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fact.cli import removal
 from fact.cli.cleanup import run_cleanup
+from fact.cli.dev_lock import LOCK_NAME, DevLock, record_pin
 from fact.cli.drainage import Version
 from fact.cli.removal import Report
 from fact.core import generations
@@ -122,6 +123,26 @@ def test_cleanup_keeps_what_temporal_does_not_let_go(
     assert (settings.pinned_dir / "factory" / first.factory).is_dir()
     assert (settings.pinned_dir / "projects" / "fact" / HOMES[1]).is_dir()
     assert generations.read(generations.generations_dir(settings.data_dir), first.id) == first
+
+
+@pytest.mark.parametrize("running", [True, False], ids=["while-fact-dev-runs-from-it", "once-fact-dev-stopped"])
+def test_the_pin_fact_dev_runs_from_is_kept_while_it_runs(
+    settings: Settings, source: Path, temporal: Temporal, *, running: bool
+) -> None:
+    first, *_ = _factory(settings, source)
+    temporal.in_use = set()
+    lock = DevLock(settings.data_dir / LOCK_NAME)
+    lock.acquire()  # held here as by `fact dev --in-pin`; `held()` asks through another handle
+    record_pin(settings.data_dir, first.factory)
+    if not running:
+        lock.release()
+    try:
+        _clean(settings, source)
+    finally:
+        lock.release()
+
+    assert (settings.pinned_dir / "factory" / first.factory).is_dir() == running
+    assert not (settings.pinned_dir / "projects" / "fact" / HOMES[1]).exists()  # its generation is drained still
 
 
 def test_a_pin_that_cannot_be_deleted_stays_trash_until_the_next_cleanup(
