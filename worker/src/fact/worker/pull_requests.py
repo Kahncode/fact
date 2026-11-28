@@ -33,6 +33,12 @@ async def repo_info(client: httpx.AsyncClient, full_name: str) -> RepoInfo:
     return RepoInfo(full_name=full_name, default_branch=body["default_branch"], html_url=body["html_url"])
 
 
+async def branch_head(client: httpx.AsyncClient, full_name: str, branch: str) -> str:
+    """Return the commit `branch` points at on GitHub; `GitHubNotFoundError` when it was never pushed."""
+    body = (await client.get(f"/repos/{full_name}/git/ref/heads/{quote(branch, safe='/')}")).json()
+    return body["object"]["sha"]
+
+
 async def find_open_pr(client: httpx.AsyncClient, full_name: str, branch: str, base: str) -> dict[str, Any] | None:
     """Return the open PR from `branch` in this repository (not a fork) into `base`, or None."""
     owner = full_name.partition("/")[0]

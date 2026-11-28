@@ -8,15 +8,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 import structlog
+from change_set_github import READ_TOKEN, FakeGitHub, private_key
 from docker_env import needs_docker
+from fact.core.activity_contract import OpenChangeSetInput, PushBranchInput
 from fact.core.github import BotIdentity, GitHubApp
 from fact.core.project_config import RunnerPoolConfig
 from fact.core.settings import Settings
-from fact.core.types import RepoCheckout, WorkspaceHandle, WorkspaceSpec
+from fact.core.types import RepoCheckout, Task, WorkspaceHandle, WorkspaceSpec
+from fact.worker.activities.change_set import ChangeSetActivities
+from fact.worker.activities.push import PushActivities
+from fact.worker.reporting import StepReporter
 from fact.worker.runners import DockerRunner, ExecExit, ExecLine
 from fact.worker.runners.docker_cli import container_name, run_args, volume_name
+from temporalio.testing import ActivityEnvironment
 
 FULL_NAME = "acme/widget"
 RESUMED = "fact/task-resumed"
@@ -82,7 +89,7 @@ class FakeApp:
 
 
 @pytest.fixture
-def app() -> FakeApp:
+def fake_app() -> FakeApp:
     return FakeApp()
 
 
@@ -95,14 +102,14 @@ def run_id() -> Iterator[str]:
 
 
 @pytest.fixture
-def runner(settings: Settings, image: str, app: FakeApp) -> DockerRunner:
+def runner(settings: Settings, image: str, fake_app: FakeApp) -> DockerRunner:
     pool = RunnerPoolConfig(kind="docker", memory="512m", cpus=1, pids=256)
     return DockerRunner(
         settings,
         {"tiny": image},
         pool,
         remote_url=lambda _name: "file:///srv/remote.git",
-        github=cast("GitHubApp", app),
+        github=cast("GitHubApp", fake_app),
     )
 
 
@@ -135,10 +142,10 @@ def test_run_args_order_and_no_host_mount() -> None:
     assert mounts == ["type=volume,source=fact-ws-r1,target=/workspace"]
 
 
-async def test_prepare_exec_teardown(runner: DockerRunner, run_id: str, app: FakeApp) -> None:
+async def test_prepare_exec_teardown(runner: DockerRunner, run_id: str, fake_app: FakeApp) -> None:
     with structlog.testing.capture_logs() as logs:
         handle = await runner.prepare(_spec(run_id))
-        prepare_tokens = len(app.asked)
+        prepare_tokens = len(fake_app.asked)
         out = await _out(
             runner, handle, "sh", "-c", 'pwd; cat README.md; git branch --show-current; echo "$GITHUB_TOKEN"'
         )
@@ -147,9 +154,9 @@ async def test_prepare_exec_teardown(runner: DockerRunner, run_id: str, app: Fak
 
     assert handle.repos == {FULL_NAME: "/workspace/widget"}
     assert out.splitlines() == ["/workspace/widget", "hello", "fact/task-146", TOKEN]
-    assert app.asked[-1] == ([FULL_NAME], {"contents": "read"})
+    assert fake_app.asked[-1] == ([FULL_NAME], {"contents": "read"})
     # one each for the clone and the LFS-smudging checkout, not one for all of prepare
-    assert app.asked[:prepare_tokens] == [([FULL_NAME], {"contents": "read"})] * len(["clone", "checkout"])
+    assert fake_app.asked[:prepare_tokens] == [([FULL_NAME], {"contents": "read"})] * len(["clone", "checkout"])
     assert "fact/task-146" in workspace_md
     assert "fact[bot]" in config
     assert any(e["event"] == "workspace_ready" for e in logs)
@@ -204,3 +211,44 @@ async def test_prepare_reuses_a_finished_workspace_and_redoes_a_half_made_one(
     await runner.prepare(_spec(run_id, RESUMED))
     lines, end = await _collect(runner.exec(handle, ["test", "-f", "marker"], cwd="widget"))
     assert end.exit_code == 1, lines
+
+
+@pytest.fixture
+async def api_run_id(client: httpx.AsyncClient) -> AsyncIterator[str]:
+    """Create a run the API knows, so its steps can be reported; remove its container and volume afterwards."""
+    body = {"workflow_id": "wf-push", "project": "fact", "task_key": "task:M1-05", "workflow_type": "standard"}
+    run = (await client.post("/api/v1/runs", json=body)).json()["id"]
+    yield run
+    _run("docker", "rm", "--force", container_name(run), check=False)
+    _run("docker", "volume", "rm", "--force", volume_name(run), check=False)
+
+
+async def test_a_commit_is_pushed_from_the_container_and_the_pr_step_finds_it(
+    settings: Settings, image: str, client: httpx.AsyncClient, api_run_id: str, tmp_path: Path
+) -> None:
+    def branch_sha(branch: str) -> str | None:  # GitHub's copy of the repository is the bare one in the container
+        git = ["git", "-C", "/srv/remote.git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"]
+        return _run("docker", "exec", container_name(api_run_id), *git, check=False) or None
+
+    fake = FakeGitHub(branch_sha)
+    github = fake.app(private_key())
+    pool = RunnerPoolConfig(kind="docker", memory="512m", cpus=1, pids=256)
+    runner = DockerRunner(
+        settings, {"tiny": image}, pool, remote_url=lambda _n: "file:///srv/remote.git", github=github
+    )
+    reporter = StepReporter("http://test", client, log_dir=tmp_path / "logs")
+    handle = await runner.prepare(_spec(api_run_id))
+    await _out(runner, handle, "sh", "-c", "echo done > done.txt && git add done.txt && git commit -qm 'feat: done'")
+    head = await _out(runner, handle, "git", "rev-parse", "HEAD")
+    branch = handle.branches[FULL_NAME]
+
+    push = PushBranchInput(run_id=api_run_id, handle=handle, repo=FULL_NAME, branch=branch, default_branch="main")
+    pushed = await ActivityEnvironment().run(PushActivities(runner, github, reporter).push_branch, push)
+    task = Task(key="gh:acme/widget#146", id="146", title="Push from the sandbox")
+    change_set = OpenChangeSetInput(run_id=api_run_id, task=task, handle=handle, branch=branch, title="t", summary="s")
+    (pr,) = await ActivityEnvironment().run(ChangeSetActivities(github, reporter).open_change_set, change_set)
+
+    assert pr.head_sha == pushed == head
+    assert fake.posted_prs()[0]["head"] == branch
+    assert fake.permissions_asked().count({"contents": "write"}) == 1  # for the push command alone
+    assert await _out(runner, handle, "sh", "-c", 'echo "$GITHUB_TOKEN"') == READ_TOKEN  # every other command

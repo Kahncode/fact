@@ -7,7 +7,8 @@
 - `task_closed`: the task's source says the task was closed while the run went on.
 
 The globs and the task source come from the project's registered checkout, not the run's branch, so a change cannot
-loosen the rules it is judged by. Each repository's diff is its branch against the merge base with its default branch.
+loosen the rules it is judged by. Each repository's diff is its branch against the merge base with its default branch,
+read with git through `Runner.exec` (the `workspace` zone: in the run's container with the `docker` pool).
 """
 
 import asyncio
@@ -22,7 +23,8 @@ from fact.core.logging import bind_run, get_logger
 from fact.core.project_config import ConfigError, ProjectConfig, load_project_config
 from fact.core.settings import Settings, get_settings, project_path
 from fact.core.tasks import source_for
-from fact.worker.git_push import run_git
+from fact.worker.runners.base import Runner
+from fact.worker.workspace_git import WorkspaceGit
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
@@ -59,27 +61,27 @@ def removes_or_changes(old: Any, new: Any) -> bool:  # noqa: ANN401 - any JSON v
     return old != new
 
 
-async def _git(args: list[str], worktree: Path) -> tuple[int, list[str]]:
-    return await run_git(["-c", "core.quotePath=false", *args], worktree)
+async def _git(git: WorkspaceGit, *args: str) -> tuple[int, list[str]]:
+    return await git("-c", "core.quotePath=false", *args)
 
 
-async def _changed(worktree: Path, default_branch: str) -> tuple[str, list[str]]:
+async def _changed(git: WorkspaceGit, default_branch: str) -> tuple[str, list[str]]:
     """Return the merge base with `origin/<default_branch>` and the paths changed since it, up to HEAD."""
-    code, lines = await _git(["merge-base", "HEAD", f"origin/{default_branch}"], worktree)
+    code, lines = await _git(git, "merge-base", "HEAD", f"origin/{default_branch}")
     if code != 0 or not lines:
-        msg = f"no merge base with origin/{default_branch} in {worktree}: {' '.join(lines)}"
+        msg = f"no merge base with origin/{default_branch} in {git.worktree}: {' '.join(lines)}"
         raise _non_retryable(msg)
     base = lines[0].strip()
-    code, lines = await _git(["diff", "--name-only", "--no-renames", base, "HEAD"], worktree)
+    code, lines = await _git(git, "diff", "--name-only", "--no-renames", base, "HEAD")
     if code != 0:
-        msg = f"git diff failed in {worktree} ({code}): {' '.join(lines)}"
+        msg = f"git diff failed in {git.worktree} ({code}): {' '.join(lines)}"
         raise _non_retryable(msg)
     return base, [line.strip() for line in lines if line.strip()]
 
 
-async def _json_at(worktree: Path, rev: str, path: str) -> Any:  # noqa: ANN401 - any JSON value
+async def _json_at(git: WorkspaceGit, rev: str, path: str) -> Any:  # noqa: ANN401 - any JSON value
     """Read the JSON file at `rev:path`; None when it is missing or is not JSON."""
-    code, lines = await _git(["show", f"{rev}:{path}"], worktree)
+    code, lines = await _git(git, "show", f"{rev}:{path}")
     if code != 0:
         return None
     try:
@@ -88,29 +90,30 @@ async def _json_at(worktree: Path, rev: str, path: str) -> Any:  # noqa: ANN401 
         return None
 
 
-async def _api_breaking(worktree: Path, base: str, path: str) -> bool:
-    old = await _json_at(worktree, base, path)
+async def _api_breaking(git: WorkspaceGit, base: str, path: str) -> bool:
+    old = await _json_at(git, base, path)
     if old is None:  # new file, or not JSON: nothing published to break
         return False
-    return removes_or_changes(old, await _json_at(worktree, "HEAD", path))
+    return removes_or_changes(old, await _json_at(git, "HEAD", path))
 
 
-async def _repo_signals(config: ProjectConfig, repo: str, worktree: Path) -> dict[SignalName, list[ChangedPath]]:
+async def _repo_signals(config: ProjectConfig, repo: str, git: WorkspaceGit) -> dict[SignalName, list[ChangedPath]]:
     default_branch = next((r.default_branch for r in config.repositories if r.full_name == repo), "main")
-    base, paths = await _changed(worktree, default_branch)
+    base, paths = await _changed(git, default_branch)
     found: dict[SignalName, list[ChangedPath]] = {}
     for path in paths:
         changed = ChangedPath(repo=repo, path=path)
         for name, field in PATH_SIGNALS:
             if matches(path, getattr(config.classify, field)):
                 found.setdefault(name, []).append(changed)
-        if matches(path, config.classify.api_paths) and await _api_breaking(worktree, base, path):
+        if matches(path, config.classify.api_paths) and await _api_breaking(git, base, path):
             found.setdefault("api_breaking", []).append(changed)
     return found
 
 
 class ClassifyActivities:
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, runner: Runner, settings: Settings | None = None) -> None:
+        self._runner = runner
         self._settings = settings
 
     def _project(self, name: str) -> tuple[ProjectConfig, Path]:
@@ -139,7 +142,8 @@ class ClassifyActivities:
             config, root = await asyncio.to_thread(self._project, spec.project)
             found: dict[SignalName, list[ChangedPath]] = {}
             for repo, worktree in spec.handle.repos.items():
-                for name, paths in (await _repo_signals(config, repo, Path(worktree))).items():
+                git = WorkspaceGit(self._runner, spec.handle, worktree)
+                for name, paths in (await _repo_signals(config, repo, git)).items():
                     found.setdefault(name, []).extend(paths)
             if await self._task_closed(config, root, spec.task_key):
                 found["task_closed"] = []

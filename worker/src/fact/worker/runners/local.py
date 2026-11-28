@@ -208,15 +208,6 @@ class LocalRunner:
         log.info("repo_cloned", repo=repo.full_name, branch=repo.branch, resumed=resumed)
         return repo.branch
 
-    async def fetch(self, handle: WorkspaceHandle, full_name: str) -> None:
-        """Fetch the workspace's clone of `full_name`, so its `origin/*` branches are current."""
-        root = self._root(handle.run_id).resolve()
-        clone = Path(handle.repos[full_name]).resolve()  # noqa: ASYNC240 - a path lookup, instant
-        if not clone.is_relative_to(root):
-            msg = f"{clone} is outside the workspace {root}"
-            raise RunnerError(msg)
-        await self._git("fetch", "--prune", "origin", cwd=clone)
-
     def exec(
         self,
         handle: WorkspaceHandle,

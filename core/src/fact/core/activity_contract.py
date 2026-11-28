@@ -29,6 +29,7 @@ from fact.core.activity_inputs import (
     NotifyInput,
     OpenChangeSetInput,
     PostCostCommentInput,
+    PushBranchInput,
     ReportStatusInput,
     RunFinishedInput,
     RunStartedInput,
@@ -76,6 +77,7 @@ __all__ = [
     "POST_COST_COMMENT",
     "POST_REPLIES",
     "PREPARE_WORKSPACE",
+    "PUSH_BRANCH",
     "RECORD_GATE_ANSWERED",
     "RECORD_GATE_OPENED",
     "RECORD_RUN_FINISHED",
@@ -117,6 +119,7 @@ __all__ = [
     "OpenChangeSetInput",
     "PostCostCommentInput",
     "PostRepliesInput",
+    "PushBranchInput",
     "Reply",
     "ReportStatusInput",
     "RequestReviewInput",
@@ -146,6 +149,7 @@ PREPARE_WORKSPACE = "prepare_workspace"
 TEARDOWN_WORKSPACE = "teardown_workspace"
 AGENT_STEP = "agent_step"
 SHELL_STEP = "shell_step"
+PUSH_BRANCH = "push_branch"
 OPEN_CHANGE_SET = "open_change_set"
 MARK_TASK_DONE = "mark_task_done"
 POST_COST_COMMENT = "post_cost_comment"
@@ -221,9 +225,12 @@ ACTIVITY_SPECS: dict[str, ActivitySpec] = {
     AGENT_STEP: ActivitySpec("workspace", timedelta(minutes=60), NO_RETRY, "wait"),
     SHELL_STEP: ActivitySpec("workspace", timedelta(minutes=16), cancellation="wait"),
     SYNC_BASE: ActivitySpec("workspace", timedelta(minutes=30), cancellation="wait"),  # a fetch and a merge per repo
-    OPEN_CHANGE_SET: _CONTROL,
+    # git in the run's clone: through the runner, so on the run's queue (`docker`: in its container)
+    PUSH_BRANCH: ActivitySpec("workspace", timedelta(minutes=30), cancellation="wait"),  # LFS uploads may be large
+    MARK_TASK_DONE: ActivitySpec("workspace", CONTROL_DURATION, cancellation="wait"),  # a commit, with its hooks
+    CLASSIFY_SIGNALS: ActivitySpec("workspace", CONTROL_DURATION),  # reads the diff only
+    OPEN_CHANGE_SET: _CONTROL,  # reads the pushed branch from GitHub
     LABEL_CHANGE_SET: _CONTROL,
-    MARK_TASK_DONE: _CONTROL,
     POST_COST_COMMENT: _CONTROL,
     WAIT_FOR_CI: ActivitySpec("control", timedelta(minutes=65)),  # CI's 60 min, plus polling and log downloads
     WAIT_FOR_REVIEW: ActivitySpec("control", REVIEW_TIMEOUT, LONG_WAIT_RETRY),  # the run passes what is left of it
@@ -236,7 +243,6 @@ ACTIVITY_SPECS: dict[str, ActivitySpec] = {
     NOTIFY: _CONTROL,
     WRITE_HANDOFF: _CONTROL,
     REPORT_STATUS: _CONTROL,
-    CLASSIFY_SIGNALS: _CONTROL,
     COLLECT_COMMENTS: _CONTROL,
     POST_REPLIES: _CONTROL,
     REQUEST_REVIEW: _CONTROL,

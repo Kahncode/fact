@@ -198,6 +198,7 @@ async def workers(client: Client, fakes: FakeActivities, workflow_cls: type) -> 
         fakes.prepare_workspace,
         fakes.teardown_workspace,
         fakes.mark_task_done,
+        fakes.push_branch,
         fakes.open_change_set,
         fakes.post_cost_comment,
         fakes.wait_for_ci,

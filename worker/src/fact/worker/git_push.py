@@ -1,24 +1,34 @@
 """
-Push a run's branch from its worktree, in the control zone.
+Push a run's branch from its clone through `Runner.exec`: on the host (`LocalRunner`) or in its container (`docker`).
 
-The installation token reaches git only through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`, as an
-`http.<url>.extraHeader` scoped to the push URL: it is never in argv, never written to a git config file, and is
-redacted from every output line handed to the caller.
+The push runs `git lfs push origin <branch>` first, then `git push --no-verify origin <branch>`: LFS objects upload
+explicitly, so the repository's pre-push hooks (where `git lfs` would otherwise upload) never run. A project's checks
+belong in `pre-commit` hooks or check steps.
+
+The write token reaches the two commands only through their environment: as `GITHUB_TOKEN` (which the `docker` pool's
+credential helper reads, and which keeps the runner from adding its read token) and as an `http.<url>.extraHeader`
+for `https://github.com/` in `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`. It is never in argv, never
+written to a git config file, and is redacted from every output line handed to the caller.
+
+`run_git` runs git on the host, for the factory's own checkouts (`loader.py`), never for a run's clone.
 """
 
 import base64
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from fact.worker.runners.base import ExecExit, ExecLine
+from fact.worker.runners.base import ExecExit, ExecLine, RunnerError
+from fact.worker.runners.docker import TOKEN_ENV
 from fact.worker.runners.process import build_env, spawn, stream
+from fact.worker.workspace_git import WorkspaceGit
 
 GIT_TIMEOUT = 600.0
 REDACTED = "***"
+GITHUB_URL = "https://github.com/"  # the write token's header goes to GitHub only
 
 
 class PushError(RuntimeError):
-    """`git push` or a git query in the worktree failed."""
+    """`git push`, `git lfs push` or a git query in the clone failed."""
 
 
 class PushRefusedError(PushError):
@@ -75,36 +85,55 @@ async def run_git(
     return code, lines
 
 
-async def _git_value(args: list[str], cwd: Path) -> str:
-    code, lines = await run_git(args, cwd)
+def push_env(token: str | None) -> dict[str, str]:
+    """Environment of the push commands: the write token, and no credential prompt."""
+    env = push_config(GITHUB_URL, token)
+    if token:
+        env[TOKEN_ENV] = token
+    return env
+
+
+async def current_branch(git: WorkspaceGit) -> str:
+    """Return the branch checked out in the clone; `PushError` on a detached HEAD."""
+    try:
+        return await git.value("symbolic-ref", "--quiet", "--short", "HEAD")
+    except RunnerError as exc:
+        raise PushError(str(exc)) from exc
+
+
+async def _has_lfs(git: WorkspaceGit) -> bool:
+    """
+    Whether `git lfs` runs where the clone is.
+
+    Without it nothing was ever cleaned into LFS there, so a branch made there has no LFS object to upload.
+    """
+    return await git.ok("lfs", "version")
+
+
+async def _run(
+    git: WorkspaceGit, args: list[str], env: dict[str, str], log: Callable[[str], None], redact: Callable[[str], str]
+) -> None:
+    log(f"$ git {' '.join(args)}")
+    code, lines = await git(*args, env=env, redact=redact)
+    for line in lines:
+        log(line)
     if code != 0:
-        msg = f"git {' '.join(args)} failed ({code}): {' '.join(lines)}"
+        msg = f"git {args[0]} {args[1]} failed ({code}): {' '.join(lines)[-1000:]}"
         raise PushError(msg)
-    return lines[0].strip() if lines else ""
 
 
-async def current_branch(worktree: Path) -> str:
-    """Return the branch checked out in `worktree`; `PushError` on a detached HEAD."""
-    return await _git_value(["symbolic-ref", "--quiet", "--short", "HEAD"], worktree)
-
-
-async def branch_sha(worktree: Path, branch: str) -> str:
-    return await _git_value(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"], worktree)
-
-
-async def push_branch(  # noqa: PLR0913 - options are keyword-only
-    worktree: Path,
-    url: str,
+async def push_branch(
+    git: WorkspaceGit,
     branch: str,
     *,
     default_branch: str,
     token: str | None,
     log: Callable[[str], None],
-) -> None:
+) -> str:
     """
-    Push `branch` from `worktree` to `url`, given explicitly rather than through the worktree's `origin`.
+    Push `branch` to the clone's `origin`, LFS objects first, without pre-push hooks; return the commit pushed.
 
-    Refuses the default branch. Git runs with the user's config and hooks; output lines go to `log`, redacted.
+    Refuses the default branch and a branch not checked out in the clone. Output lines go to `log`, redacted.
     """
     if branch == default_branch:
         msg = f"refusing to push {branch!r}: it is the repository's default branch"
@@ -112,12 +141,20 @@ async def push_branch(  # noqa: PLR0913 - options are keyword-only
     if not branch.strip() or branch.startswith("-"):
         msg = f"refusing to push invalid branch name {branch!r}"
         raise PushRefusedError(msg)
-    redact = redactor(token)
-    args = ["push", "--porcelain", url, f"refs/heads/{branch}:refs/heads/{branch}"]
-    log(f"$ git push {url} {branch}")
-    code, lines = await run_git(args, worktree, push_config(url, token), redact)
-    for line in lines:
-        log(line)
-    if code != 0:
-        msg = f"git push of {branch!r} failed ({code}): {' '.join(lines)[-1000:]}"
-        raise PushError(msg)
+    checked_out = await current_branch(git)
+    if checked_out != branch:
+        msg = f"the clone is on {checked_out!r}, not the run's branch {branch!r}"
+        raise PushRefusedError(msg)
+    env, redact = push_env(token), redactor(token)
+    if await _has_lfs(git):
+        await _run(git, ["lfs", "push", "origin", branch], env, log, redact)
+    else:
+        log("git-lfs is not installed here: no LFS object to push")
+    await _run(
+        git,
+        ["push", "--no-verify", "--porcelain", "origin", f"refs/heads/{branch}:refs/heads/{branch}"],
+        env,
+        log,
+        redact,
+    )
+    return await git.value("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}")

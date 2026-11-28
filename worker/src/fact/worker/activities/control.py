@@ -1,35 +1,25 @@
 """
 Control activities: bookkeeping a workflow needs around its steps.
 
-- `mark_task_done`: delete the task's file on the run's branch and commit that, so the PR (squash-merged) lands the
-  work and the task's completion as one commit.
 - `record_run_started` and `record_run_finished`: move the run row through the runs API; the start also records the
   worker version the run is pinned to and its home SHA.
 - `record_run_waiting`: mark the run `waiting` while it sleeps without a gate (a usage limit), then `running` again.
 """
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import httpx
 from fact.core.activity_contract import (
-    MARK_TASK_DONE,
     RECORD_RUN_FINISHED,
     RECORD_RUN_STARTED,
     RECORD_RUN_WAITING,
-    MarkTaskDoneInput,
     RunFinishedInput,
     RunStartedInput,
     RunWaitingInput,
 )
 from fact.core.enums import RunStatus
-from fact.core.github import GitHubAppConfigError
 from fact.core.logging import bind_run, get_logger
-from fact.core.project_config import ConfigError, load_project_config
-from fact.core.settings import Settings, get_settings
-from fact.core.tasks import TaskSource, parse_key, source_for
-from fact.worker.git_push import run_git
 from fact.worker.loader import home_sha_of
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -44,81 +34,10 @@ def _non_retryable(message: str) -> ApplicationError:
     return ApplicationError(message, non_retryable=True)
 
 
-def _home_worktree(spec: MarkTaskDoneInput) -> Path:
-    repos = spec.handle.repos
-    name = spec.home_repo or next(iter(repos), None)
-    if name is None or name not in repos:
-        msg = f"home repository {name!r} is not in the workspace"
-        raise _non_retryable(msg)
-    return Path(repos[name])
-
-
-async def _git_code(args: list[str], worktree: Path) -> tuple[int, list[str]]:
-    """
-    Run git in the worktree as a person would: their config and the repository's hooks apply.
-
-    Signing is off because nobody is there to unlock a key; pathspecs are literal.
-    """
-    return await run_git(["--literal-pathspecs", "-c", "commit.gpgSign=false", *args], worktree)
-
-
-async def _git(args: list[str], worktree: Path) -> None:
-    code, lines = await _git_code(args, worktree)
-    if code != 0:
-        msg = f"git {' '.join(args)} failed ({code}): {' '.join(lines)}"
-        raise RuntimeError(msg)
-
-
-def _task_source(worktree: Path, settings: Settings) -> TaskSource | None:
-    try:
-        config = load_project_config(worktree)
-    except ConfigError as exc:
-        raise _non_retryable(str(exc)) from exc
-    try:
-        return source_for(config, settings, worktree)
-    except GitHubAppConfigError:  # a file task in a project whose source is GitHub: nothing to mark here
-        return None
-
-
 class ControlActivities:
-    def __init__(self, api_base_url: str, http_client: httpx.AsyncClient, settings: Settings | None = None) -> None:
+    def __init__(self, api_base_url: str, http_client: httpx.AsyncClient) -> None:
         self._base = api_base_url.rstrip("/") + API_PREFIX
         self._http = http_client
-        self._settings = settings
-
-    @activity.defn(name=MARK_TASK_DONE)
-    async def mark_task_done(self, spec: MarkTaskDoneInput) -> bool:
-        """Commit `chore(<id>): mark done`, deleting the task file, on the run's branch; False when nothing to do."""
-        with bind_run(spec.run_id):
-            if spec.task.path is None and parse_key(spec.task.key).kind != "task":
-                log.info("mark_task_done_skipped", reason="an issue is closed when its PR merges, not by a commit")
-                return False
-            worktree = _home_worktree(spec)
-            source = _task_source(worktree, self._settings or get_settings())
-            if source is None:
-                log.info("mark_task_done_skipped", reason="the task source cannot be read")
-                return False
-            rel = spec.task.path  # where the task was on the default branch when the run started
-            if rel is None:
-                msg = f"task {spec.task.key} has no file path"
-                raise _non_retryable(msg)
-            if (worktree / rel).exists():
-                try:
-                    source.mark_done(worktree, spec.task.key)
-                except KeyError as exc:  # the file at `rel` no longer holds this task
-                    raise _non_retryable(str(exc)) from exc
-            elif (await _git_code(["cat-file", "-e", f"HEAD:{rel}"], worktree))[0] != 0:
-                log.info("mark_task_done_skipped", reason="already deleted on the branch")  # by us, or the agent
-                return False
-            # Deleted in the worktree, still in HEAD: commit the deletion (also a retry after a failed commit).
-            await _git(["rm", "-q", "--cached", "--ignore-unmatch", "--", rel], worktree)
-            message = f"chore({spec.task.id}): mark done"
-            code, lines = await _git_code(["commit", "-q", "-m", message, "--", rel], worktree)
-            if code != 0:  # a hook refused it: retrying would only refuse it again
-                msg = f"git commit failed ({code}): {' '.join(lines)}"
-                raise _non_retryable(msg)
-            log.info("task_marked_done", task_key=spec.task.key, path=rel)
-            return True
 
     @activity.defn(name=RECORD_RUN_STARTED)
     async def record_run_started(self, spec: RunStartedInput) -> None:

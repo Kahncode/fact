@@ -10,6 +10,7 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     POST_REPLIES,
+    PUSH_BRANCH,
     REQUEST_REVIEW,
     SYNC_BASE,
     WAIT_FOR_CI,
@@ -23,6 +24,7 @@ from fact.core.activity_contract import (
     OpenChangeSetInput,
     PostCostCommentInput,
     PostRepliesInput,
+    PushBranchInput,
     RequestReviewInput,
     ReviewEvent,
     ReviewEventKind,
@@ -70,6 +72,11 @@ class FakePRSteps:
 
     def of(self, name: str) -> list:
         return [arg for n, arg in self.calls if n == name]
+
+    @activity.defn(name=PUSH_BRANCH)
+    async def push_branch(self, spec: PushBranchInput) -> str:
+        self._call(PUSH_BRANCH, spec)
+        return "pushed"
 
     @activity.defn(name=OPEN_CHANGE_SET)
     async def open_change_set(self, spec: OpenChangeSetInput) -> list[PRRef]:

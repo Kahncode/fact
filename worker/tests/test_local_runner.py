@@ -258,17 +258,3 @@ async def test_a_workspace_left_behind_keeps_its_unpushed_commits(runner: LocalR
     assert _git("rev-parse", "HEAD", cwd=clone) == head
     for handle in (left, other):
         await runner.teardown(handle)
-
-
-async def test_fetch_updates_the_workspace_clone(runner: LocalRunner, remote: Path, tmp_path: Path) -> None:
-    handle = await runner.prepare(_spec())
-    pusher = tmp_path / "pusher"
-    _git("clone", str(remote), str(pusher), cwd=tmp_path)
-    _git("-c", "user.name=p", "-c", "user.email=p@example.com", "commit", "--allow-empty", "-m", "main", cwd=pusher)
-    _git("push", "origin", "HEAD:main", cwd=pusher)
-
-    await runner.fetch(handle, FULL_NAME)
-
-    clone = Path(handle.repos[FULL_NAME])
-    assert _git("rev-parse", "origin/main", cwd=clone) == _git("rev-parse", "HEAD", cwd=pusher)
-    await runner.teardown(handle)
