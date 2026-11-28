@@ -81,7 +81,7 @@ uv run fact inbox read 3
 
 ## Letting fact pick up work
 
-Instead of starting each task by hand, keep `fact dev` running: the scheduler is on at every API start and runs every ready task. Check it, or stop and resume it:
+Instead of starting each task by hand, keep `fact dev` running: the scheduler is on (unless you turned it off) and runs every ready task. Check it, or stop and resume it:
 
 ```
 uv run fact scheduler status
@@ -97,7 +97,7 @@ Every 30 seconds it starts the open issues labelled `fact:ready` (or, for a proj
 - `fact scheduler status` shows what the next tick would start, why the others wait, and the usage it last read with each window's reset time.
 - On Windows, the worker keeps the PC from sleeping while a run is active (`worker.keep_awake`).
 
-The scheduler ticks inside the API. In dev (`env` `local`, `test` or `dev`) it ticks every `concurrency.scheduler_interval_seconds` (30) and is on at every API start; `fact scheduler off` stops it until `fact scheduler on` or the next API start. Elsewhere there is no loop and no switch: an outside cron or webhook calls `POST /api/v1/scheduler/tick`. Check `fact scheduler status` before leaving it on: tasks whose past runs failed are retried. See `docs/ARCHITECTURE.md`.
+The scheduler ticks inside the API. In dev (`env` `local`, `test` or `dev`) it ticks every `concurrency.scheduler_interval_seconds` (30) and is on on a fresh database; `fact scheduler off` stops it until `fact scheduler on`, across API restarts. Elsewhere there is no loop and no switch: an outside cron or webhook calls `POST /api/v1/scheduler/tick`. Check `fact scheduler status` before leaving it on: tasks whose past runs failed are retried. See `docs/ARCHITECTURE.md`.
 
 ## Workspaces
 

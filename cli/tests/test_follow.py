@@ -40,7 +40,9 @@ class Clock:
 def scheduler(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> FakeScheduler:
     fake = FakeScheduler()
     transport = httpx.MockTransport(fake.handle)
-    monkeypatch.setattr(projects, "make_client", lambda: httpx.Client(base_url=settings.api_url, transport=transport))
+    monkeypatch.setattr(
+        projects, "make_client", lambda *_: httpx.Client(base_url=settings.api_url, transport=transport)
+    )
     return fake
 
 
@@ -91,6 +93,12 @@ def test_upgrades_once_main_moved_and_no_run_is_active(
     assert restarted[0].argv == [str(settings.pinned_dir / "factory" / NEW)]
     assert follower.pinned == NEW
     assert follower.pending is None
+    scheduler.up = False  # the restarted API keeps the switch off, and is not answering yet
+    follower()
+    scheduler.up = True
+    clock.now += 1
+    follower()
+    assert scheduler.on  # on again, as it was before the upgrade
 
 
 def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
@@ -101,14 +109,27 @@ def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
     scheduler.on = False
     remote["main"] = NEW
     assert _tick(follower, clock) is not None
-    scheduler.on, scheduler.up = True, False  # the restarted API starts with it on, and is not answering yet
-
-    follower()
-    scheduler.up = True
     clock.now += 1
     follower()
 
     assert not scheduler.on
+
+
+def test_a_restarted_follower_still_turns_the_scheduler_back_on(
+    settings: Settings, scheduler: FakeScheduler, remote: dict[str, str]
+) -> None:
+    clock = Clock()
+    remote["main"] = NEW
+    scheduler.active = 1
+    assert _tick(_follower(settings, clock), clock) is None  # pending; then `fact dev --follow` is restarted
+    assert not scheduler.on
+
+    restarted = _follower(settings, clock)
+    scheduler.active = 0
+    assert _tick(restarted, clock) is not None  # the switch reads off now, but the follower turned it off
+    clock.now += 1
+    restarted()
+    assert scheduler.on
 
 
 @pytest.mark.parametrize("error", [follow.PinError("uv sync failed"), PermissionError("current is locked")])

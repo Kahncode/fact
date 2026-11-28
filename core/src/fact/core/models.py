@@ -1,5 +1,5 @@
 """
-ORM models: projects, repositories, runs, steps, events, notifications, usage windows.
+ORM models: projects, repositories, runs, steps, events, notifications, usage windows, the scheduler switch.
 
 Only Postgres-compatible column types. Enum values are stored as plain strings (see `fact.core.enums`).
 """
@@ -159,4 +159,14 @@ class UsageWindow(Base):
     window: Mapped[str] = mapped_column(String(50))
     utilization: Mapped[float] = mapped_column(Float)  # 0..1
     resets_at: Mapped[datetime] = _ts(nullable=False)
+    updated_at: Mapped[datetime] = _ts(nullable=False, default_now=True)
+
+
+class SchedulerSwitch(Base):
+    """Dev only: whether the API's loop ticks (`fact scheduler on|off`); one row (`id` 1), none means on."""
+
+    __tablename__ = "scheduler_switch"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    on: Mapped[bool] = mapped_column(Boolean)
     updated_at: Mapped[datetime] = _ts(nullable=False, default_now=True)

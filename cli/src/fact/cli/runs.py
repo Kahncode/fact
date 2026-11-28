@@ -24,7 +24,11 @@ def _fail(message: str) -> typer.Exit:
 
 
 def call_api(method: str, path: str, **kwargs: Any) -> Any:  # noqa: ANN401
-    """Call the API and return its JSON; HTTP errors come back as `httpx.HTTPStatusError` for the caller to read."""
+    """
+    Call the API and return its JSON; HTTP errors come back as `httpx.HTTPStatusError` for the caller to read.
+
+    The client retries for a few seconds while the API restarts (`projects.make_client`); still unreachable, it fails.
+    """
     with projects.make_client() as client:
         try:
             response = client.request(method, path, **kwargs)

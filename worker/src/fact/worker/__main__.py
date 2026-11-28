@@ -39,7 +39,7 @@ from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.activity_workers import Activity, activity_workers
-from fact.worker.client import connect
+from fact.worker.client import api_http, connect
 from fact.worker.deployments import deployment_config, set_current_version
 from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
@@ -192,7 +192,7 @@ async def run() -> None:
     github = _github_app(settings)
     runner = LocalRunner(settings, github=github)
     projects = await load_projects(settings, runner)
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
+    async with api_http(HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)
         workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
         for worker in workers:

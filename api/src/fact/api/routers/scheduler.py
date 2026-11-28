@@ -6,8 +6,8 @@ The scheduler: run a tick, preview the next one, and (dev only) turn the in-proc
 - `GET /scheduler`: whether this API ticks by itself, whether it is on, and the last tick.
 - `GET /scheduler/preview`: what the next tick would start and why the others wait, with the usage gate's last answer.
 - `GET /scheduler/active`: runs queued, running or waiting, for the worker's keep-awake.
-- `POST /scheduler/on|off` (`dev_router`, mounted only in dev): flip the loop; the state lives in this process and
-  is on at every API start.
+- `POST /scheduler/on|off` (`dev_router`, mounted only in dev): flip the loop; the state lives in the database
+  (`fact.api.scheduler_switch`), so an API restart keeps it, and is on when never set.
 """
 
 from datetime import datetime
@@ -16,6 +16,7 @@ from typing import Annotated
 from fact.api.deps import get_session
 from fact.api.run_counts import active_by_project
 from fact.api.scheduler import SchedulerPreview, SchedulerRuntime, find_ready, preview, run_tick
+from fact.api.scheduler_switch import is_on, set_on
 from fact.core.scheduler import TickResult
 from fact.core.settings import Settings
 from fastapi import APIRouter, Depends, Request
@@ -40,13 +41,13 @@ class ActiveRuns(BaseModel):
     active: int
 
 
-def _state(request: Request) -> SchedulerState:
+async def _state(request: Request, session: AsyncSession) -> SchedulerState:
     settings: Settings = request.app.state.settings
     runtime: SchedulerRuntime = request.app.state.scheduler
     dev = settings.is_dev_environment()
     return SchedulerState(
         in_process=dev,
-        on=runtime.on if dev else None,
+        on=await is_on(session) if dev else None,
         interval_seconds=settings.concurrency.scheduler_interval_seconds if dev else None,
         last_tick_at=runtime.last_tick_at,
         last_tick=runtime.last_tick,
@@ -73,17 +74,17 @@ async def active_runs(session: Session) -> ActiveRuns:
 
 
 @router.get("/scheduler")
-async def scheduler_state(request: Request) -> SchedulerState:
-    return _state(request)
+async def scheduler_state(request: Request, session: Session) -> SchedulerState:
+    return await _state(request, session)
 
 
 @dev_router.post("/scheduler/on")
-async def scheduler_on(request: Request) -> SchedulerState:
-    request.app.state.scheduler.on = True
-    return _state(request)
+async def scheduler_on(request: Request, session: Session) -> SchedulerState:
+    await set_on(session, on=True)
+    return await _state(request, session)
 
 
 @dev_router.post("/scheduler/off")
-async def scheduler_off(request: Request) -> SchedulerState:
-    request.app.state.scheduler.on = False
-    return _state(request)
+async def scheduler_off(request: Request, session: Session) -> SchedulerState:
+    await set_on(session, on=False)
+    return await _state(request, session)
