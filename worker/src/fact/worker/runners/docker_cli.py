@@ -5,8 +5,10 @@ Values the container's commands get (a token among them) reach `docker exec` thr
 `--env NAME` without a value: never in argv, so never in a process listing, a log line or the container's config.
 
 Every `docker exec` process is already the leader of its own process group. The command runs under a small `sh`
-wrapper that writes its pid (so the group id) to a file in the container's `/tmp` and stays the group's leader; on
-timeout or cancel a second `docker exec` kills that group, since killing the `docker` client stops nothing inside.
+wrapper that writes its pid (so the group id) to a file in the container's `/tmp` and stays the group's leader. When
+the command ends, a second `docker exec` kills that group, since killing the `docker` client stops nothing inside: on
+timeout or cancel to stop the command, and after a normal exit too, so background children (`server &`) die with the
+command as they do with the local runner.
 """
 
 import os
@@ -28,13 +30,12 @@ USER = "fact"
 LABEL_RUN = "fact.run"  # the run id, on the run's container and volume
 CLI_TIMEOUT = 300.0  # `docker run` may wait on a busy daemon
 KILL_TIMEOUT = 30.0
-# `$0` is the pid file; the wrapper stays the group's leader so the group id is its pid
-_WRAPPER = 'echo $$ > "$0"; "$@"; code=$?; rm -f "$0"; exit $code'
-# waits up to 5 s for a command that has not written its pid yet
-_KILL = (
-    'i=0; while [ ! -s "$0" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; '
-    '[ -s "$0" ] && kill -KILL -- "-$(cat "$0")"; rm -f "$0"; true'
-)
+# `$0` is the pid file, left for the kill to read and remove; the wrapper stays the group's leader so the group id is
+# its pid
+_WRAPPER = 'echo $$ > "$0"; "$@"'
+_KILL_GROUP = '[ -s "$0" ] && kill -KILL -- "-$(cat "$0")" 2>/dev/null; rm -f "$0"; true'
+# a stopped or cancelled command may not have written its pid yet: wait up to 5 s for it
+_KILL = 'i=0; while [ ! -s "$0" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done; ' + _KILL_GROUP
 _HOST_CWD = Path(tempfile.gettempdir())  # the client touches no file; any existing folder will do
 
 
@@ -119,7 +120,7 @@ async def exec_stream(
     env: Mapping[str, str],
     timeout: float | None,  # noqa: ASYNC109 - enforced by `stream`
 ) -> AsyncIterator[ExecOutput]:
-    """Run `argv` in the running container; on timeout or cancel kill its process group inside, then end the stream."""
+    """Run `argv` in the running container; when it ends (exit, timeout or cancel) kill its process group inside."""
     pidfile = f"/tmp/fact-exec-{uuid.uuid4().hex}.pid"  # noqa: S108 - the container's own /tmp
     names = [flag for name in sorted(env) for flag in ("--env", name)]
     args = [DOCKER, "exec", "--workdir", str(workdir), *names, container, "sh", "-c", _WRAPPER, pidfile, *argv]
@@ -128,16 +129,17 @@ async def exec_stream(
     try:
         async for item in stream(proc, timeout):
             if isinstance(item, ExecExit):
-                if item.timed_out:
-                    await _kill_group(container, pidfile)
+                # after a normal exit the pid file is written (or never will be): no need to wait for it
+                await _kill_group(container, pidfile, wait=item.timed_out)
                 ended = True
             yield item
     finally:
         if not ended:  # cancelled, or the caller stopped reading
-            await _kill_group(container, pidfile)
+            await _kill_group(container, pidfile, wait=True)
 
 
-async def _kill_group(container: str, pidfile: str) -> None:
-    code, lines = await docker(["exec", container, "sh", "-c", _KILL, pidfile], KILL_TIMEOUT)
+async def _kill_group(container: str, pidfile: str, *, wait: bool) -> None:
+    script = _KILL if wait else _KILL_GROUP
+    code, lines = await docker(["exec", container, "sh", "-c", script, pidfile], KILL_TIMEOUT)
     if code != 0:
         log.warning("exec_kill_failed", container=container, exit_code=code, output=lines[-5:])

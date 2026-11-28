@@ -21,7 +21,9 @@ from fact.worker.runners.docker_cli import container_name, run_args, volume_name
 FULL_NAME = "acme/widget"
 RESUMED = "fact/task-resumed"
 TOKEN = "ghs_fake_read_token_4f2a"  # noqa: S105 - a fake, looked for where it must never be
-DOCKERFILE = """FROM alpine:3
+# pinned by digest so every run builds from the same base; `apk add` still needs the Alpine mirrors
+BASE_IMAGE = "alpine:3.24.4@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf"
+DOCKERFILE = f"""FROM {BASE_IMAGE}
 RUN apk add --no-cache git git-lfs && adduser -D -u 1000 fact && mkdir /workspace && chown fact:fact /workspace
 COPY --chown=fact:fact remote.git /srv/remote.git
 """
@@ -136,6 +138,7 @@ def test_run_args_order_and_no_host_mount() -> None:
 async def test_prepare_exec_teardown(runner: DockerRunner, run_id: str, app: FakeApp) -> None:
     with structlog.testing.capture_logs() as logs:
         handle = await runner.prepare(_spec(run_id))
+        prepare_tokens = len(app.asked)
         out = await _out(
             runner, handle, "sh", "-c", 'pwd; cat README.md; git branch --show-current; echo "$GITHUB_TOKEN"'
         )
@@ -145,6 +148,8 @@ async def test_prepare_exec_teardown(runner: DockerRunner, run_id: str, app: Fak
     assert handle.repos == {FULL_NAME: "/workspace/widget"}
     assert out.splitlines() == ["/workspace/widget", "hello", "fact/task-146", TOKEN]
     assert app.asked[-1] == ([FULL_NAME], {"contents": "read"})
+    # one each for the clone and the LFS-smudging checkout, not one for all of prepare
+    assert app.asked[:prepare_tokens] == [([FULL_NAME], {"contents": "read"})] * len(["clone", "checkout"])
     assert "fact/task-146" in workspace_md
     assert "fact[bot]" in config
     assert any(e["event"] == "workspace_ready" for e in logs)
@@ -166,6 +171,15 @@ async def test_timeout_kills_the_command_inside(runner: DockerRunner, run_id: st
     assert end == ExecExit(exit_code=-1, timed_out=True)
     top = _run("docker", "top", container_name(run_id))
     assert "sleep 30" not in top
+
+
+async def test_background_children_die_with_their_command(runner: DockerRunner, run_id: str) -> None:
+    handle = await runner.prepare(_spec(run_id))
+
+    _, end = await _collect(runner.exec(handle, ["sh", "-c", "sleep 302 &"]))
+
+    assert end == ExecExit(exit_code=0, timed_out=False)
+    assert "sleep 302" not in _run("docker", "top", container_name(run_id))
 
 
 async def test_exec_starts_a_stopped_container(runner: DockerRunner, run_id: str) -> None:

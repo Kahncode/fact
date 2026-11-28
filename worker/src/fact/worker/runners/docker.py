@@ -5,8 +5,9 @@ No command of a run touches the host's disk: the worker drives the container thr
 (`docker_cli.py`), and `WorkspaceHandle` paths are container paths (`/workspace/<repo name>`).
 
 GitHub access inside is a `contents: read` installation token for the run's repositories, minted (or reused while
-fresh) for each command and handed to it in its environment as `GITHUB_TOKEN`. Git reads it through a credential
-helper set in the container user's global git config, which holds the helper, never the token.
+fresh) for each command, prepare's network git commands included, and handed to it in its environment as
+`GITHUB_TOKEN`. Git reads it through a credential helper set in the container user's global git config, which holds
+the helper, never the token.
 """
 
 import posixpath
@@ -120,10 +121,10 @@ class DockerRunner:
             volume = docker_cli.volume_name(spec.run_id)
             await docker_cli.docker_ok(["volume", "create", "--label", f"{docker_cli.LABEL_RUN}={spec.run_id}", volume])
             await docker_cli.docker_ok(docker_cli.run_args(spec.run_id, image, self._pool, spec.sandbox_args))
-            env = await self._token_env([repo.full_name for repo in spec.repos])
             helper = ["config", "--global", "credential.https://github.com.helper", _CREDENTIAL_HELPER]
-            await self._git(spec.run_id, helper, WORKSPACE, env)
-            branches = {repo.full_name: await self._clone(spec.run_id, repo, env) for repo in spec.repos}
+            await self._git(spec.run_id, helper, WORKSPACE, {})
+            full_names = [repo.full_name for repo in spec.repos]
+            branches = {repo.full_name: await self._clone(spec.run_id, repo, full_names) for repo in spec.repos}
             await self._write(spec.run_id, WORKSPACE / WORKSPACE_MD, workspace_md(spec, branches))
         except BaseException:
             await docker_cli.remove(spec.run_id)
@@ -131,22 +132,31 @@ class DockerRunner:
         log.info("workspace_ready", run_id=spec.run_id, image=image, repos=[r.full_name for r in spec.repos])
         return self._handle(spec, branches)
 
-    async def _clone(self, run_id: str, repo: RepoCheckout, env: Mapping[str, str]) -> str:
-        """Clone in full (LFS included) and check out the task branch: from `origin/<branch>` if pushed, else new."""
+    async def _clone(self, run_id: str, repo: RepoCheckout, full_names: Sequence[str]) -> str:
+        """
+        Clone in full (LFS included) and check out the task branch: from `origin/<branch>` if pushed, else new.
+
+        Each network command (the clone, the checkout that downloads LFS objects) gets its own fresh token, so a long
+        prepare never outlives the one it started with.
+        """
         clone = _clone(repo.full_name)
-        await self._git(run_id, ["clone", "--no-checkout", self.remote_url(repo.full_name), str(clone)], WORKSPACE, env)
-        await self._git(run_id, ["lfs", "install", "--local"], clone, env)
+        url = self.remote_url(repo.full_name)
+        await self._git(
+            run_id, ["clone", "--no-checkout", url, str(clone)], WORKSPACE, await self._token_env(full_names)
+        )
+        await self._git(run_id, ["lfs", "install", "--local"], clone, {})
         remote_branch = f"refs/remotes/origin/{repo.branch}"
         try:
-            await self._git(run_id, ["rev-parse", "--verify", "--quiet", remote_branch], clone, env)
+            await self._git(run_id, ["rev-parse", "--verify", "--quiet", remote_branch], clone, {})
             resumed = True
         except RunnerError:
             resumed = False
         start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
-        await self._git(run_id, ["checkout", "--no-track", "-B", repo.branch, start], clone, env)  # LFS smudges here
+        checkout = ["checkout", "--no-track", "-B", repo.branch, start]
+        await self._git(run_id, checkout, clone, await self._token_env(full_names))  # LFS smudges here
         name, email = await commit_identity(self._github, self._settings)
-        await self._git(run_id, ["config", "user.name", name], clone, env)
-        await self._git(run_id, ["config", "user.email", email], clone, env)
+        await self._git(run_id, ["config", "user.name", name], clone, {})
+        await self._git(run_id, ["config", "user.email", email], clone, {})
         log.info("repo_cloned", repo=repo.full_name, branch=repo.branch, resumed=resumed)
         return repo.branch
 
