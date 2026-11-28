@@ -1,4 +1,8 @@
-"""`classify_signals`: review signals from the change set's paths, the API snapshot's diff and the task's state."""
+"""
+`classify_signals`: review signals from the change set's paths, the API snapshot's diff and the task's state.
+
+The diff is read through a real `LocalRunner`, as the worker reads it in the `workspace` zone.
+"""
 
 import json
 import subprocess
@@ -10,6 +14,7 @@ from fact.core.classification import ChangedPath, ClassifySignal
 from fact.core.settings import ProjectRef, Settings
 from fact.core.types import WorkspaceHandle
 from fact.worker.activities.classify import ClassifyActivities, matches, removes_or_changes
+from fact.worker.runners import LocalRunner
 from temporalio.exceptions import ApplicationError
 
 REPO = "acme/widget"
@@ -84,7 +89,7 @@ async def _classify(project: Path, worktree: Path) -> list[ClassifySignal]:
     settings = Settings(projects=[ProjectRef(name="acme", home=REPO, path=project)])
     handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)})
     spec = ClassifySignalsInput(run_id="r1", project="acme", task_key=KEY, handle=handle)
-    return await ClassifyActivities(settings).classify_signals(spec)
+    return await ClassifyActivities(LocalRunner(settings), settings).classify_signals(spec)
 
 
 def _named(signals: list[ClassifySignal]) -> dict[str, list[str]]:
@@ -142,8 +147,9 @@ async def test_a_closed_task(project: Path, worktree: Path) -> None:
 async def test_an_unregistered_project_fails_for_good(worktree: Path) -> None:
     handle = WorkspaceHandle(run_id="r1", root=str(worktree.parent), task_queue="sandbox", repos={REPO: str(worktree)})
     spec = ClassifySignalsInput(run_id="r1", project="acme", task_key=KEY, handle=handle)
+    settings = Settings(projects=[])
     with pytest.raises(ApplicationError) as exc:
-        await ClassifyActivities(Settings(projects=[])).classify_signals(spec)
+        await ClassifyActivities(LocalRunner(settings), settings).classify_signals(spec)
     assert exc.value.non_retryable
 
 

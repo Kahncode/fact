@@ -88,11 +88,20 @@ class CriterionResult(_Input):
     evidence: str = ""
 
 
+class PushBranchInput(_Input):
+    run_id: str
+    handle: WorkspaceHandle
+    repo: str  # full name, a key of `handle.repos`
+    branch: str  # the branch the workspace checked out (`WorkspaceHandle.branches`); the only one this pushes
+    default_branch: str  # never pushed
+    attempt: int = 1  # of stage `push`: a CI fix or a review round pushes again as the next attempt
+
+
 class OpenChangeSetInput(_Input):
     run_id: str
     task: Task
-    handle: WorkspaceHandle
-    branch: str  # the branch the workspace checked out (`WorkspaceHandle.branches`); the only one this pushes
+    handle: WorkspaceHandle  # only its repository names: the PR reads the pushed branch from GitHub
+    branch: str  # the branch `push_branch` pushed
     title: str  # PR title, written by the last agent session
     summary: str  # top of the PR description, written by the last agent session
     check_results: list[CheckResult] = Field(default_factory=list)
@@ -120,7 +129,7 @@ class WaitForCIInput(_Input):
     run_id: str
     stage_id: str
     attempt: int
-    pr: PRRef  # CI is read for `pr.head_sha`, the commit `open_change_set` pushed
+    pr: PRRef  # CI is read for `pr.head_sha`, the branch's head `open_change_set` read after the push
     timeout_s: float = 3600.0  # give up waiting for checks still running after this long
     no_checks_grace_s: float = 300.0  # no check or status at all after this long: the repository has no CI
 

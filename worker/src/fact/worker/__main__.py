@@ -40,8 +40,10 @@ from fact.worker.activities.gates import GateActivities
 from fact.worker.activities.handoff import HandoffActivities
 from fact.worker.activities.merge import MergeActivities
 from fact.worker.activities.notify import NotifyActivities
+from fact.worker.activities.push import PushActivities
 from fact.worker.activities.review_wait import ReviewWaitActivities
 from fact.worker.activities.shell import ShellActivities
+from fact.worker.activities.task_done import TaskDoneActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.activity_workers import Activity, activity_workers
@@ -136,13 +138,15 @@ def factory_activities(
     harness = ClaudeCodeHarness()
     agent = AgentActivities({harness.name: harness}, reporter)
     change_set = ChangeSetActivities(github, reporter)
-    control = ControlActivities(settings.api_url, http, settings)
+    control = ControlActivities(settings.api_url, http)
     gates = GateActivities(settings.api_url, http)
     conversation = ConversationActivities(github)
     return [
         workspace.prepare_workspace,
         workspace.teardown_workspace,
         workspace.sync_base,
+        PushActivities(runner, github, reporter).push_branch,
+        TaskDoneActivities(runner).mark_task_done,
         ShellActivities(runner, reporter).shell_step,
         agent.agent_step,
         change_set.open_change_set,
@@ -156,12 +160,11 @@ def factory_activities(
         conversation.app_slug,
         AnswerWaitActivities(github).wait_for_answer,
         MergeActivities(github).merge_change_set,
-        control.mark_task_done,
         control.record_run_started,
         control.record_run_waiting,
         control.record_run_finished,
         TaskStatusActivities(settings).report_status,
-        ClassifyActivities(settings).classify_signals,
+        ClassifyActivities(runner, settings).classify_signals,
         gates.record_gate_opened,
         gates.record_gate_answered,
         NotifyActivities(settings.api_url, http).notify,

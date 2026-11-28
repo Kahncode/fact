@@ -12,6 +12,7 @@ from fact.core.tasks.base import (
     source_for,
 )
 from fact.core.tasks.files import FileTaskSource
+from fact.core.tasks.front_matter import task_file_id
 from fact.core.tasks.github_issues import GitHubIssuesSource
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "is_issue",
     "parse_key",
     "source_for",
+    "task_file_id",
 ]

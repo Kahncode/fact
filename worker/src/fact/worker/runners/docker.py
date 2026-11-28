@@ -190,12 +190,6 @@ class DockerRunner:
     async def _git(self, run_id: str, args: Sequence[str], cwd: PurePosixPath, env: Mapping[str, str]) -> str:
         return (await self._run(run_id, ["git", *args], cwd, {**_GIT_ENV, **env})).strip()
 
-    async def fetch(self, handle: WorkspaceHandle, full_name: str) -> None:
-        """Fetch the container's clone of `full_name`, so its `origin/*` branches are current."""
-        clone = _workdir(handle.repos[full_name])
-        env = await self._token_env(list(handle.repos))
-        await self._git(handle.run_id, ["fetch", "--prune", "origin"], clone, env)
-
     def exec(
         self,
         handle: WorkspaceHandle,
@@ -204,7 +198,11 @@ class DockerRunner:
         env: Mapping[str, str] | None = None,
         timeout: float | None = None,
     ) -> AsyncIterator[ExecOutput]:
-        """Run `argv` in the run's container, in `cwd` under `/workspace`, with `env` plus a fresh read token."""
+        """
+        Run `argv` in the run's container, in `cwd` under `/workspace`, with `env` plus a fresh read token.
+
+        An `env` holding `GITHUB_TOKEN` (the push's write token) replaces it: no read token is minted for that command.
+        """
         check_run_id(handle.run_id)
         if not argv:
             msg = "argv is empty"
@@ -219,7 +217,7 @@ class DockerRunner:
         env: dict[str, str],
         timeout: float | None,  # noqa: ASYNC109 - enforced by `stream`
     ) -> AsyncIterator[ExecOutput]:
-        token = await self._token_env(list(handle.repos))
+        token = {} if TOKEN_ENV in env else await self._token_env(list(handle.repos))  # the push brings its own
         async for item in self._exec(handle.run_id, argv, cwd, {**token, **env}, timeout):  # the caller's env wins
             yield item
 

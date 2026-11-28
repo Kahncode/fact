@@ -18,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
         MERGE_CHANGE_SET,
         OPEN_CHANGE_SET,
         POST_COST_COMMENT,
+        PUSH_BRANCH,
         WAIT_FOR_CI,
         CriterionResult,
         MergeChangeSetInput,
@@ -33,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         assumptions_output,
         change_set_input,
         default_title,
+        push_input,
         spec_ambiguous_output,
         text_output,
     )
@@ -41,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
 if TYPE_CHECKING:
     from fact.sdk.workflow import FactWorkflow
 
+PUSH_STAGE = "push"
 OPEN_PR_STAGE = "open_pr"
 CI_STAGE = "wait_for_ci"
 FIX_CI_STAGE = "fix_ci"
@@ -76,7 +79,7 @@ class PullRequestSteps:
     async def open_change_set(
         self: FactWorkflow, title: str, summary: str, criteria: Sequence[CriterionResult] = ()
     ) -> list[PRRef]:
-        """Push and open the PR, and post its link on the task; `criteria`, from a review, replace the task's list."""
+        """Push, open the PR, and post its link on the task; `criteria`, from a review, replace the task's list."""
         spec = change_set_input(
             self.input,
             self.handle,
@@ -94,9 +97,9 @@ class PullRequestSteps:
 
     async def push_change_set(self: FactWorkflow, criteria: Sequence[CriterionResult] | None = None) -> list[PRRef]:
         """
-        Push the branch again and update its PR, as the next attempt of `open_pr`; sets `prs` and `pushed_at`.
+        Push the branch again and update its PR, as the next attempts of `push` and `open_pr`; sets `prs`, `pushed_at`.
 
-        The description takes the new assumptions, and `criteria` (from a new review) when given.
+        `push_branch` pushes from the workspace; `open_change_set` then reads the branch from GitHub. The description takes the new assumptions, and `criteria` (from a new review) when given.
         """
         if self._change_set is None:
             msg = "no change set: call `open_change_set` first"
@@ -110,6 +113,9 @@ class PullRequestSteps:
             "spec_ambiguous": self.spec_ambiguous,
         }
         spec = self._change_set.model_copy(update=update)
+        pushed = push_input(self.input, spec, self.next_attempt(PUSH_STAGE))
+        await self._activity(PUSH_BRANCH, pushed, str)
+        self.note_outcome(PUSH_STAGE, pushed.attempt, StepOutcome.PASSED)
         self.prs = await self._activity(OPEN_CHANGE_SET, spec, list[PRRef])
         self.pushed_at = workflow.now()
         self.note_outcome(OPEN_PR_STAGE, spec.attempt, StepOutcome.PASSED)

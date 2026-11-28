@@ -4,11 +4,11 @@ import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import yaml
 from fact.core.logging import get_logger
 from fact.core.tasks.base import FILE_PREFIX, ReadyItem, TaskStatus
+from fact.core.tasks.front_matter import split_front_matter
 from fact.core.types import PRRef, Task
 from pydantic import ValidationError
 
@@ -28,22 +28,6 @@ class _Entry:
     moved: bool = False
 
 
-def _split_front_matter(text: str) -> tuple[dict[str, Any], str]:
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].strip() != "---":
-        msg = "missing YAML front matter"
-        raise ValueError(msg)
-    for i, line in enumerate(lines[1:], start=1):
-        if line.strip() == "---":
-            meta = yaml.safe_load("".join(lines[1:i]))
-            if not isinstance(meta, dict):
-                msg = "front matter is not a mapping"
-                raise ValueError(msg)
-            return meta, "".join(lines[i + 1 :]).strip("\r\n")
-    msg = "unterminated YAML front matter"
-    raise ValueError(msg)
-
-
 def _criteria(body: str) -> list[str]:
     found: list[str] = []
     in_section = False
@@ -56,7 +40,7 @@ def _criteria(body: str) -> list[str]:
 
 
 def _parse(path: Path, rel: str) -> _Entry:
-    meta, body = _split_front_matter(path.read_text(encoding="utf-8-sig"))
+    meta, body = split_front_matter(path.read_text(encoding="utf-8-sig"))
     if "title" not in meta:
         msg = "front matter has no title"
         raise ValueError(msg)

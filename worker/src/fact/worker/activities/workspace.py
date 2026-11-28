@@ -5,7 +5,8 @@ Workspace activities.
 activity it heartbeats (the worker's wrapper), so a retry starts only once Temporal has given up on (and cancelled) a
 stale attempt.
 
-`sync_base`: merge each repository's default branch into the run's branch, reported as a `shell` step.
+`sync_base`: fetch, then merge each repository's default branch into the run's branch, all through `Runner.exec`,
+reported as a `shell` step.
 
 `teardown_workspace`: remove it once the run's work is pushed; bookkeeping, not reported as a step.
 """
@@ -17,6 +18,7 @@ from fact.worker.base_merge import merge_base
 from fact.worker.reporting import StepContext, StepReporter
 from fact.worker.runners import Runner
 from fact.worker.runners.base import RunnerError
+from fact.worker.workspace_git import WorkspaceGit
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
@@ -68,9 +70,7 @@ class WorkspaceActivities:
             worktree = spec.handle.repos.get(repo.full_name)
             if not worktree:
                 continue
-            await self._runner.fetch(
-                spec.handle, repo.full_name
-            )  # a `RunnerError` here is retried: the network may come back
+            await self._fetch(spec.handle, worktree)
             try:
                 result = await merge_base(
                     self._runner, spec.handle, worktree, repo.default_branch, step.log, verify_only=spec.verify_only
@@ -88,6 +88,13 @@ class WorkspaceActivities:
             step.finish(StepOutcome.FAILED_CHECKS, f"{files} files conflict with the base branch", outputs)
         else:
             step.finish(StepOutcome.PASSED, "merged the base branch" if merged else "up to date", outputs)
+
+    async def _fetch(self, handle: WorkspaceHandle, worktree: str) -> None:
+        """`git fetch` with the read token the runner gives every command; a `RunnerError` is retried (the network)."""
+        code, lines = await WorkspaceGit(self._runner, handle, worktree)("fetch", "--prune", "origin")
+        if code != 0:
+            msg = f"git fetch failed ({code}) in {worktree}: {' '.join(lines)[-1000:]}"
+            raise RunnerError(msg)
 
     @activity.defn(name=TEARDOWN_WORKSPACE)
     async def teardown_workspace(self, handle: WorkspaceHandle) -> None:

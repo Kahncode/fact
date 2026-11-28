@@ -12,6 +12,7 @@ from fact.core.activity_contract import (
     OPEN_CHANGE_SET,
     POST_COST_COMMENT,
     PREPARE_WORKSPACE,
+    PUSH_BRANCH,
     RECORD_GATE_OPENED,
     RECORD_RUN_STARTED,
     REPORT_STATUS,
@@ -48,7 +49,9 @@ async def test_green_path() -> None:
     order = [n for n, _ in fakes.calls]
     assert order[0] == RECORD_RUN_STARTED
     assert order.index(PREPARE_WORKSPACE) < order.index(AGENT_STEP)
-    assert order.index(MARK_TASK_DONE) < order.index(OPEN_CHANGE_SET) < order.index(WAIT_FOR_CI)
+    assert (
+        order.index(MARK_TASK_DONE) < order.index(PUSH_BRANCH) < order.index(OPEN_CHANGE_SET) < order.index(WAIT_FOR_CI)
+    )
     assert order.index(WAIT_FOR_CI) < order.index(CLASSIFY_SIGNALS) < order.index(LABEL_CHANGE_SET)
     assert order.index(LABEL_CHANGE_SET) < order.index(MERGE_CHANGE_SET)
     assert order[-2:] == [TEARDOWN_WORKSPACE, POST_COST_COMMENT]  # the cost comment covers every step
