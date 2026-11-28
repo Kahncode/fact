@@ -57,3 +57,4 @@ class NotificationKind(StrEnum):
     RUN_FAILED = "run_failed"  # a run ended badly: failed, or gave up and needs a person
     RUN_FINISHED = "run_finished"  # a run ended any other way worth telling a person about
     TASK_HELD = "task_held"  # a task carries `fact:needs-human`: nothing starts it until a person releases it
+    ERROR = "error"  # the factory refused something a person must fix, such as a project version it cannot load

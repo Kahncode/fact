@@ -60,6 +60,8 @@ class WorkspaceSpec(_Model):
     run_id: str
     task_key: str
     repos: list[RepoCheckout]
+    sandbox: str | None = None  # the workflow's sandbox (`.fact/sandboxes/<name>/`), else the pool's default
+    sandbox_args: list[str] = Field(default_factory=list)  # the workflow's extra `docker run` arguments
 
 
 class WorkspaceHandle(_Model):
@@ -178,6 +180,7 @@ class RunInput(_Model):
     auto_merge: bool = True  # the project's `auto_merge`: fact merges a change set classified `auto_merge`
     merge_method: MergeMethod = "squash"  # the project's `merge_method`
     review_spec_ambiguous: bool = True  # the project's `classify.review_spec_ambiguous`
+    default_sandbox: str | None = None  # the project's `runner_pool.default_sandbox`
 
 
 class RunResult(_Model):

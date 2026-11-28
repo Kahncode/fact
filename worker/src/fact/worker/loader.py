@@ -4,7 +4,8 @@ Load each project's workflows from its home repository, pinned to one SHA.
 For a project: ask the home repository for its default branch's SHA (`git ls-remote`), clone it and check that SHA
 out detached at `pinned_dir/projects/<project>/<sha>` (reused when it is already there), and import
 `.fact/workflows/*.py` under module names unique to the project and SHA. The modules are found by a meta path finder,
-so the workflow sandbox can import them again by name.
+so the workflow sandbox can import them again by name. When the version's `runner_pool` is `docker`, build the sandbox
+images its workflows name (`sandboxes.py`); a version whose images cannot be built is refused like a broken workflow.
 """
 
 import importlib
@@ -15,18 +16,27 @@ import inspect
 import re
 import shutil
 import sys
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
 
 from fact.core.activity_contract import workflow_queue
 from fact.core.generations import SHORT_SHA, version_id
 from fact.core.logging import get_logger
+from fact.core.project_config import (
+    FACT_DIR,
+    PROJECT_FILE,
+    SANDBOX_NAME,
+    ConfigError,
+    RunnerPoolConfig,
+    load_project_config,
+)
 from fact.core.settings import REPO_ROOT
 from fact.sdk.workflow import FactWorkflow
 from fact.worker.git_push import run_git
 from fact.worker.runners.workspace_files import make_writable_and_retry
+from fact.worker.sandboxes import SandboxError, build_sandboxes
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 log = get_logger(__name__)
@@ -53,6 +63,8 @@ class ProjectWorkflows:
     checkout: Path
     version: str  # `<factory SHA>+<home SHA>`: the worker deployment build id
     workflows: tuple[type[FactWorkflow], ...]
+    runner_pool: RunnerPoolConfig = field(default_factory=RunnerPoolConfig)  # from the version's `.fact/project.yaml`
+    sandbox_images: Mapping[str, str] = field(default_factory=dict)  # sandbox name -> image tag (`docker` pool)
 
     @property
     def task_queue(self) -> str:
@@ -202,7 +214,39 @@ async def load_project(  # noqa: PLR0913
     if sha is None:
         sha = await default_branch_sha(url, pinned_dir)
     checkout = await pinned_checkout(url, pinned_dir, project, sha)
+    pool = runner_pool_of(checkout)
     workflows = load_workflows(project, checkout, sha)
+    images = await _sandbox_images(project, checkout, pool, workflows) if pool.kind == "docker" else {}
     names = [cls.__name__ for cls in workflows]
     log.info("project_workflows_loaded", project=project, home_sha=sha, workflows=names, checkout=str(checkout))
-    return ProjectWorkflows(project, home, sha, checkout, version_id(factory, sha), workflows)
+    return ProjectWorkflows(project, home, sha, checkout, version_id(factory, sha), workflows, pool, images)
+
+
+def runner_pool_of(checkout: Path) -> RunnerPoolConfig:
+    """Return the checkout's `runner_pool`; a home without `.fact/project.yaml` runs on the default (`local`) pool."""
+    if not (checkout / FACT_DIR / PROJECT_FILE).is_file():
+        return RunnerPoolConfig()
+    try:
+        return load_project_config(checkout).runner_pool
+    except ConfigError as exc:
+        raise WorkflowLoadError(str(exc)) from exc
+
+
+async def _sandbox_images(
+    project: str, checkout: Path, pool: RunnerPoolConfig, workflows: tuple[type[FactWorkflow], ...]
+) -> Mapping[str, str]:
+    """Build every sandbox the workflows name (or the pool's default for those naming none); refuse if one fails."""
+    names: set[str] = set()
+    for cls in workflows:
+        name = cls.sandbox or pool.default_sandbox
+        if name is None:
+            msg = f"project {project}: workflow {cls.__name__} names no sandbox and runner_pool has no default_sandbox"
+            raise WorkflowLoadError(msg)
+        if not re.match(SANDBOX_NAME, name):
+            msg = f"project {project}: workflow {cls.__name__} names an invalid sandbox {name!r}"
+            raise WorkflowLoadError(msg)
+        names.add(name)
+    try:
+        return await build_sandboxes(project, checkout, names)
+    except SandboxError as exc:
+        raise WorkflowLoadError(str(exc)) from exc

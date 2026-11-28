@@ -14,6 +14,8 @@ REPO_FILE = "repo.yaml"
 DEFAULT_MAX_CONCURRENT_RUNS = 2  # a runner pool's runs queued, running or waiting at once, unless configured
 
 Command = list[str]  # an argv list, never a shell string
+SANDBOX_NAME = r"^[a-z0-9][a-z0-9._-]*$"  # a folder under `.fact/sandboxes/`, and part of its Docker image tag
+DOCKER_ONLY_FIELDS = frozenset({"memory", "cpus", "pids", "run_args", "default_sandbox"})
 
 
 class ConfigError(ValueError):
@@ -74,10 +76,28 @@ class ClassifyConfig(_Model):
 
 
 class RunnerPoolConfig(_Model):
-    """Where the project's runs execute, and how many at once: its only concurrency cap."""
+    """
+    Where the project's runs execute, and how many at once: its only concurrency cap.
 
-    kind: Literal["local"] = "local"  # this machine; containers and hosted pools come later
+    `local` runs on this machine; `docker` runs each in its own container, with the resource limits, extra
+    `docker run` arguments and default sandbox (`.fact/sandboxes/<name>/`) below. Those fields mean nothing on
+    `local`, so setting one there is refused.
+    """
+
+    kind: Literal["local", "docker"] = "local"
     max_concurrent_runs: int = Field(default=DEFAULT_MAX_CONCURRENT_RUNS, ge=1)  # queued, running or waiting
+    memory: str = Field(default="8g", pattern=r"^[0-9]+[bkmgBKMG]?$")  # `docker run --memory`
+    cpus: float = Field(default=4, gt=0)
+    pids: int = Field(default=4096, ge=1)  # `docker run --pids-limit`
+    run_args: list[str] = []  # after fact's own `docker run` arguments, before the workflow's
+    default_sandbox: str | None = Field(default=None, pattern=SANDBOX_NAME)  # for a workflow naming none
+
+    @model_validator(mode="after")
+    def _docker_fields_only_on_docker(self) -> Self:
+        if self.kind != "docker" and (misplaced := sorted(DOCKER_ONLY_FIELDS & self.model_fields_set)):
+            msg = f"{', '.join(misplaced)}: only for kind docker, not {self.kind}"
+            raise ValueError(msg)
+        return self
 
 
 class ProjectConfig(_Model):

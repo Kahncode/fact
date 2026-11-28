@@ -8,7 +8,8 @@ each the `control` and workspace activity workers of the same version (`activity
 queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). Every activity heartbeats through
 `heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
-are active the worker keeps Windows awake (`keep_awake.py`).
+are active the worker keeps Windows awake (`keep_awake.py`). Loading a version whose `runner_pool` is `docker` builds
+its sandbox images (`sandboxes.py`); when `docker info` fails the worker exits with a message naming Docker.
 Started by `fact dev`, it stops once its stop file appears (`fact.core.stop_file`): like Ctrl-C, the main task is
 cancelled and the workers shut down gracefully, so a running agent step ends `AGENT_INTERRUPTED`.
 """
@@ -45,12 +46,13 @@ from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.activity_workers import Activity, activity_workers
 from fact.worker.client import api_http, connect
 from fact.worker.deployments import deployment_config
-from fact.worker.generation import make_current, serve
+from fact.worker.generation import make_current, notify_refused, serve
 from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
 from fact.worker.loader import ProjectWorkflows, sandbox_runner
 from fact.worker.reporting import StepReporter
 from fact.worker.runners import LocalRunner
+from fact.worker.sandboxes import DockerUnavailableError
 from fact.worker.scheduler import delete_leftover_schedule
 from temporalio.client import Client
 from temporalio.worker import Worker
@@ -169,6 +171,7 @@ async def run(generation: str | None = None) -> None:
     served = await serve(settings, runner, generation)
     projects = served.projects
     async with api_http(HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
+        await notify_refused(http, settings.api_url, served.refused)
         activities = factory_activities(settings, http, runner, github)
         workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
         for worker in workers:
@@ -202,6 +205,9 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(run(args.generation))
     except KeyboardInterrupt, asyncio.CancelledError:
         get_logger("fact.worker").info("worker_stopped")
+    except DockerUnavailableError as exc:  # a project uses the docker pool: the worker cannot serve it
+        get_logger("fact.worker").error("docker_unavailable", error=str(exc))
+        sys.exit(f"fact worker: {exc}")
 
 
 if __name__ == "__main__":

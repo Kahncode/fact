@@ -63,3 +63,18 @@ def test_merge_method_is_checked(tmp_path: Path) -> None:
     _write(tmp_path, "project.yaml", BASE + "merge_method: fast-forward\n")
     with pytest.raises(ConfigError, match="merge_method"):
         load_project_config(tmp_path)
+
+
+def test_docker_pool_parses(tmp_path: Path) -> None:
+    pool = "runner_pool: {kind: docker, memory: 4g, run_args: [--network, none], default_sandbox: python}\n"
+    _write(tmp_path, "project.yaml", BASE + pool)
+    loaded = load_project_config(tmp_path).runner_pool
+    assert (loaded.kind, loaded.memory, loaded.cpus, loaded.pids) == ("docker", "4g", 4, 4096)
+    assert loaded.run_args == ["--network", "none"]
+    assert loaded.default_sandbox == "python"
+
+
+def test_docker_only_field_refused_on_local(tmp_path: Path) -> None:
+    _write(tmp_path, "project.yaml", BASE + "runner_pool: {kind: local, memory: 4g}\n")
+    with pytest.raises(ConfigError, match="memory: only for kind docker"):
+        load_project_config(tmp_path)

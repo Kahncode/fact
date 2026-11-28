@@ -245,7 +245,8 @@
           "prs_ready",
           "run_failed",
           "run_finished",
-          "task_held"
+          "task_held",
+          "error"
         ],
         "title": "NotificationKind",
         "type": "string"
