@@ -4,7 +4,8 @@
 At start it adopts every recorded process still alive (same pid and start time) whose command matches its spec,
 stops a live one whose command differs (another build), and removes the records of the others. Then, every poll, it
 starts what is missing (once `wait_for` accepts connections), starts again a child that exited (after
-`RESTART_DELAY_S`) and prints each child's log prefixed by its name. Killing `fact dev` leaves the children running
+`RESTART_DELAY_S`) and prints each child's log prefixed by its name. A restarter, polled every loop, may start new
+children, replace some or stop some for good (`fact dev --pinned`'s worker generations). Killing `fact dev` leaves the children running
 for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children or a child exiting
 with its record removed by someone else (`fact shutdown`), or a restarter raising `StopRequestedError` stops them all,
 last spec first; runs stay open in Temporal.
@@ -17,6 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from fact.cli.processes import Child, ChildSpec, RunDir, find_process, start, stop
@@ -36,9 +38,31 @@ class StopRequestedError(Exception):
     """Raised to stop every child and return 0; its message says why."""
 
 
-# Called on every poll; returns the specs of children to restart (matched by name), or None to keep them running.
+@dataclass(frozen=True)
+class Changes:
+    """What a restarter asks for: children to start or restart (matched by name), and children to stop for good."""
+
+    start: Sequence[ChildSpec] = ()
+    stop: Sequence[str] = ()
+
+    def __bool__(self) -> bool:
+        """Return whether there is anything to do."""
+        return bool(self.start or self.stop)
+
+
+# Called on every poll; returns the changes to make, or None to keep the children as they are.
 # It raises `StopRequestedError` to stop them all.
-Restarter = Callable[[], Sequence[ChildSpec] | None]
+Restarter = Callable[[], Changes | None]
+
+
+def chain(*restarters: Restarter) -> Restarter:
+    """Poll every restarter in turn and merge what they ask for."""
+
+    def poll() -> Changes | None:
+        found = [c for r in restarters if (c := r())]
+        return Changes([s for c in found for s in c.start], [n for c in found for n in c.stop]) if found else None
+
+    return poll
 
 
 def emit(name: str, width: int, line: str) -> None:
@@ -176,7 +200,22 @@ class Supervisor:
                 stop(child, self.run_dir)
                 self._forget(spec.name)
             self.specs[spec.name] = spec
+            self.width = max(self.width, len(spec.name))
             self._not_before.pop(spec.name, None)
+
+    def retire(self, names: Sequence[str]) -> None:
+        """Stop the children named and forget their specs, so they are not started again."""
+        for name in names:
+            if (child := self.children.get(name)) is not None:
+                self.log(f"stopping {name}")
+                stop(child, self.run_dir)
+                self._forget(name)
+            self.specs.pop(name, None)
+            self._not_before.pop(name, None)
+
+    def apply(self, changes: Changes) -> None:
+        self.replace(changes.start)
+        self.retire(changes.stop)
 
     def stop_all(self) -> None:
         for name in reversed(self.specs):
@@ -196,8 +235,8 @@ class Supervisor:
             self.check_stop_files()  # before `reap`, so a child that stopped on request is not started again
             self.reap()
             self.start_missing()
-            if restarter is not None and (replacements := restarter()):
-                self.replace(replacements)
+            if restarter is not None and (changes := restarter()):
+                self.apply(changes)
             time.sleep(POLL_S)
 
 
@@ -221,7 +260,7 @@ def run_all(specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | 
     """
     Adopt or start `specs` and keep them running until Ctrl-C (130) or a stop request (0), then stop them.
 
-    `restarter`, polled every loop, may return specs to restart some children with (`fact dev --follow`).
+    `restarter`, polled every loop, may return the children to start, restart or stop (`fact dev --pinned`).
     """
     supervisor = Supervisor(specs, run_dir)
     code = 0

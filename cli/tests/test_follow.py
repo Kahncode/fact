@@ -4,7 +4,6 @@ import httpx
 import pytest
 from fact.cli import follow, projects
 from fact.cli.follow import CHECK_INTERVAL_S, Follower
-from fact.cli.processes import ChildSpec
 from fact.core.settings import Settings
 
 OLD, NEW = "a" * 40, "b" * 40
@@ -61,15 +60,16 @@ def _follower(settings: Settings, clock: Clock) -> Follower:
         "main",
         uv="uv",
         pinned=OLD,
-        commands=lambda checkout: [ChildSpec("api", [str(checkout)])],
         log=lambda _: None,
         clock=clock,
     )
 
 
-def _tick(follower: Follower, clock: Clock) -> list[ChildSpec] | None:
+def _tick(follower: Follower, clock: Clock) -> str:
+    """Run one check; return the SHA pinned after it."""
     clock.now += CHECK_INTERVAL_S
-    return follower()
+    follower()
+    return follower.pinned
 
 
 def test_upgrades_once_main_moved_and_no_run_is_active(
@@ -77,21 +77,17 @@ def test_upgrades_once_main_moved_and_no_run_is_active(
 ) -> None:
     clock = Clock()
     follower = _follower(settings, clock)
-    assert _tick(follower, clock) is None  # main has not moved
+    assert _tick(follower, clock) == OLD  # main has not moved
     assert scheduler.on
 
     remote["main"] = NEW
     scheduler.active = 1
-    assert _tick(follower, clock) is None  # pending: nothing new starts while the run goes on
+    assert _tick(follower, clock) == OLD  # pending: nothing new starts while the run goes on
     assert not scheduler.on
     assert follower.pending == NEW
 
     scheduler.active = 0
-    restarted = _tick(follower, clock)
-
-    assert restarted is not None
-    assert restarted[0].argv == [str(settings.pinned_dir / "factory" / NEW)]
-    assert follower.pinned == NEW
+    assert _tick(follower, clock) == NEW  # pinned: `fact dev` starts it
     assert follower.pending is None
     scheduler.up = False  # the restarted API keeps the switch off, and is not answering yet
     follower()
@@ -108,7 +104,7 @@ def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
     follower = _follower(settings, clock)
     scheduler.on = False
     remote["main"] = NEW
-    assert _tick(follower, clock) is not None
+    assert _tick(follower, clock) == NEW
     clock.now += 1
     follower()
 
@@ -121,12 +117,12 @@ def test_a_restarted_follower_still_turns_the_scheduler_back_on(
     clock = Clock()
     remote["main"] = NEW
     scheduler.active = 1
-    assert _tick(_follower(settings, clock), clock) is None  # pending; then `fact dev --follow` is restarted
+    assert _tick(_follower(settings, clock), clock) == OLD  # pending; then `fact dev --follow` is restarted
     assert not scheduler.on
 
     restarted = _follower(settings, clock)
     scheduler.active = 0
-    assert _tick(restarted, clock) is not None  # the switch reads off now, but the follower turned it off
+    assert _tick(restarted, clock) == NEW  # the switch reads off now, but the follower turned it off
     clock.now += 1
     restarted()
     assert scheduler.on
@@ -148,6 +144,6 @@ def test_a_failed_check_keeps_the_upgrade_pending(
         raise error
 
     monkeypatch.setattr(follow, "pin", broken_pin)
-    assert _tick(follower, clock) is None
+    assert _tick(follower, clock) == OLD
     assert follower.pending == NEW
     assert not scheduler.on
