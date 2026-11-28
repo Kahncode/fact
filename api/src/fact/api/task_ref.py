@@ -138,3 +138,19 @@ async def check_task(source: TaskSource, key: str) -> TaskCheck | None:
     ]
     gated_by = await source.not_ready_ancestor(task.key)
     return TaskCheck(task=task, missing_deps=missing, gated_by=gated_by, closed=await source.is_closed(task.key))
+
+
+async def urgent_ready(settings: Settings, ref: ProjectRef) -> list[str] | None:
+    """
+    Read the project's urgent ready tasks (`TaskSource.urgent_ready`), from one filtered read.
+
+    None without a checkout or for a `files` source, which is not even fetched: it has no read cheaper than a listing.
+    """
+    path = project_path(ref)
+    if path is None:
+        return None
+    config = await asyncio.to_thread(load_project_config, path)
+    if config.task_source.kind == "files":
+        return None
+    async with project_tasks(settings, ref) as tasks:
+        return await tasks.source.urgent_ready() if tasks else None

@@ -12,9 +12,10 @@ held with `Hold.PARENT`, and tasks whose dependencies are not done with `Hold.DE
 tick's read (`close_parents`) closes the ready parents without a work type with nothing left to wait on and labels
 failure-capped issues; the preview never writes. A failure-capped issue whose label a person removed is released (`failure_cap.released`).
 
-Tasks come from each project's kept listing (`fact.api.listings`), listed again once older than
-`concurrency.listing_max_age_seconds` and not at all while the project's pool is full; run history is read at every
-tick, and every start reads its task again, so an old listing never starts a closed or taken task.
+Tasks come from each project's kept listing (`fact.api.listings`), listed again once empty, older than
+`concurrency.listing_max_age_seconds` or missing an urgent ready task (one filtered read per tick, GitHub only), and
+not at all while the project's pool is full; run history is read at every tick, and every start reads its task again,
+so an old listing never starts a closed or taken task.
 
 `run_tick` is the scheduler's tick, in this process: `find_ready`, `plan_starts`, the usage gate only when something
 is chosen, then each start through `start_task` (`POST /runs/start` with `scheduled: true`, called directly). It
@@ -33,7 +34,7 @@ from fact.api.failure_cap import hold_failure_capped, released
 from fact.api.listings import Listing, Listings
 from fact.api.routers.run_start import RunStart, start_task
 from fact.api.run_counts import active_by_project, run_histories
-from fact.api.task_ref import TaskReadError, project_tasks
+from fact.api.task_ref import TaskReadError, project_tasks, urgent_ready
 from fact.api.usage_gate import UsageGate
 from fact.core.logging import get_logger
 from fact.core.project_config import DEFAULT_MAX_CONCURRENT_RUNS, ConfigError
@@ -132,16 +133,30 @@ def apply_history(task: ReadyTask, history: list[RunRecord], max_failed: int) ->
 
 async def _listing(settings: Settings, listings: Listings, ref: ProjectRef, active: int, *, tick: bool) -> Listing:
     """
-    Return the listing to plan from: the kept one while it is fresh, or while the pool is full (nothing would start).
+    Return the listing to plan from: the kept one, unless the tick should list the project again.
 
-    The tick lists again (closing finished parents) once it is older than `concurrency.listing_max_age_seconds`; the
-    preview plans from any kept listing, however old, and lists only a project never listed.
+    The tick lists again (closing finished parents) when its pool has room and the kept listing is empty, older than
+    `concurrency.listing_max_age_seconds`, or missing an urgent ready task (`_urgent_unlisted`). The preview plans from
+    any kept listing, however old, and lists only a project never listed.
     """
     kept = listings.get(ref.name)
-    if kept and (not tick or listings.fresh(ref.name) or active >= kept.max_concurrent_runs):
+    if kept and (not tick or active >= kept.max_concurrent_runs):
+        return kept
+    if kept and kept.tasks and listings.fresh(ref.name) and not await _urgent_unlisted(settings, ref, kept):
         return kept
     tasks, cap = await _ready_in(settings, ref, close_parents=tick)
     return listings.keep(ref.name, tasks, cap)
+
+
+async def _urgent_unlisted(settings: Settings, ref: ProjectRef, kept: Listing) -> bool:
+    """Whether the source shows a `priority:urgent` ready task the kept listing lacks, from one filtered read."""
+    try:
+        urgent = await urgent_ready(settings, ref) or []
+    except (ConfigError, TaskReadError) as exc:
+        log.warning("scheduler_urgent_poll_failed", project=ref.name, error=str(exc))
+        return False
+    listed = {t.task_key.lower() for t in kept.tasks}
+    return any(key.lower() not in listed for key in urgent)
 
 
 async def find_ready(

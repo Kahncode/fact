@@ -216,3 +216,53 @@ async def test_no_run_starts_on_an_issue_closed_since_the_listing(
     response = await client.post("/api/v1/runs/start", json={"task_key": "gh:acme/app#12"})
     assert response.status_code == HTTPStatus.CONFLICT
     assert "is closed" in response.text
+
+
+def _listings(github: FakeIssues) -> list[str]:
+    """Record the `labels` of each issue list the scheduler asks GitHub for."""
+    asked: list[str] = []
+    handle = github.handle
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/app/issues":
+            asked.append(request.url.params["labels"])
+        return handle(request)
+
+    github.handle = recorded  # type: ignore[method-assign]
+    return asked
+
+
+def _new_issue(github: FakeIssues, n: int, *labels: str) -> None:
+    names = [READY, "type:bug", *labels]
+    github.issues[n] = {
+        "number": n,
+        "title": "New",
+        "body": "",
+        "state": "open",
+        "labels": [{"name": x} for x in names],
+    }
+
+
+async def test_between_listings_only_a_new_urgent_issue_makes_the_tick_list_again(
+    app: FastAPI, github: FakeIssues
+) -> None:
+    asked, temporal = _listings(github), _fakes(app, github)
+    await run_tick(app.state)  # lists, starts #12; the pool (2) has one slot left
+    _new_issue(github, 30)
+    await run_tick(app.state)
+    assert asked == [READY, f"{READY},priority:urgent"]  # #30 waits for the next full listing
+    _new_issue(github, 31, "priority:urgent")
+    await run_tick(app.state)
+    assert asked[2:] == [f"{READY},priority:urgent", READY]
+    assert [w.split("-")[4] for w in temporal.started] == ["12", "31"]
+
+
+async def test_an_empty_listing_is_listed_again_at_every_tick(app: FastAPI, github: FakeIssues) -> None:
+    for issue in github.issues.values():
+        issue["labels"] = [label for label in issue["labels"] if label["name"] != READY]
+    asked, temporal = _listings(github), _fakes(app, github)
+    await run_tick(app.state)
+    _new_issue(github, 30)
+    await run_tick(app.state)
+    assert asked == [READY, READY]
+    assert len(temporal.started) == 1

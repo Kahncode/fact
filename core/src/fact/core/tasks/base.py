@@ -137,6 +137,14 @@ class TaskSource(Protocol):
         """Whether the task was closed in its source (done or dropped); an unknown task is closed too."""
         ...
 
+    async def urgent_ready(self) -> list[str] | None:
+        """
+        Keys of the open ready tasks marked `priority:urgent`, from one read the source filters itself.
+
+        None when the source has no such cheap read; the scheduler then waits for its next full listing.
+        """
+        ...
+
     async def comment(self, key: str, text: str) -> None: ...
 
     async def set_labels(self, key: str, add: list[str], remove: list[str]) -> None: ...

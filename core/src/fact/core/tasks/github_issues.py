@@ -29,6 +29,7 @@ from fact.core.logging import get_logger
 from fact.core.tasks.base import GITHUB_PREFIX, ReadyItem, dependency_key, parse_key
 from fact.core.tasks.github_fields import (
     READY_LABEL,
+    URGENT_LABEL,
     acceptance_criteria,
     complexity,
     depends_on_lines,
@@ -77,16 +78,6 @@ class GitHubIssuesSource(GitHubIssueWrites):
         token = await self.app.installation_token(repo)
         async with self.app.api_client(token.token) as client:
             yield client
-
-    @staticmethod
-    async def _pages(client: httpx.AsyncClient, url: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        next_url: str | None = url
-        while next_url:
-            response = await client.get(next_url)
-            items.extend(response.json())
-            next_url = response.links.get("next", {}).get("url")
-        return items
 
     def _remember(self, issue: dict[str, Any], repo: str) -> str:
         key = issue_key(issue, repo)
@@ -241,6 +232,17 @@ class GitHubIssuesSource(GitHubIssueWrites):
         issue = await self._issue(key)
         return issue is None or issue.get("state") == "closed"
 
+    async def urgent_ready(self) -> list[str] | None:
+        """Open `fact:ready` issues labelled `priority:urgent`, in one call: GitHub filters by both labels."""
+        async with self._client(self.repo) as client:
+            return [issue_key(i, self.repo) for i in await self._ready_issues(client, f"{READY_LABEL},{URGENT_LABEL}")]
+
+    async def _ready_issues(self, client: httpx.AsyncClient, labels: str) -> list[dict[str, Any]]:
+        """Open issues (not PRs) carrying every label in `labels` (comma-separated), filtered by GitHub."""
+        owner, name = split_full_name(self.repo)
+        url = f"/repos/{owner}/{name}/issues?state=open&labels={labels}&per_page={PER_PAGE}"
+        return [i for i in await self._pages(client, url) if "pull_request" not in i]
+
     async def deps_done(self, task: Task) -> bool:
         return not await self._waiting_on(task)
 
@@ -269,10 +271,8 @@ class GitHubIssuesSource(GitHubIssueWrites):
         `include_waiting`: also the others, with `waiting_on` and `gated_by` set. Parents without a work type are never
         listed; `close_parents` closes those with nothing left to wait on.
         """
-        owner, name = split_full_name(self.repo)
-        url = f"/repos/{owner}/{name}/issues?state=open&labels={READY_LABEL}&per_page={PER_PAGE}"
         async with self._client(self.repo) as client:
-            issues = [i for i in await self._pages(client, url) if "pull_request" not in i]
+            issues = await self._ready_issues(client, READY_LABEL)
             for issue in issues:
                 self._remember(issue, self.repo)
             tasks = [(issue, await self._task(client, issue)) for issue in issues]

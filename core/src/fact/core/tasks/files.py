@@ -176,6 +176,10 @@ class FileTaskSource:
         status = await asyncio.to_thread(self.status, key)
         return status in {None, "done"}
 
+    async def urgent_ready(self) -> list[str] | None:
+        """None: reading file tasks means fetching and reading every file, no cheaper than a listing."""
+        return None
+
     def status(self, key: str) -> str | None:
         entry = self._entries().get(key)
         return entry.status if entry else None
