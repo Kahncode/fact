@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 import typer
-from fact.cli import dev
+from fact.cli import dev, dev_commands
 from fact.cli.dev_lock import DevLock
 from fact.cli.main import app
 from fact.core import generations
@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 
 def test_build_commands(settings: Settings, tmp_path: Path) -> None:
-    temporal, api, worker = dev.build_commands(settings, "/bin/temporal", environ={})
+    temporal, api, worker = dev_commands.build_commands(settings, "/bin/temporal", environ={})
 
     assert temporal.argv[0] == "/bin/temporal"
     assert temporal.argv[temporal.argv.index("--db-filename") + 1] == str(tmp_path / "data" / "temporal.db")
@@ -69,19 +69,19 @@ def test_a_second_dev_exits_naming_the_running_one(settings: Settings, monkeypat
     [("localhost:7233", ("localhost", 7233)), ("[::1]:7300", ("::1", 7300)), (":7233", ("localhost", 7233))],
 )
 def test_temporal_endpoint(address: str, endpoint: tuple[str, int]) -> None:
-    assert dev.temporal_endpoint(Settings(temporal={"address": address})) == endpoint
+    assert dev_commands.temporal_endpoint(Settings(temporal={"address": address})) == endpoint
 
 
 def test_temporal_endpoint_rejects_missing_port() -> None:
     with pytest.raises(typer.BadParameter, match="host:port"):
-        dev.temporal_endpoint(Settings(temporal={"address": "localhost"}))
+        dev_commands.temporal_endpoint(Settings(temporal={"address": "localhost"}))
 
 
 def test_build_commands_from_pinned(settings: Settings, tmp_path: Path) -> None:
     checkout = tmp_path / "pinned" / "abc"
     generation = Generation(id="2-abcabcabcabc", factory="abc")
-    worker = dev.worker_command(settings, checkout, generation, environ={})
-    temporal, api, _ = dev.build_commands(settings, "temporal", checkout, environ={}, workers=[worker])
+    worker = dev_commands.worker_command(settings, checkout, generation, environ={})
+    temporal, api, _ = dev_commands.build_commands(settings, "temporal", checkout, environ={}, workers=[worker])
 
     python = str(dev.venv_python(checkout))
     assert api.argv == [python, "-m", "fact.api"]
@@ -115,7 +115,7 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     started: list[list[str]] = []
 
-    def fake_run_all(specs: list, _run_dir: object, _restarter: object) -> int:
+    def fake_run_all(specs: list, _run_dir: object, _restarter: object, _on_exit: object) -> int:
         started.extend(s.argv for s in specs)
         return 130
 
@@ -134,19 +134,19 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
 
 def test_children_start_without_the_venv_activation(settings: Settings, tmp_path: Path) -> None:
     venv = tmp_path / "factory" / ".venv"
-    scripts = venv / ("Scripts" if dev.IS_WINDOWS else "bin")
+    scripts = venv / ("Scripts" if dev_commands.IS_WINDOWS else "bin")
     other = tmp_path / "tools"
     environ = {"VIRTUAL_ENV": str(venv), "PATH": os.pathsep.join([str(scripts), str(other)])}
 
-    temporal, api, worker = dev.build_commands(settings, "temporal", environ=environ)
+    temporal, api, worker = dev_commands.build_commands(settings, "temporal", environ=environ)
 
     assert api.env["PATH"] == worker.env["PATH"] == str(other)
-    assert api.unset == worker.unset == dev.VENV_VARS
+    assert api.unset == worker.unset == dev_commands.VENV_VARS
     assert temporal.unset == ()
 
 
 def test_path_is_kept_without_an_active_venv() -> None:
-    assert dev.deactivated_path({"PATH": "/bin"}) is None
+    assert dev_commands.deactivated_path({"PATH": "/bin"}) is None
 
 
 def test_dev_pinned_without_venv_fails(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,7 +155,7 @@ def test_dev_pinned_without_venv_fails(settings: Settings, monkeypatch: pytest.M
     (settings.pinned_dir / "factory" / sha / "pyproject.toml").write_text("", encoding="utf-8")
     (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
-    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir, _restarter: 0)
+    monkeypatch.setattr(dev, "run_all", lambda *_: 0)
 
     result = CliRunner().invoke(app, ["dev", "--pinned"])
 
@@ -180,7 +180,9 @@ def test_dev_follow_pins_when_nothing_is_pinned_and_supervises_with_a_follower(
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     monkeypatch.setattr(dev, "pin", fake_pin)
     supervised = []
-    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir, restarter: supervised.append(restarter) or 130)
+    monkeypatch.setattr(
+        dev, "run_all", lambda _specs, _run_dir, restarter, _on_exit: supervised.append(restarter) or 130
+    )
 
     result = CliRunner().invoke(app, ["dev", "--follow", "main"])
 

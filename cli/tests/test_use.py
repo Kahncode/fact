@@ -147,3 +147,13 @@ def test_pin_recreates_broken_checkout(
     assert use.pin(settings, sha, "uv", repo=source) == checkout
     assert _git("rev-parse", "HEAD", cwd=checkout) == sha
     assert [cwd for _, cwd in synced] == [checkout, checkout]
+
+
+def test_remote_head_and_changed_paths(source: Path, tmp_path: Path) -> None:
+    head = use.remote_head(str(tmp_path / "origin.git"), source)  # the project-home check, against a local remote
+    use.latest("main", source)
+    old = _git("rev-parse", "HEAD", cwd=source)
+
+    assert head == use.resolve_ref(source, "main")
+    assert use.changed(source, old, head, ["README.md"])
+    assert not use.changed(source, old, head, ["cli/"])

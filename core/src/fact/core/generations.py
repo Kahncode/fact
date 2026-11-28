@@ -5,7 +5,9 @@ A generation's record is `<data_dir>/run/generations/<id>.json`. `fact dev` crea
 starts a pin's worker for the first time; that worker (`python -m fact.worker --generation <id>`) records each
 project's home SHA once it has loaded it, so the generation loads the same SHAs at every later start. Ids are
 `<n>-<factory SHA[:12]>`, `n` counting up, so the newest generation is the one with the greatest `n`: only it makes
-its versions current (`docs/spec/14-dogfooding-and-safety.md`, Upgrading while it runs).
+its versions current (`docs/spec/14-dogfooding-and-safety.md`, Upgrading while it runs). A new record comes with
+`<id>.starting`, which its worker removes once through its start: a newest generation whose worker exits while it is
+there failed to start, and `fact dev` deletes it so the one before stays current.
 """
 
 import json
@@ -16,6 +18,7 @@ from pathlib import Path
 from fact.core.activity_contract import workflow_queue
 
 GENERATIONS_SUBDIR = Path("run") / "generations"
+STARTING_SUFFIX = ".starting"  # `<id>.starting`: recorded, its worker not through its start yet
 SHORT_SHA = 12  # the factory part of a version id; the home SHA stays whole
 _ID = re.compile(r"^(\d+)-([0-9a-f]{12}|unknown)$")
 
@@ -105,5 +108,27 @@ def create(directory: Path, factory: str) -> Generation:
     latest = newest(directory)
     number = 1 if latest is None else latest.number + 1
     generation = Generation(id=f"{number}-{factory[:SHORT_SHA]}", factory=factory)
+    directory.mkdir(parents=True, exist_ok=True)
+    _starting_path(directory, generation.id).touch()  # first, so the record is never seen as started too early
     write(directory, generation)
     return generation
+
+
+def _starting_path(directory: Path, generation_id: str) -> Path:
+    _number(generation_id)
+    return directory / f"{generation_id}{STARTING_SUFFIX}"
+
+
+def mark_started(directory: Path, generation_id: str) -> None:
+    """Record that the generation's worker got through its start (its versions made current, when it is the newest)."""
+    _starting_path(directory, generation_id).unlink(missing_ok=True)
+
+
+def started(directory: Path, generation_id: str) -> bool:
+    return not _starting_path(directory, generation_id).exists()
+
+
+def delete(directory: Path, generation_id: str) -> None:
+    """Forget a generation whose worker never started, so the one before it is the newest again."""
+    _path(directory, generation_id).unlink(missing_ok=True)
+    _starting_path(directory, generation_id).unlink(missing_ok=True)

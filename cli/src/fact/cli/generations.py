@@ -7,7 +7,10 @@ still needs a worker for (`fact.cli.drainage`: current, ramping or `DRAINING`). 
 
 - when `pinned/current` names another pin than the newest generation's (`fact use`, or the follower), a new
   generation is recorded, the API restarts from the new pin and the new generation's worker starts next to the old
-  ones; its worker makes its versions current;
+  ones; its worker makes its versions current (the follower also adds one of the same pin when a project's home
+  branch moves, `add`);
+- a newest generation whose worker exits before it started (`<id>.started`, written by the worker) failed: it is
+  deleted, so the one before it stays current and newest, and the next check tries again (`exited`);
 - an older generation that should run and has no worker gets one, from its own pin (after a reboot, say);
 - an older generation whose versions are all drained has its worker stopped gracefully.
 
@@ -58,6 +61,7 @@ class Generations:
         self.running: set[str] = set()  # ids of the generations with a worker spec in the supervisor
         self._next = 0.0
         self._missing: set[str] = set()  # pins already reported missing
+        self._api_build: str | None = None  # the pin the API runs from
 
     def newest(self, checkout: Path) -> Generation:
         """Return the newest generation, first recording one for `checkout` when the newest is of another pin."""
@@ -69,6 +73,7 @@ class Generations:
     def initial(self, checkout: Path, run_dir: RunDir) -> list[ChildSpec]:
         """Return the workers to run at start: the newest generation's, and each older one's still running (to adopt)."""
         newest = self.newest(checkout)
+        self._api_build = checkout.name
         records = run_dir.records()
         specs = [self._worker_spec(checkout, newest)]
         self.running = {newest.id}
@@ -101,6 +106,38 @@ class Generations:
             self._log(f"generation {generation.id}: its pin {checkout} is missing or has no .venv; not starting it")
         return None
 
+    def add(self, checkout: Path) -> list[ChildSpec]:
+        """Record a new generation of `checkout` and return its worker, after the API when it runs another pin."""
+        generation = generations.create(self.directory, checkout.name)
+        specs = [self._worker_spec(checkout, generation)]
+        if checkout.name != self._api_build:
+            self._log(f"pinned {checkout.name[:12]}: restarting the API")
+            specs.insert(0, self._api_spec(checkout))
+            self._api_build = checkout.name
+        self._log(f"starting generation {generation.id}")
+        self.running.add(generation.id)
+        return specs
+
+    def exited(self, name: str, code: int | None) -> bool:
+        """
+        Return whether to start a child that exited again: not the newest generation's worker before it started.
+
+        That generation is deleted, so the one before it stays current; the next check adds it again.
+        """
+        found = generations.all_generations(self.directory)
+        if len(found) <= 1 or name != worker_name(found[-1]):
+            return True  # the first generation has none to fall back on: it is started again
+        failed, previous = found[-1], found[-2]
+        if generations.started(self.directory, failed.id):
+            return True
+        generations.delete(self.directory, failed.id)
+        self.running.discard(failed.id)
+        self._log(
+            f"generation {failed.id}'s worker failed to start (exit code {code}): generation {previous.id} stays "
+            "current; retrying at the next check"
+        )
+        return False
+
     def _upgrade(self, start: list[ChildSpec]) -> None:
         """Start a new generation (and the API from its pin) once `pinned/current` names another pin."""
         try:
@@ -109,13 +146,14 @@ class Generations:
             return
         latest = generations.newest(self.directory)
         if latest is not None and latest.factory == checkout.name:
+            if latest.id not in self.running and (spec := self._spec(latest)) is not None:
+                self._log(f"generation {latest.id} is the newest: starting its worker")  # after a failed upgrade
+                start.append(spec)
+                self.running.add(latest.id)
             return
         if not self._ready(checkout):
             return  # `fact use` writes `current` once the pin is synced; a missing venv is reported at its start
-        generation = generations.create(self.directory, checkout.name)
-        self._log(f"pinned {checkout.name[:12]}: restarting the API and starting generation {generation.id}")
-        start += [self._api_spec(checkout), self._worker_spec(checkout, generation)]
-        self.running.add(generation.id)
+        start += self.add(checkout)
 
     def _drain(self, start: list[ChildSpec]) -> list[str]:
         """Start the older generations that should run and are not; return the workers to stop."""

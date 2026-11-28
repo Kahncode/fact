@@ -13,6 +13,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
@@ -39,6 +40,11 @@ def current_file(settings: Settings) -> Path:
 
 def factory_checkout(settings: Settings, sha: str) -> Path:
     return settings.pinned_dir / FACTORY_SUBDIR / sha
+
+
+def venv_python(checkout: Path) -> Path:
+    """Return the Python of a checkout's `.venv`, which `fact use` builds with `uv sync`."""
+    return checkout / ".venv" / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
 
 def current_pin(settings: Settings) -> Path:
@@ -135,6 +141,29 @@ def latest(ref: str, repo: Path = REPO_ROOT) -> str:
     """Fetch `origin` and return the SHA `ref` names now."""
     _run(fetch_argv(), repo, timeout=FETCH_TIMEOUT_S)
     return resolve_ref(repo, ref)
+
+
+def github_url(full_name: str) -> str:
+    return f"https://github.com/{full_name}.git"
+
+
+def remote_head(url: str, cwd: Path) -> str:
+    """Return the SHA the remote's `HEAD` (its default branch) points at, as the worker resolves a project's home."""
+    for line in _run(["git", "ls-remote", url, "HEAD"], cwd, timeout=FETCH_TIMEOUT_S).splitlines():
+        sha, _, ref = line.partition("	")
+        if ref.strip() == "HEAD" and _SHA.match(sha):
+            return sha
+    msg = f"{url} has no default branch (empty repository?)"
+    raise PinError(msg)
+
+
+def changed(repo: Path, old: str, new: str, paths: list[str]) -> bool:
+    """Return whether any of `paths` differs between commits `old` and `new` (both fetched into `repo`)."""
+    try:
+        _run(["git", "diff", "--quiet", old, new, "--", *paths], repo)
+    except PinError:  # exit code 1: they differ; anything else (an unknown commit) counts as changed too
+        return True
+    return False
 
 
 def copy_secrets(repo: Path, checkout: Path) -> None:
