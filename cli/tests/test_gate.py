@@ -84,7 +84,18 @@ def test_stop_sends_the_reason(settings: Settings, monkeypatch: pytest.MonkeyPat
     result = CliRunner().invoke(app, ["stop", "abc123", "--reason", "newer workflow"])
 
     assert result.exit_code == 0, result.output
-    assert posts == [("POST", "/api/v1/runs/abc123/stop", {"reason": "newer workflow"})]
+    assert posts == [("POST", "/api/v1/runs/abc123/stop", {"reason": "newer workflow", "force": False})]
+    assert "handoff note" in result.output
+
+
+def test_stop_force_prints_the_workspace_to_delete(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    posts = _api(monkeypatch, settings, gate=None)
+
+    result = CliRunner().invoke(app, ["stop", "abc123", "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert posts == [("POST", "/api/v1/runs/abc123/stop", {"reason": "", "force": True})]
+    assert str(settings.workspaces_dir / "abc123") in result.output
 
 
 def test_stop_of_an_unknown_workflow_id_fails(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:

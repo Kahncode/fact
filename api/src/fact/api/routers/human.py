@@ -1,17 +1,21 @@
 """
 The person in the loop, through Temporal: answer a gate, steer a run, read its live status, stop a run.
 
-A gate is answered by an update, steering is a signal, the status a query, and a stop cancels the workflow.
+A gate is answered by an update, steering is a signal, the status a query, and a stop cancels the workflow; a forced
+stop terminates it and does here what the workflow's stop handling would have done to the run and its task.
 
 Handlers are called by name from `fact.core.gates`; the API never imports `fact.sdk`.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fact.api.deps import get_session
+from fact.api.run_start import temporal_link
+from fact.api.task_ref import TaskReadError, project_tasks
 from fact.api.temporal import temporal_client
-from fact.core.enums import RunStatus
+from fact.core.activity_contract import ReportStatusInput
+from fact.core.enums import RunOutcome, RunStatus
 from fact.core.gates import (
     ANSWER_GATE,
     NOTE_MAX_CHARS,
@@ -23,7 +27,10 @@ from fact.core.gates import (
     WorkflowStatus,
 )
 from fact.core.logging import get_logger
-from fact.core.models import Run
+from fact.core.models import Event, Project, Run
+from fact.core.project_config import ConfigError
+from fact.core.settings import Settings
+from fact.core.tasks.events import report
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import update
@@ -52,11 +59,19 @@ class InstructionIn(BaseModel):
 
 class StopIn(BaseModel):
     reason: str = Field(default="", max_length=NOTE_MAX_CHARS)
+    force: bool = False  # terminate the workflow: no handoff note, no teardown
+
+
+FORCED = "forced"
 
 
 class Touched(BaseModel):
     run_id: str
     human_touches: int
+
+
+class Stopped(Touched):
+    hold_error: str = ""  # a forced stop: why the task's hold could not be applied; empty once it is
 
 
 async def _handle(request: Request, session: AsyncSession, run_id: str) -> tuple[Run, WorkflowHandle]:
@@ -128,19 +143,70 @@ async def live_status(run_id: str, request: Request, session: Session) -> Workfl
 
 
 @router.post("/runs/{run_id}/stop", status_code=status.HTTP_202_ACCEPTED)
-async def stop(run_id: str, body: StopIn, request: Request, session: Session) -> Touched:
+async def stop(run_id: str, body: StopIn, request: Request, session: Session) -> Stopped:
     """
     Cancel the run's workflow with a reason; it ends `stopped`, leaving a handoff note, its branch and its PRs.
 
     Accepted, not done: the run's own worker version handles the cancellation, and the run shows `stopped` once its
     note is written and its workspace is gone. Start the task again then.
+
+    With `force`, the workflow is terminated instead, which needs no worker: the run is recorded `stopped` and the
+    task held here, at once, with no handoff note and the workspace left on disk.
     """
     run, handle = await _handle(request, session, run_id)
     if run.status == RunStatus.FINISHED:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Run {run.workflow_id} already ended {run.outcome}")
+    if body.force:
+        return await _force_stop(request.app.state.settings, session, run, handle, body.reason)
     try:
         await handle.cancel(reason=body.reason)
     except RPCError as exc:
         raise _rpc_error(run, exc) from exc
     log.info("run_stopped", run_id=run.id, reason=body.reason)
-    return await _touch(session, run)
+    return Stopped(**(await _touch(session, run)).model_dump())
+
+
+async def _force_stop(
+    settings: Settings, session: AsyncSession, run: Run, handle: WorkflowHandle, note: str
+) -> Stopped:
+    """Terminate the workflow, record the run `stopped` (reason `forced`), then hold its task as a stopped run does."""
+    try:
+        await handle.terminate(reason=note or FORCED)
+    except RPCError as exc:
+        if exc.status != RPCStatusCode.NOT_FOUND:  # already gone from Temporal (ended, terminated by hand): record it
+            raise _rpc_error(run, exc) from exc
+        log.info("run_force_stop_not_in_temporal", run_id=run.id, error=str(exc))
+    run.status = RunStatus.FINISHED
+    run.outcome = RunOutcome.STOPPED
+    run.ended_at = datetime.now(UTC)
+    session.add(Event(run_id=run.id, type="run_stopped", payload={"reason": FORCED, "note": note}))
+    await session.commit()
+    log.info("run_stopped", run_id=run.id, reason=FORCED, note=note)
+    touched = await _touch(session, run)
+    return Stopped(**touched.model_dump(), hold_error=await _hold(settings, session, run, note))
+
+
+async def _hold(settings: Settings, session: AsyncSession, run: Run, note: str) -> str:
+    """Report the `stopped` end to the task's source, as the workflow's `report_status` would; the error, or ""."""
+    project = await session.get(Project, run.project_id)
+    ref = next((r for r in settings.projects if project is not None and r.name == project.name), None)
+    if ref is None:
+        return f"project of run {run.workflow_id} is not in fact.yaml"
+    detail = f"{FORCED}: {note}" if note else FORCED
+    spec = ReportStatusInput(
+        run_id=run.id,
+        project=ref.name,
+        task_key=run.task_key,
+        event="stopped",
+        run_url=temporal_link(settings, run.workflow_id),
+        detail=detail,
+    )
+    try:
+        async with project_tasks(settings, ref) as tasks:
+            if tasks is None:
+                return f"project {ref.name} has no local checkout: its task source cannot be reached"
+            await report(tasks.source, spec)
+    except (ConfigError, TaskReadError) as exc:
+        log.warning("run_force_stop_hold_failed", run_id=run.id, error=str(exc))
+        return str(exc)
+    return ""
