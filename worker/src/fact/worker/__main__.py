@@ -7,6 +7,8 @@ queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). 
 `heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
 are active the worker keeps Windows awake (`keep_awake.py`).
+Started by `fact dev`, it stops once its stop file appears (`fact.core.stop_file`): like Ctrl-C, the main task is
+cancelled and the workers shut down gracefully, so a running agent step ends `AGENT_INTERRUPTED`.
 """
 
 import asyncio
@@ -19,6 +21,7 @@ from fact.core.activity_contract import CONTROL_QUEUE
 from fact.core.github import GitHubApp, GitHubAppConfigError, shared_app
 from fact.core.logging import configure_logging, get_logger
 from fact.core.settings import Settings, get_settings
+from fact.core.stop_file import stop_file_path, wait_for_stop_file
 from fact.worker.activities.agent import AgentActivities
 from fact.worker.activities.answer_wait import AnswerWaitActivities
 from fact.worker.activities.change_set import ChangeSetActivities
@@ -48,6 +51,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 HTTP_TIMEOUT_S = 30.0
+_background: set[asyncio.Task[None]] = set()  # keeps the stop-file watch referenced while it runs
 
 
 class DuplicateVersionError(RuntimeError):
@@ -62,6 +66,23 @@ def _cancel_on_ctrl_break() -> None:
     task = asyncio.current_task()
     if task is not None:
         signal.signal(signal.SIGBREAK, lambda *_: loop.call_soon_threadsafe(task.cancel))
+
+
+def _cancel_on_stop_file() -> None:
+    """Drain the workers as for Ctrl-C once `fact dev` writes this process's stop file."""
+    path = stop_file_path()
+    task = asyncio.current_task()
+    if path is None or task is None:
+        return
+
+    async def watch() -> None:
+        await wait_for_stop_file(path)
+        get_logger("fact.worker").info("stop_file_found", path=str(path))
+        task.cancel()
+
+    watcher = asyncio.get_running_loop().create_task(watch())
+    _background.add(watcher)
+    watcher.add_done_callback(_background.discard)
 
 
 def _github_app(settings: Settings) -> GitHubApp | None:
@@ -163,6 +184,7 @@ def _project_workers(
 
 async def run() -> None:
     _cancel_on_ctrl_break()
+    _cancel_on_stop_file()
     settings = get_settings()
     configure_logging(settings.env)
     client = await connect(settings)

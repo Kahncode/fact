@@ -17,8 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 import httpx
+from fact.cli.processes import ChildSpec
 from fact.cli.shutdown import ShutdownWatch, call_scheduler
-from fact.cli.supervisor import ChildSpec
 from fact.cli.use import PinError, latest, pin
 from fact.core.settings import REPO_ROOT, Settings
 
