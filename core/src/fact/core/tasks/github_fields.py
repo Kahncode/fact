@@ -11,6 +11,7 @@ from fact.core.tasks.base import GITHUB_PREFIX
 from fact.core.types import PRIORITIES, Complexity, Priority, TaskType
 
 READY_LABEL = "fact:ready"
+URGENT_LABEL = "priority:urgent"
 TYPE_ALIASES: dict[str, TaskType] = {"incident": "bug"}  # an incident runs the bug workflow
 _HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*#*\s*$")
 _CRITERION_RE = re.compile(r"^\s*[-*+]\s*\[[ xX]\]\s*(.+?)\s*$")

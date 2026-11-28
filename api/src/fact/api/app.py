@@ -4,7 +4,9 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
+from fact.api.listings import Listings
 from fact.api.middleware import RequestIdMiddleware, unhandled_exception_handler
 from fact.api.projects import sync_projects
 from fact.api.routers import artifacts, health, human, notifications, projects, run_start, runs, scheduler, usage
@@ -35,7 +37,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.sessions = session_factory(engine)
         app.state.artifacts = LocalArtifactStore(settings.artifacts_dir)
         app.state.temporal = TemporalConnection(settings)
-        app.state.scheduler = SchedulerRuntime(gate=UsageGate(settings.claude))
+        app.state.scheduler = SchedulerRuntime(
+            gate=UsageGate(settings.claude),
+            listings=Listings(timedelta(seconds=settings.concurrency.listing_max_age_seconds)),
+        )
         loop: asyncio.Task[None] | None = None
         try:
             await sync_projects(settings, app.state.sessions)

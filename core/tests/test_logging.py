@@ -4,7 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 import structlog
-from fact.core.logging import bind_run, configure_logging, get_logger
+from fact.core.logging import QUIET_LIBRARIES, bind_run, configure_logging, get_logger
 from fact.core.settings import AppEnv, Settings
 
 
@@ -14,6 +14,8 @@ def _restore_logging() -> Iterator[None]:
     handlers, level = root.handlers[:], root.level
     yield
     root.handlers[:], root.level = handlers, level
+    for name in QUIET_LIBRARIES:
+        logging.getLogger(name).setLevel(logging.NOTSET)
     structlog.reset_defaults()
     structlog.contextvars.clear_contextvars()
 
@@ -148,3 +150,12 @@ def test_gcp_keeps_bodies(capsys: pytest.CaptureFixture[str]) -> None:
     assert record["request_body"] == {"k": 1}
     assert record["response_body"] == {"ok": True}
     assert record["request_query"] == "a=1"
+
+
+def test_debug_shows_facts_lines_but_only_warnings_of_http_and_db_libraries(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("prod", "DEBUG")
+    get_logger("fact.api").debug("ours")
+    logging.getLogger("httpcore.http11").debug("send_request_headers.started")
+    logging.getLogger("httpx").info("HTTP Request: GET ...")
+    logging.getLogger("httpx").warning("kept")
+    assert [line["event"] for line in _lines(capsys)] == ["ours", "kept"]

@@ -57,7 +57,10 @@ def _show_usage(usage: dict[str, Any] | None) -> None:
 
 def _show_preview(preview: dict[str, Any]) -> None:
     for load in preview.get("projects", []):
-        typer.echo(f"Runs:      {load['project']}: {load['active']} active of max {load['max_concurrent_runs']}")
+        listed = f", tasks listed {load['listed_at'][:19].replace('T', ' ')} UTC" if load.get("listed_at") else ""
+        typer.echo(
+            f"Runs:      {load['project']}: {load['active']} active of max {load['max_concurrent_runs']}{listed}"
+        )
     _show_usage(preview.get("usage"))
     tasks = preview.get("tasks", [])
     if not tasks:

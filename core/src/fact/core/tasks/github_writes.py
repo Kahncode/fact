@@ -1,12 +1,13 @@
 """
 The write-back half of the GitHub Issues task source: comments, labels, status, the factory's context section, closing.
 
-`GitHubIssueWrites` is a mixin of `GitHubIssuesSource`, which provides `_client`. Each write goes to the repository
+`GitHubIssueWrites` is a mixin of `GitHubIssuesSource`, which provides `_client`; it also holds `_pages`, which both use. Each write goes to the repository
 the key names, with that repository's installation token; a key of another source is only logged.
 """
 
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from typing import Any
 from urllib.parse import quote
 
 import httpx
@@ -113,6 +114,16 @@ class GitHubIssueWrites:
         owner, name = split_full_name(parsed.repo)
         async with self._client(parsed.repo) as client:
             yield client, f"/repos/{owner}/{name}/issues/{parsed.id}"
+
+    @staticmethod
+    async def _pages(client: httpx.AsyncClient, url: str) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        next_url: str | None = url
+        while next_url:
+            response = await client.get(next_url)
+            items.extend(response.json())
+            next_url = response.links.get("next", {}).get("url")
+        return items
 
     async def comment(self, key: str, text: str) -> None:
         async with self._issue_client(key, "comment") as issue:

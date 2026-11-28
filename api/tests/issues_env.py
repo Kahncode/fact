@@ -54,11 +54,10 @@ class FakeIssues:
         parts = request.url.path.strip("/").split("/")
         if request.method != "GET":
             return self._write(request, parts)
-        if request.url.path == "/repos/acme/app/issues":
-            ready = [
-                i for i in self.issues.values() if i["state"] == "open" and "fact:ready" in self.labels(i["number"])
-            ]
-            return httpx.Response(200, json=ready)
+        if request.url.path == "/repos/acme/app/issues":  # GitHub keeps the issues carrying every label asked for
+            wanted = set(request.url.params["labels"].split(","))
+            found = [i for i in self.issues.values() if i["state"] == "open" and wanted <= self.labels(i["number"])]
+            return httpx.Response(200, json=found)
         if parts[-2:] == ["dependencies", "blocked_by"]:
             return httpx.Response(200, json=[self.issues[n] for n in self.blocked_by.get(int(parts[-3]), [])])
         if parts[-1] == "sub_issues":

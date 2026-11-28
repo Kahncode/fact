@@ -398,6 +398,18 @@
             "title": "Active",
             "type": "integer"
           },
+          "listed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listed At"
+          },
           "max_concurrent_runs": {
             "title": "Max Concurrent Runs",
             "type": "integer"

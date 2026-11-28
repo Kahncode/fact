@@ -69,6 +69,8 @@ async def _find(settings: Settings, body: RunStart) -> FoundTask:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except TaskReadError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    if found.check.closed:  # every start, scheduled or manual: a tick's listing may predate the close
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{body.task_key} is closed: reopen it to run it again")
     ancestor = found.check.gated_by
     if ancestor and not body.override_deps:
         message = f"{body.task_key} is under {ancestor}, which is not marked ready"

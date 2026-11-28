@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from fact.api.listings import Listings
 from fact.api.scheduler import find_ready
 from fact.core.project_config import DEFAULT_MAX_CONCURRENT_RUNS
 from fact.core.scheduler import ReadyTasks
@@ -29,7 +30,7 @@ def settings(tmp_path: Path, checkout: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 async def _ready(app: FastAPI) -> ReadyTasks:
     async with app.state.sessions() as session:
-        return await find_ready(app.state.settings, session)
+        return await find_ready(app.state.settings, session, Listings(timedelta()))  # a fresh read each time
 
 
 async def test_ready_tasks_with_deps_done_and_never_run(app: FastAPI) -> None:
