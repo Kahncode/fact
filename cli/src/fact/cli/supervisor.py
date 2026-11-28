@@ -5,8 +5,9 @@ At start it adopts every recorded process still alive (same pid and start time) 
 stops a live one whose command differs (another build), and removes the records of the others. Then, every poll, it
 starts what is missing (once `wait_for` accepts connections), starts again a child that exited (after
 `RESTART_DELAY_S`) and prints each child's log prefixed by its name. A restarter, polled every loop, may start new
-children, replace some or stop some for good (`fact dev --pinned`'s worker generations). Killing `fact dev` leaves the children running
-for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children or a child exiting
+children, replace some or stop some for good (`fact dev --pinned`'s worker generations); `on_exit` may refuse to
+start a child that exited again (a new generation's worker that failed to start). Killing `fact dev`, or a restarter
+raising `DetachError` (`fact dev` restarting itself on a new pin), leaves the children running for the next one to adopt. Ctrl-C, a stop file it did not write appearing for one of its children or a child exiting
 with its record removed by someone else (`fact shutdown`), or a restarter raising `StopRequestedError` stops them all,
 last spec first; runs stay open in Temporal.
 """
@@ -15,27 +16,31 @@ import contextlib
 import signal
 import socket
 import sys
-import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
+from fact.cli.console import LogTail, emit
 from fact.cli.processes import Child, ChildSpec, RunDir, find_process, start, stop
 
 IS_WINDOWS = sys.platform == "win32"
 POLL_S = 0.2
 RESTART_DELAY_S = 5.0
-PUMP_JOIN_S = 2.0
 INTERRUPTED = 130  # exit code for Ctrl-C, as in shells
 # The console's stop keys; anything else (a kill, a closed terminal) ends `fact dev` alone, its children kept.
 STOP_SIGNALS = ("SIGINT", "SIGBREAK") if IS_WINDOWS else ("SIGINT",)
 
-_print_lock = threading.Lock()
-
 
 class StopRequestedError(Exception):
     """Raised to stop every child and return 0; its message says why."""
+
+
+class DetachError(Exception):
+    """Raised to return `code` leaving every child running, for the next `fact dev` to adopt; its message says why."""
+
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,8 @@ class Changes:
 # Called on every poll; returns the changes to make, or None to keep the children as they are.
 # It raises `StopRequestedError` to stop them all.
 Restarter = Callable[[], Changes | None]
+# Called with a child's name and exit code once it exited; returns whether to start it again.
+OnExit = Callable[[str, int | None], bool]
 
 
 def chain(*restarters: Restarter) -> Restarter:
@@ -65,45 +72,6 @@ def chain(*restarters: Restarter) -> Restarter:
     return poll
 
 
-def emit(name: str, width: int, line: str) -> None:
-    with _print_lock:
-        sys.stdout.write(f"{name:<{width}} | {line.rstrip()}\n")
-        sys.stdout.flush()
-
-
-class LogTail(threading.Thread):
-    """Print the lines a child appends to its log, from `offset`, until `finish` and the end of the file."""
-
-    def __init__(self, name: str, width: int, path: Path, offset: int) -> None:
-        super().__init__(name=f"tail-{name}", daemon=True)
-        self._child, self._width, self._path, self._offset = name, width, path, offset
-        self._done = threading.Event()
-
-    def run(self) -> None:
-        try:
-            log = self._path.open("rb")
-        except OSError:  # an adopted child whose log was deleted
-            return
-        with log:
-            log.seek(self._offset)
-            pending = b""
-            while True:
-                if chunk := log.read(65536):
-                    *lines, pending = (pending + chunk).split(b"\n")
-                    for line in lines:
-                        emit(self._child, self._width, line.decode("utf-8", "replace"))
-                elif self._done.is_set():
-                    break
-                else:
-                    time.sleep(POLL_S)
-            if pending:
-                emit(self._child, self._width, pending.decode("utf-8", "replace"))
-
-    def finish(self) -> None:
-        self._done.set()
-        self.join(timeout=PUMP_JOIN_S)
-
-
 def port_open(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=1):
@@ -113,9 +81,10 @@ def port_open(host: str, port: int) -> bool:
 
 
 class Supervisor:
-    def __init__(self, specs: Sequence[ChildSpec], run_dir: RunDir) -> None:
+    def __init__(self, specs: Sequence[ChildSpec], run_dir: RunDir, on_exit: OnExit | None = None) -> None:
         self.specs = {s.name: s for s in specs}  # start order
         self.run_dir = run_dir
+        self.on_exit = on_exit
         self.children: dict[str, Child] = {}
         self._tails: dict[str, LogTail] = {}
         self._not_before: dict[str, float] = {}
@@ -187,6 +156,10 @@ class Supervisor:
                 continue
             code = child.exit_code()
             how = f"exited with code {code}" if code is not None else "exited"
+            if self.on_exit is not None and not self.on_exit(name, code):
+                self.log(f"{name} {how}; not starting it again")
+                self.specs.pop(name, None)
+                continue
             self.log(f"{name} {how}; starting it again in {RESTART_DELAY_S:g} s")
             self._not_before[name] = time.monotonic() + RESTART_DELAY_S
         if asked:
@@ -217,6 +190,11 @@ class Supervisor:
         self.replace(changes.start)
         self.retire(changes.stop)
 
+    def detach(self) -> None:
+        """Stop printing the children's logs; they keep running."""
+        for name in list(self.children):
+            self._forget(name)
+
     def stop_all(self) -> None:
         for name in reversed(self.specs):
             if (child := self.children.get(name)) is not None:
@@ -244,6 +222,11 @@ def _raise_interrupt(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
+def ignore_stop_signals() -> contextlib.AbstractContextManager[None]:
+    """Ignore Ctrl-C (and Ctrl-Break) within the block: a child sharing the console handles it."""
+    return _stop_signals(signal.SIG_IGN)
+
+
 @contextlib.contextmanager
 def _stop_signals(handler: object) -> Iterator[None]:
     """Install `handler` for every stop signal, restoring the previous handlers on exit."""
@@ -256,13 +239,16 @@ def _stop_signals(handler: object) -> Iterator[None]:
             signal.signal(sig, old)
 
 
-def run_all(specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | None = None) -> int:
+def run_all(
+    specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | None = None, on_exit: OnExit | None = None
+) -> int:
     """
     Adopt or start `specs` and keep them running until Ctrl-C (130) or a stop request (0), then stop them.
 
-    `restarter`, polled every loop, may return the children to start, restart or stop (`fact dev --pinned`).
+    `restarter`, polled every loop, may return the children to start, restart or stop (`fact dev --pinned`), or raise
+    `DetachError` to return its code with the children left running.
     """
-    supervisor = Supervisor(specs, run_dir)
+    supervisor = Supervisor(specs, run_dir, on_exit)
     code = 0
     try:
         with _stop_signals(_raise_interrupt):
@@ -272,6 +258,10 @@ def run_all(specs: Sequence[ChildSpec], run_dir: RunDir, restarter: Restarter | 
         code = INTERRUPTED
     except StopRequestedError as e:
         supervisor.log(str(e))
+    except DetachError as e:
+        supervisor.log(f"{e}; leaving every process running")
+        supervisor.detach()
+        return e.code
     with _stop_signals(signal.SIG_IGN):  # a second Ctrl-C must not abandon the stop half way
         supervisor.stop_all()
     supervisor.log("stopped; open runs carry on at the next `fact dev`")

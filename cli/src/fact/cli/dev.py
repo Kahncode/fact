@@ -3,122 +3,35 @@
 
 They run detached, tracked in `<data_dir>/run/` (`fact.cli.processes`), so restarting `fact dev` adopts them and
 touches no running work; `<data_dir>/fact-dev.lock` (`fact.cli.dev_lock`) refuses a second `fact dev`. Pinned, it runs
-one worker per worker generation that should run (`fact.cli.generations`); from the source tree, one worker.
+one worker per worker generation that should run (`fact.cli.generations`), and its own CLI from the newest pin
+(`fact.cli.relaunch`); from the source tree, one worker.
 """
 
 import os
 import shutil
-import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from fact.cli import drainage
+from fact.cli.console import emit
+from fact.cli.dev_commands import (
+    TEMPORAL_UI_PORT,
+    api_command,
+    build_commands,
+    plain_env,
+    temporal_endpoint,
+    worker_command,
+)
 from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
 from fact.cli.follow import Follower
-from fact.cli.generations import Generations, worker_name
-from fact.cli.processes import SOURCE_BUILD, ChildSpec, RunDir
-from fact.cli.supervisor import INTERRUPTED, Restarter, chain, emit, port_open, run_all
-from fact.cli.use import PinError, current_pin, pin
-from fact.core.generations import Generation
-from fact.core.settings import Settings, get_settings
-
-TEMPORAL_UI_PORT = 8233
-IS_WINDOWS = sys.platform == "win32"
-# what activating a venv sets; children get neither, so workspaces never see an activation from VS Code or `uv run`
-VENV_VARS = ("VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT")
-
-
-def temporal_endpoint(settings: Settings) -> tuple[str, int]:
-    """Split `temporal.address` (`host:port`, IPv6 hosts in brackets) for the port check."""
-    address = settings.temporal.address
-    host, _, port = address.rpartition(":")
-    if not port.isdigit():
-        msg = f"temporal.address must be host:port, got {address!r}"
-        raise typer.BadParameter(msg)
-    return host.strip("[]") or "localhost", int(port)
-
-
-def venv_python(checkout: Path) -> Path:
-    """Return the Python of a checkout's `.venv`, which `fact use` builds with `uv sync`."""
-    return checkout / ".venv" / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
-
-
-def python_argv(pinned: Path | None) -> list[str]:
-    """Return the Python to run: this interpreter, or the pinned checkout's venv Python (no `uv run` activation)."""
-    return [sys.executable] if pinned is None else [str(venv_python(pinned))]
-
-
-def deactivated_path(environ: Mapping[str, str]) -> str | None:
-    """Return `PATH` without the active venv's scripts folder, or None when no venv is active."""
-    venv = environ.get("VIRTUAL_ENV")
-    if not venv:
-        return None
-    scripts = Path(venv) / ("Scripts" if IS_WINDOWS else "bin")
-    return os.pathsep.join(p for p in environ.get("PATH", "").split(os.pathsep) if p and Path(p) != scripts)
-
-
-def _child_env(environ: Mapping[str, str] | None) -> dict[str, str]:
-    env: dict[str, str] = {}
-    path = deactivated_path(os.environ if environ is None else environ)
-    if path is not None:
-        env["PATH"] = path
-    return env
-
-
-def api_command(settings: Settings, pinned: Path | None = None, environ: Mapping[str, str] | None = None) -> ChildSpec:
-    """
-    Return the API process: from the source tree, or from `pinned`'s venv, reading its own `fact.yaml` and `.env`.
-
-    Every factory process starts without the venv activation `fact dev` may have inherited, so the workspaces they
-    create see a plain environment.
-    """
-    build = SOURCE_BUILD if pinned is None else pinned.name
-    argv = [*python_argv(pinned), "-m", "fact.api"]
-    return ChildSpec("api", argv, build=build, port=settings.api.port, env=_child_env(environ), unset=VENV_VARS)
-
-
-def worker_command(
-    settings: Settings,
-    pinned: Path | None = None,
-    generation: Generation | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> ChildSpec:
-    """Return a worker process, which waits for Temporal's port: the source tree's, or a generation's from its pin."""
-    argv = [*python_argv(pinned), "-m", "fact.worker"]
-    name, build = "worker", SOURCE_BUILD if pinned is None else pinned.name
-    if generation is not None:
-        argv += ["--generation", generation.id]
-        name = worker_name(generation)
-    wait_for = temporal_endpoint(settings)
-    return ChildSpec(name, argv, build=build, wait_for=wait_for, env=_child_env(environ), unset=VENV_VARS)
-
-
-def build_commands(
-    settings: Settings,
-    temporal_exe: str,
-    pinned: Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    workers: list[ChildSpec] | None = None,
-) -> list[ChildSpec]:
-    """Return the processes `fact dev` starts, in order: Temporal, the API, then `workers` (the source tree's one)."""
-    _, temporal_port = temporal_endpoint(settings)
-    temporal = [
-        temporal_exe,
-        "server",
-        "start-dev",
-        "--db-filename",
-        str(settings.temporal_db_path),
-        "--port",
-        str(temporal_port),
-        "--ui-port",
-        str(TEMPORAL_UI_PORT),
-    ]
-    api = api_command(settings, pinned, environ)
-    workers = [worker_command(settings, environ=environ)] if workers is None else workers
-    # killed, not stopped gracefully: it has no stop file to watch
-    return [ChildSpec("temporal", temporal, build=api.build, port=temporal_port, graceful=False), api, *workers]
+from fact.cli.generations import Generations
+from fact.cli.processes import RunDir
+from fact.cli.relaunch import SelfRestart, launch
+from fact.cli.supervisor import INTERRUPTED, Restarter, chain, port_open, run_all
+from fact.cli.use import PinError, current_pin, pin, venv_python
+from fact.core.settings import REPO_ROOT, Settings, get_settings
 
 
 def _pinned_or_exit(settings: Settings) -> Path:
@@ -134,7 +47,7 @@ def _pinned_or_exit(settings: Settings) -> Path:
 
 
 def _follow_pin(settings: Settings, ref: str) -> Path:
-    """Start on the current pin, so runs left from the last session finish before an upgrade; pin `ref` if none."""
+    """Start on the current pin, whose generation is newest; pin `ref` if none (the follower upgrades from there)."""
     try:
         return current_pin(settings)
     except PinError:
@@ -150,9 +63,9 @@ def _follow_pin(settings: Settings, ref: str) -> Path:
         raise typer.Exit(1) from exc
 
 
-def _follower(settings: Settings, ref: str, checkout: Path, log: Callable[[str], None]) -> Follower:
+def _follower(settings: Settings, ref: str, workers: Generations, source: Path, log: Callable[[str], None]) -> Follower:
     uv = shutil.which("uv") or "uv"
-    return Follower(settings, ref, uv=uv, pinned=checkout.name, log=log)
+    return Follower(settings, ref, uv=uv, workers=workers, log=log, repo=source)
 
 
 def pin_ready(checkout: Path) -> bool:
@@ -179,7 +92,16 @@ def run_dir(settings: Settings) -> RunDir:
     return RunDir(settings.data_dir / "run")
 
 
-def _supervise(settings: Settings, temporal_exe: str, follow: str | None, *, pinned: bool) -> int:
+def _supervise(  # noqa: PLR0913
+    settings: Settings,
+    temporal_exe: str,
+    follow: str | None,
+    *,
+    pinned: bool,
+    source: Path = REPO_ROOT,
+    launcher: int | None = None,
+) -> int:
+    """Supervise here; `source` is the factory source tree (`fact use` fetches there), `launcher` the launching pid."""
     if follow is not None:
         _follow_pin(settings, follow)
     checkout = _pinned_or_exit(settings) if pinned or follow is not None else None
@@ -196,11 +118,47 @@ def _supervise(settings: Settings, temporal_exe: str, follow: str | None, *, pin
     workers = generations(settings, log)
     commands = build_commands(settings, temporal_exe, checkout, workers=workers.initial(checkout, run_dir(settings)))
     width = max(len(c.name) for c in commands)  # the supervisor's prefix width
-    restarter: Restarter = workers
+    running = REPO_ROOT.name if launcher is not None else None  # a launched `fact dev` runs from its pin
+    restarters: list[Restarter] = [SelfRestart(settings, running=running, repo=source, log=log, launcher=launcher)]
     if follow is not None:
-        typer.echo(f"Following {follow}: upgrading once it moves and no run is active")
-        restarter = chain(_follower(settings, follow, checkout, log), workers)
-    return run_all(commands, run_dir(settings), restarter)
+        typer.echo(f"Following {follow}: a new generation each time it or a project's home branch moves")
+        restarters.append(_follower(settings, follow, workers, source, log))
+    return run_all(commands, run_dir(settings), chain(*restarters, workers), workers.exited)
+
+
+def _locked(settings: Settings, body: Callable[[], int]) -> int:
+    lock = DevLock(settings.data_dir / LOCK_NAME)
+    try:
+        lock.acquire()
+    except AlreadyRunningError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    try:
+        return body()
+    finally:
+        lock.release()
+
+
+def _launch(settings: Settings, temporal_exe: str, follow: str | None, *, pinned: bool) -> int:
+    """Run `fact dev` from the newest pin each time it asks (`fact.cli.relaunch`); supervise here for an older pin."""
+    _locked(settings, lambda: 0)  # refuse at once while another one runs, before pinning anything
+    if follow is not None:
+        _follow_pin(settings, follow)
+    _pinned_or_exit(settings)
+    mode = ["--follow", follow] if follow is not None else ["--pinned"]
+    hidden = ["--in-pin", "--source", str(REPO_ROOT), "--launcher", str(os.getpid())]
+
+    def child_argv(checkout: Path) -> list[str]:
+        return [str(venv_python(checkout)), "-m", "fact.cli.main", "dev", *mode, *hidden]
+
+    def supervise() -> int:
+        return _locked(settings, lambda: _supervise(settings, temporal_exe, follow, pinned=pinned))
+
+    try:
+        return launch(settings, child_argv, plain_env(os.environ), supervise)
+    except PinError as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(1) from exc
 
 
 def dev(
@@ -213,9 +171,12 @@ def dev(
         typer.Option(
             "--follow",
             metavar="REF",
-            help="Run pinned and upgrade (`fact use REF`, restart) each time REF moves, once no run is active.",
+            help="Run pinned and add a worker generation each time REF or a project's home branch moves.",
         ),
     ] = None,
+    in_pin: Annotated[bool, typer.Option("--in-pin", hidden=True)] = False,
+    source: Annotated[Path | None, typer.Option("--source", hidden=True)] = None,
+    launcher: Annotated[int | None, typer.Option("--launcher", hidden=True)] = None,
 ) -> None:
     """
     Start Temporal, the API and the worker, or adopt those still running; keep them running.
@@ -232,14 +193,13 @@ def dev(
         raise typer.Exit(1)
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    lock = DevLock(settings.data_dir / LOCK_NAME)
-    try:
-        lock.acquire()
-    except AlreadyRunningError as exc:
-        typer.echo(f"error: {exc}", err=True)
-        raise typer.Exit(1) from exc
-    try:
-        code = _supervise(settings, temporal_exe, follow, pinned=pinned)
-    finally:
-        lock.release()
+    if (pinned or follow is not None) and not in_pin:
+        code = _launch(settings, temporal_exe, follow, pinned=pinned)
+    else:
+        tree = source or REPO_ROOT
+
+        def body() -> int:
+            return _supervise(settings, temporal_exe, follow, pinned=pinned, source=tree, launcher=launcher)
+
+        code = _locked(settings, body)
     raise typer.Exit(0 if code == INTERRUPTED else code)

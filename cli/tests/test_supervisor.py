@@ -12,7 +12,7 @@ import pytest
 from fact.cli import processes, supervisor
 from fact.cli.processes import Child, ChildSpec, ProcessRecord, RunDir
 from fact.cli.shutdown import stop_recorded
-from fact.cli.supervisor import Changes, StopRequestedError, Supervisor, run_all
+from fact.cli.supervisor import Changes, DetachError, StopRequestedError, Supervisor, run_all
 
 SLEEPER = [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"]
 # Exits 0 once its stop file appears, as the API and the worker do.
@@ -122,6 +122,35 @@ def test_a_child_that_exits_is_started_again(run_dir: RunDir, monkeypatch: pytes
     sup.reap()
 
     assert starts.read_text(encoding="utf-8").splitlines() == ["up", "up"]
+
+
+def test_a_child_on_exit_refuses_is_not_started_again(run_dir: RunDir, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(supervisor, "RESTART_DELAY_S", 0.0)
+    exits: list[tuple[str, int | None]] = []
+    quitter = [sys.executable, "-c", "raise SystemExit(3)"]
+    sup = Supervisor([ChildSpec("q", quitter, graceful=False)], run_dir, on_exit=lambda *e: exits.append(e) or False)
+
+    sup.start_missing()
+    _wait_exit(sup.children["q"])
+    sup.reap()
+    sup.start_missing()
+
+    assert exits == [("q", 3)]
+    assert "q" not in sup.children
+    assert "q" not in sup.specs
+
+
+def test_detaching_leaves_every_child_running(run_dir: RunDir, started: list[psutil.Process]) -> None:
+    def restarter() -> None:
+        if len(run_dir.records()) == 2:
+            msg = "restarting fact dev"
+            raise DetachError(msg, 75)
+
+    assert run_all([_sleeper("a"), _sleeper("b")], run_dir, restarter) == 75
+    records = run_dir.records()
+    started.extend(psutil.Process(r.pid) for r in records.values())
+    assert sorted(records) == ["a", "b"]
+    assert all(p.is_running() for p in started)  # for the next `fact dev` to adopt
 
 
 def test_a_graceful_child_stops_on_its_stop_file(run_dir: RunDir, capsys: pytest.CaptureFixture[str]) -> None:

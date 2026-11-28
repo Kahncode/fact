@@ -20,6 +20,7 @@ import sys
 from contextlib import AsyncExitStack
 
 import httpx
+from fact.core import generations
 from fact.core.activity_contract import CONTROL_QUEUE
 from fact.core.github import GitHubApp, GitHubAppConfigError, shared_app
 from fact.core.logging import configure_logging, get_logger
@@ -173,6 +174,8 @@ async def run(generation: str | None = None) -> None:
         for worker in workers:
             await stack.enter_async_context(worker)
         await make_current(client, served)
+        if generation is not None:  # `fact dev` takes a newest generation exiting before this for a failed upgrade
+            generations.mark_started(generations.generations_dir(settings.data_dir), generation)
         await delete_leftover_schedule(client)
         queues = [CONTROL_QUEUE, runner.task_queue, *(p.task_queue for p in projects)]
         log.info(

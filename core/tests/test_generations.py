@@ -26,3 +26,15 @@ def test_each_generation_is_newer_than_the_last_and_keeps_its_projects(tmp_path:
 def test_an_id_that_is_not_a_generation_is_refused(tmp_path: Path) -> None:
     with pytest.raises(GenerationError, match="invalid generation id"):
         generations.read(tmp_path, "../escape")
+
+
+def test_a_new_generation_is_starting_until_its_worker_marks_it_started(tmp_path: Path) -> None:
+    first = generations.create(tmp_path, "a" * 40)
+    assert not generations.started(tmp_path, first.id)
+
+    generations.mark_started(tmp_path, first.id)
+    assert generations.started(tmp_path, first.id)
+
+    second = generations.create(tmp_path, "b" * 40)
+    generations.delete(tmp_path, second.id)  # its worker failed to start
+    assert generations.newest(tmp_path) == first

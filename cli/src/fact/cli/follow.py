@@ -1,50 +1,35 @@
 """
-`fact dev --follow <ref>`: upgrade the running factory whenever `<ref>` moves, once no run is active.
+`fact dev --follow <ref>`: add a worker generation whenever `<ref>` or a project's home branch moves.
 
-Every `CHECK_INTERVAL_S` the follower fetches `origin` and resolves `<ref>`. When it differs from the pinned SHA, an
-upgrade is pending: the scheduler is turned off (`POST /scheduler/off`) so no new run starts, and the follower waits
-until `GET /scheduler/active` counts no run (queued, running or waiting, human waits included). Then it pins `<ref>`
-(`fact use`); `fact dev` sees the new pin (`fact.cli.generations`), restarts the API from it and starts its worker
-generation next to the old ones; Temporal keeps running.
-The scheduler's switch is kept in the database, so the API comes back with it off; if it was on before the upgrade, the
-follower turns it back on once the restarted API answers. That it turned the switch off is kept in
-`<data_dir>/run/follow-paused` (`PAUSED_NAME`) until it is on again, so a follower restarted while an upgrade is
-pending, or before the restarted API answered, still turns it back on.
+Every `CHECK_INTERVAL_S` the follower fetches `origin`, resolves `<ref>` and each registered project's home default
+branch (`git ls-remote`), and compares them with the newest generation (`fact.cli.generations`):
 
-A failed check (git, `uv sync`, the API) is printed and retried at the next check.
+- `<ref>` moved: it pins it (`fact use`); the API restarts from the new pin and the new generation's worker starts;
+- only a project's home moved: a new generation of the same pin starts, the API untouched.
+
+Either way the old generations keep serving their runs: the scheduler is never turned off and no run is waited for.
+While the newest generation's worker is not through its start, nothing is added; if it fails to start, `fact dev`
+deletes it (`Generations.exited`), the previous one stays current, and the next check tries again. A project the
+newest generation does not hold (it failed to load) counts as moved once its home moves after the follower's last
+check. A failed check (git, `uv sync`) is printed and retried at the next one.
 """
 
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
-import httpx
-from fact.cli import projects
-from fact.cli.runs import API
-from fact.cli.use import PinError, latest, pin
+from fact.cli.generations import Generations
+from fact.cli.supervisor import Changes
+from fact.cli.use import PinError, current_pin, github_url, latest, pin, remote_head
+from fact.core import generations
+from fact.core.generations import Generation
 from fact.core.settings import REPO_ROOT, Settings
 
 CHECK_INTERVAL_S = 60.0
-# how often to try turning the scheduler back on while the restarted API is not answering yet; each try is one request
-# with no retry, so a down API never blocks the supervisor for longer than a refused connection
-RESTORE_INTERVAL_S = 1.0
-# in `<data_dir>/run/`: present while the follower holds off a scheduler that was on before the upgrade
-PAUSED_NAME = "follow-paused"
-# what a check can raise: git or uv failing (PinError), the API down or answering oddly, a file lock while pinning
-CHECK_ERRORS = (PinError, httpx.HTTPError, KeyError, TypeError, ValueError, OSError)
+# what a check can raise: git or uv failing (PinError), a file lock while pinning
+CHECK_ERRORS = (PinError, OSError)
 
-
-def call_scheduler(method: str, path: str, *, retry: bool = True) -> dict[str, Any]:
-    """
-    Call `/api/v1/scheduler<path>`; errors are raised for the caller to retry at its next check.
-
-    With `retry`, the CLI client rides out a few seconds of an API restart; without, it makes a single attempt.
-    """
-    with projects.make_client() if retry else projects.make_client(None) as client:
-        response = client.request(method, f"{API}/scheduler{path}")
-    response.raise_for_status()
-    return response.json()
+HomeResolver = Callable[[str], str]  # a project's home `owner/repo` to its default branch's SHA now
 
 
 def short(sha: str) -> str:
@@ -52,7 +37,7 @@ def short(sha: str) -> str:
 
 
 class Follower:
-    """Called by the supervisor on every poll; pins `ref` once an upgrade is due (`fact dev` starts the new pin)."""
+    """Called by the supervisor on every poll; returns the new generation to start once `ref` or a home moved."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -60,65 +45,57 @@ class Follower:
         ref: str,
         *,
         uv: str,
-        pinned: str,
+        workers: Generations,
         log: Callable[[str], None],
         repo: Path = REPO_ROOT,
         clock: Callable[[], float] = time.monotonic,
+        resolve_home: HomeResolver | None = None,
     ) -> None:
         self._settings, self._ref, self._uv, self._repo = settings, ref, uv, repo
-        self._log, self._clock = log, clock
-        self.pinned = pinned
-        self.pending: str | None = None  # the SHA `ref` moved to, while the upgrade waits for runs to end
-        self._paused = settings.data_dir / "run" / PAUSED_NAME
-        self._restore_at: float | None = None  # when to try turning the scheduler back on after a restart
-        self._active: int | None = None
+        self._workers, self._log, self._clock = workers, log, clock
+        self._resolve_home = resolve_home or (lambda home: remote_head(github_url(home), repo))
+        self._seen: dict[str, str] = {}  # each project's home SHA at the last check
+        self._waiting: str | None = None  # the generation whose start a check waits for, reported once
         self._next = clock() + CHECK_INTERVAL_S
 
-    def __call__(self) -> None:
+    def __call__(self) -> Changes | None:
         now = self._clock()
-        if self._restore_at is not None and now >= self._restore_at:
-            self._restore_on(now)
         if now < self._next:
-            return
+            return None
         self._next = now + CHECK_INTERVAL_S
         try:
-            self._check()
+            return self._check()
         except CHECK_ERRORS as exc:
             self._log(f"upgrade check failed: {exc}; retrying in {CHECK_INTERVAL_S:g} s")
+            return None
 
-    def _check(self) -> None:
-        if self.pending is None:
-            sha = latest(self._ref, self._repo)
-            if sha == self.pinned:
-                if self._paused.exists() and self._restore_at is None:  # restarted before turning it back on
-                    self._restore_at = self._clock()
-                return
-            # a follower restarted while an upgrade was pending finds the switch off by its own doing: the file says so
-            if not self._paused.exists() and call_scheduler("GET", "")["on"]:
-                self._paused.parent.mkdir(parents=True, exist_ok=True)
-                self._paused.touch()
-            call_scheduler("POST", "/off")
-            self.pending = sha
-            self._log(f"{self._ref} moved {short(self.pinned)} -> {short(sha)}: upgrade pending, no new run starts")
-        active = int(call_scheduler("GET", "/active")["active"])
-        if active:
-            if active != self._active:
-                self._log(f"upgrade waits for {active} active run(s) to end")
-            self._active = active
-            return
-        self._log(f"no run active: upgrading to {self._ref}")
-        checkout = pin(self._settings, self._ref, self._uv, self._repo)
-        self.pinned, self.pending, self._active = checkout.name, None, None
-        self._restore_at = self._clock() if self._paused.exists() else None
-        self._log(f"pinned {short(checkout.name)}: fact dev starts it")
+    def _check(self) -> Changes | None:
+        sha = latest(self._ref, self._repo)
+        homes = {p.name: self._resolve_home(p.home) for p in self._settings.projects}
+        seen, self._seen = self._seen, homes
+        newest = generations.newest(self._workers.directory)
+        if newest is None:
+            return None  # `fact dev` records one at start
+        if not generations.started(self._workers.directory, newest.id):
+            if self._waiting != newest.id:
+                self._log(f"generation {newest.id} is starting: upgrading once it is up")
+                self._waiting = newest.id
+            return None
+        if sha != newest.factory:
+            self._log(f"{self._ref} moved {short(newest.factory)} -> {short(sha)}: pinning it")
+            checkout = pin(self._settings, self._ref, self._uv, self._repo)
+            return Changes(self._workers.add(checkout))
+        if moved := _moved(newest, homes, seen):
+            self._log(f"home of {', '.join(moved)} moved: starting a new generation of {short(sha)}")
+            return Changes(self._workers.add(current_pin(self._settings)))
+        return None
 
-    def _restore_on(self, now: float) -> None:
-        """Turn the scheduler back on once the restarted API answers; it is not up yet on the first tries."""
-        self._restore_at = now + RESTORE_INTERVAL_S
-        try:
-            call_scheduler("POST", "/on", retry=False)
-        except CHECK_ERRORS:  # not up yet
-            return
-        self._paused.unlink(missing_ok=True)
-        self._restore_at = None
-        self._log("scheduler back on, as it was before the upgrade")
+
+def _moved(newest: Generation, homes: dict[str, str], seen: dict[str, str]) -> list[str]:
+    """Return the projects whose home is not at the newest generation's SHA (or, when it has none, at the last seen)."""
+    moved = []
+    for project, sha in homes.items():
+        recorded = newest.projects.get(project)
+        if (recorded is not None and recorded != sha) or (recorded is None and seen.get(project, sha) != sha):
+            moved.append(project)
+    return moved

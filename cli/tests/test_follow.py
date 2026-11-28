@@ -1,30 +1,19 @@
+"""`fact dev --follow` adds a worker generation when the ref or a project's home moves, never waiting for runs."""
+
 from pathlib import Path
 
-import httpx
 import pytest
-from fact.cli import follow, projects
+from fact.cli import follow
 from fact.cli.follow import CHECK_INTERVAL_S, Follower
-from fact.core.settings import Settings
+from fact.cli.generations import Generations
+from fact.cli.processes import ChildSpec, RunDir
+from fact.cli.supervisor import Changes
+from fact.cli.use import factory_checkout
+from fact.core import generations
+from fact.core.settings import ProjectRef, Settings
 
 OLD, NEW = "a" * 40, "b" * 40
-
-
-class FakeScheduler:
-    """The API's scheduler switch and active-run count, keeping state across calls."""
-
-    def __init__(self, *, on: bool = True, active: int = 0) -> None:
-        self.on, self.active, self.up = on, active, True
-
-    def handle(self, request: httpx.Request) -> httpx.Response:
-        if not self.up:
-            msg = "refused"
-            raise httpx.ConnectError(msg, request=request)
-        path = request.url.path.removeprefix("/api/v1/scheduler")
-        if request.method == "POST":
-            self.on = path == "/on"
-        if path == "/active":
-            return httpx.Response(200, json={"active": self.active})
-        return httpx.Response(200, json={"on": self.on})
+HOME, HOME_2 = "c" * 40, "d" * 40
 
 
 class Clock:
@@ -35,115 +24,144 @@ class Clock:
         return self.now
 
 
+def _pin(settings: Settings, sha: str) -> Path:
+    """Pin `sha` as `fact use` does: its checkout, then `current`."""
+    checkout = factory_checkout(settings, sha)
+    checkout.mkdir(parents=True, exist_ok=True)
+    (checkout / "pyproject.toml").write_text("", encoding="utf-8")
+    (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
+    return checkout
+
+
+class Remote:
+    """`origin/main` and the project's home branch as the follower sees them; `pin` pins `main`."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.main, self.home, self.pins, self.broken = OLD, HOME, 0, False
+        self._settings = settings
+
+    def latest(self, _ref: str, _repo: Path) -> str:
+        return self.main
+
+    def pin(self, *_: object) -> Path:
+        if self.broken:
+            msg = "uv sync failed"
+            raise follow.PinError(msg)
+        self.pins += 1
+        return _pin(self._settings, self.main)
+
+
 @pytest.fixture
-def scheduler(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> FakeScheduler:
-    fake = FakeScheduler()
-    transport = httpx.MockTransport(fake.handle)
-    monkeypatch.setattr(
-        projects, "make_client", lambda *_: httpx.Client(base_url=settings.api_url, transport=transport)
-    )
+def project_settings(settings: Settings) -> Settings:
+    return settings.model_copy(update={"projects": [ProjectRef(name="acme", home="o/acme")]})
+
+
+@pytest.fixture
+def remote(project_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Remote:
+    fake = Remote(project_settings)
+    monkeypatch.setattr(follow, "latest", fake.latest)
+    monkeypatch.setattr(follow, "pin", fake.pin)
     return fake
 
 
 @pytest.fixture
-def remote(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
-    """`origin/main` as the follower sees it; `pin` checks that SHA out."""
-    state = {"main": OLD}
-    monkeypatch.setattr(follow, "latest", lambda ref, _repo: state[ref])
-    monkeypatch.setattr(follow, "pin", lambda *_: settings.pinned_dir / "factory" / state["main"])
-    return state
+def workers(project_settings: Settings, tmp_path: Path) -> Generations:
+    """Return the generations manager, its first generation of `OLD` up with the project at `HOME`."""
+    manager = Generations(
+        project_settings,
+        worker_spec=lambda checkout, g: ChildSpec(f"worker-{g.id}", [checkout.name, g.id]),
+        api_spec=lambda checkout: ChildSpec("api", [checkout.name]),
+        in_use=lambda _: set(),
+        ready=lambda checkout: checkout.is_dir(),
+        log=lambda _: None,
+    )
+    manager.initial(_pin(project_settings, OLD), RunDir(tmp_path / "run"))
+    _started(manager, {"acme": HOME})
+    return manager
 
 
-def _follower(settings: Settings, clock: Clock) -> Follower:
+def _started(workers: Generations, projects: dict[str, str]) -> generations.Generation:
+    """Record the newest generation's home SHAs and its start, as its worker does."""
+    newest = generations.newest(workers.directory)
+    assert newest is not None
+    generations.write(workers.directory, generations.Generation(newest.id, newest.factory, projects))
+    generations.mark_started(workers.directory, newest.id)
+    return newest
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
+@pytest.fixture
+def follower(project_settings: Settings, workers: Generations, remote: Remote, clock: Clock) -> Follower:
     return Follower(
-        settings,
+        project_settings,
         "main",
         uv="uv",
-        pinned=OLD,
+        workers=workers,
         log=lambda _: None,
         clock=clock,
+        resolve_home=lambda _home: remote.home,
     )
 
 
-def _tick(follower: Follower, clock: Clock) -> str:
-    """Run one check; return the SHA pinned after it."""
+def _tick(follower: Follower, clock: Clock) -> Changes | None:
     clock.now += CHECK_INTERVAL_S
-    follower()
-    return follower.pinned
+    return follower()
 
 
-def test_upgrades_once_main_moved_and_no_run_is_active(
-    settings: Settings, scheduler: FakeScheduler, remote: dict[str, str]
+def test_main_moving_pins_it_and_starts_its_generation_next_to_the_old_one(
+    follower: Follower, workers: Generations, remote: Remote, clock: Clock
 ) -> None:
-    clock = Clock()
-    follower = _follower(settings, clock)
-    assert _tick(follower, clock) == OLD  # main has not moved
-    assert scheduler.on
+    assert _tick(follower, clock) is None  # nothing moved
+    remote.main = NEW  # no scheduler is touched and no run is waited for: the API is never asked
 
-    remote["main"] = NEW
-    scheduler.active = 1
-    assert _tick(follower, clock) == OLD  # pending: nothing new starts while the run goes on
-    assert not scheduler.on
-    assert follower.pending == NEW
+    changes = _tick(follower, clock)
 
-    scheduler.active = 0
-    assert _tick(follower, clock) == NEW  # pinned: `fact dev` starts it
-    assert follower.pending is None
-    scheduler.up = False  # the restarted API keeps the switch off, and is not answering yet
-    follower()
-    scheduler.up = True
-    clock.now += 1
-    follower()
-    assert scheduler.on  # on again, as it was before the upgrade
+    newest = generations.newest(workers.directory)
+    assert newest is not None
+    assert newest.factory == NEW
+    assert changes == Changes([ChildSpec("api", [NEW]), ChildSpec(f"worker-{newest.id}", [NEW, newest.id])])
+    old = generations.all_generations(workers.directory)[0]
+    assert old.factory == OLD  # kept: it serves its runs until they end
 
 
-def test_keeps_the_scheduler_off_when_it_was_off_before_the_upgrade(
-    settings: Settings, scheduler: FakeScheduler, remote: dict[str, str]
+def test_a_home_moving_starts_a_generation_of_the_same_pin_and_keeps_the_api(
+    follower: Follower, workers: Generations, remote: Remote, clock: Clock
 ) -> None:
-    clock = Clock()
-    follower = _follower(settings, clock)
-    scheduler.on = False
-    remote["main"] = NEW
-    assert _tick(follower, clock) == NEW
-    clock.now += 1
-    follower()
+    remote.home = HOME_2  # a commit to the project's `.fact/workflows/`
 
-    assert not scheduler.on
+    changes = _tick(follower, clock)
+
+    newest = generations.newest(workers.directory)
+    assert newest is not None
+    assert remote.pins == 0
+    assert changes == Changes([ChildSpec(f"worker-{newest.id}", [OLD, newest.id])])
 
 
-def test_a_restarted_follower_still_turns_the_scheduler_back_on(
-    settings: Settings, scheduler: FakeScheduler, remote: dict[str, str]
+def test_nothing_is_added_while_the_newest_generation_is_starting(
+    follower: Follower, workers: Generations, remote: Remote, clock: Clock
 ) -> None:
-    clock = Clock()
-    remote["main"] = NEW
-    scheduler.active = 1
-    assert _tick(_follower(settings, clock), clock) == OLD  # pending; then `fact dev --follow` is restarted
-    assert not scheduler.on
+    remote.home = HOME_2
+    assert _tick(follower, clock) is not None
+    remote.main = NEW
 
-    restarted = _follower(settings, clock)
-    scheduler.active = 0
-    assert _tick(restarted, clock) == NEW  # the switch reads off now, but the follower turned it off
-    clock.now += 1
-    restarted()
-    assert scheduler.on
+    assert _tick(follower, clock) is None  # its worker has not made its versions current yet
+
+    _started(workers, {"acme": HOME_2})
+    assert _tick(follower, clock) is not None
 
 
-@pytest.mark.parametrize("error", [follow.PinError("uv sync failed"), PermissionError("current is locked")])
-def test_a_failed_check_keeps_the_upgrade_pending(
-    settings: Settings,
-    scheduler: FakeScheduler,
-    remote: dict[str, str],
-    monkeypatch: pytest.MonkeyPatch,
-    error: Exception,
+def test_a_failed_check_is_retried_at_the_next(
+    follower: Follower, workers: Generations, remote: Remote, clock: Clock
 ) -> None:
-    clock = Clock()
-    follower = _follower(settings, clock)
-    remote["main"] = NEW
+    remote.main, remote.broken = NEW, True
+    assert _tick(follower, clock) is None
 
-    def broken_pin(*_: object) -> Path:
-        raise error
-
-    monkeypatch.setattr(follow, "pin", broken_pin)
-    assert _tick(follower, clock) == OLD
-    assert follower.pending == NEW
-    assert not scheduler.on
+    remote.broken = False
+    assert _tick(follower, clock) is not None
+    newest = generations.newest(workers.directory)
+    assert newest is not None
+    assert newest.factory == NEW

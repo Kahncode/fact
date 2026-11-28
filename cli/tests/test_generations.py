@@ -149,3 +149,24 @@ def test_a_restarted_fact_dev_adopts_an_older_generations_live_worker(
     workers = manager.initial(_pin(settings, B), run_dir)
 
     assert [w.argv for w in workers] == [[B, generations.newest(directory).id], [A, gen_a.id]]
+
+
+def test_a_generation_whose_worker_fails_to_start_leaves_the_previous_current_and_is_retried(
+    settings: Settings, manager: Generations, clock: Clock, tmp_path: Path
+) -> None:
+    manager.initial(_pin(settings, A), RunDir(tmp_path / "run"))
+    gen_a = _record_home(settings, generations.newest(manager.directory))
+    generations.mark_started(manager.directory, gen_a.id)
+    _pin(settings, B)
+    changes = _tick(manager, clock)
+    assert changes is not None
+    gen_b = generations.newest(manager.directory)
+
+    assert manager.exited(f"worker-{gen_b.id}", 1) is False  # not started again: it exited before its start
+
+    assert generations.newest(manager.directory) == gen_a  # still current
+    retry = _tick(manager, clock)
+    assert retry is not None
+    assert [s.argv for s in retry.start] == [[B, gen_b.id]]  # the same generation again; the API already runs B
+    generations.mark_started(manager.directory, gen_b.id)
+    assert manager.exited(f"worker-{gen_b.id}", 1) is True  # a crash once started: started again
