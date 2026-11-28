@@ -70,23 +70,28 @@ class Build:
 
     name: str
     ran: list[tuple[str, str]] = field(default_factory=list)  # (activity, build)
+    any_ran: asyncio.Event = field(default_factory=asyncio.Event)  # set once an activity ran on this build
+
+    def _record(self, name: str, build: str) -> None:
+        self.ran.append((name, build))
+        self.any_ran.set()
 
     def activities(self) -> list:
         @activity.defn(name=RECORD_RUN_STARTED)
         async def record_started(spec: RunStartedInput) -> None:
-            self.ran.append((RECORD_RUN_STARTED, spec.worker_version or ""))
+            self._record(RECORD_RUN_STARTED, spec.worker_version or "")
 
         @activity.defn(name=RECORD_RUN_FINISHED)
         async def record_finished(spec: RunFinishedInput) -> None:  # noqa: ARG001
-            self.ran.append((RECORD_RUN_FINISHED, self.name))
+            self._record(RECORD_RUN_FINISHED, self.name)
 
         @activity.defn(name=REPORT_STATUS)
         async def report_status(spec: ReportStatusInput) -> None:  # noqa: ARG001
-            self.ran.append((REPORT_STATUS, self.name))
+            self._record(REPORT_STATUS, self.name)
 
         @activity.defn(name=NOTIFY)
         async def notify(spec: NotifyInput) -> int:  # noqa: ARG001 - `pr_opened` holds the task: `task_held`
-            self.ran.append((NOTIFY, self.name))
+            self._record(NOTIFY, self.name)
             return 1
 
         return [record_started, record_finished, report_status, notify]
@@ -186,8 +191,7 @@ async def test_two_generations_each_run_their_own_runs_activities(tmp_path: Path
         await set_current_version(env.client, gen_a)
         waiting = await start("a-1", "wait")
         async with asyncio.timeout(10):  # pinned once its first workflow task completes on A
-            while not builds[gen_a.version].ran:  # noqa: ASYNC110 - another worker's activity fills it
-                await asyncio.sleep(0.05)
+            await builds[gen_a.version].any_ran.wait()
         await set_current_version(env.client, gen_b)  # `fact use`: B's worker starts and is current
         newer = await start("b-1", "done")
         assert (await newer.result()).outcome == RunOutcome.PR_OPENED
