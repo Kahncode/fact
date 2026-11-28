@@ -23,7 +23,7 @@ COMMENTS = f"/repos/{FULL_NAME}/issues/{PR_NUMBER}/comments"
 
 
 def _step(stage: str, attempt: int, start: str, end: str | None, **kw: object) -> dict:
-    base = {"stage_id": stage, "attempt": attempt, "harness": None, "model": None, "wait_seconds": 0.0}
+    base = {"stage_id": stage, "attempt": attempt, "harness": None, "model": None}
     base |= {"tokens_in": 0, "tokens_out": 0, "cost_usd": None, "started_at": start, "ended_at": end}
     return base | kw
 
@@ -47,7 +47,7 @@ RUN = {
             peak_context_tokens=90_000,
             **AGENT,
         ),
-        _step("checks", 1, "2026-11-25T10:12:40Z", "2026-11-25T10:13:40Z", wait_seconds=30.0, name="lint"),
+        _step("checks", 1, "2026-11-25T10:12:40Z", "2026-11-25T10:13:40Z", name="lint"),
         _step(
             "implement",
             2,
@@ -83,14 +83,14 @@ GOLDEN = """<!-- fact:cost -->
 
 **fact run cost:** $1.48 over 15m 34s (5 steps)
 
-| Stage | Attempt | Harness / model | Duration | Wait | Turns | Peak context | Uncached input | Cache read | Cache write | Output | Cost |
-| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| prepare | 1 | — | 4s | — | — | — | — | — | — | — | — |
-| implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | — | 40 | 90,000 | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |
-| checks:lint | 1 | — | 1m 00s | 30s | — | — | — | — | — | — | — |
-| implement | 2 | claude-code / claude-sonnet-5-5 | 2m 00s | — | 9 | 110,000 | 20,000 | — | — | 1,000 | $0.25 |
-| open_pr | 1 | — | running | — | — | — | — | — | — | — | — |
-| **Total** | 5 steps |  | 15m 34s | 30s | 49 | 110,000 | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
+| Stage | Attempt | Harness / model | Duration | Turns | Peak context | Uncached input | Cache read | Cache write | Output | Cost |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| prepare | 1 | — | 4s | — | — | — | — | — | — | — |
+| implement | 1 | claude-code / claude-sonnet-5-5 | 12m 30s | 40 | 90,000 | 5,000 | 100,000 | 15,000 | 8,000 | $1.23 |
+| checks:lint | 1 | — | 1m 00s | — | — | — | — | — | — | — |
+| implement | 2 | claude-code / claude-sonnet-5-5 | 2m 00s | 9 | 110,000 | 20,000 | — | — | 1,000 | $0.25 |
+| open_pr | 1 | — | running | — | — | — | — | — | — | — |
+| **Total** | 5 steps |  | 15m 34s | 49 | 110,000 | 25,000 | 100,000 | 15,000 | 9,000 | $1.48 |
 
 **Per harness and model**
 
@@ -115,7 +115,7 @@ def test_a_cut_short_session_shows_its_tokens_and_an_unknown_cost() -> None:
     lines = body.splitlines()
     assert any(line.startswith("| fix_ci (cut short)") and line.endswith("| unknown |") for line in lines)
     assert (
-        "| **Total** | 6 steps |  | 16m 34s | 30s | 52 | 110,000 | 26,000 | 102,000 | 15,000 | 9,200 | $1.48 + 1 unknown |"
+        "| **Total** | 6 steps |  | 16m 34s | 52 | 110,000 | 26,000 | 102,000 | 15,000 | 9,200 | $1.48 + 1 unknown |"
         in lines
     )
 

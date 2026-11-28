@@ -29,7 +29,6 @@ class StepCost:
     attempt: int
     route: str  # `harness / model`, or `—` for steps without an agent
     duration_s: float | None  # wall time; None while the step has not ended
-    wait_s: float
     tokens_in: int  # every prompt token; the cache counts are part of it
     tokens_out: int
     cache_read: int
@@ -70,7 +69,6 @@ def _step_cost(s: dict[str, Any]) -> StepCost:
         attempt=s["attempt"],
         route=_route(s),
         duration_s=_seconds(s.get("started_at"), s.get("ended_at")),
-        wait_s=float(s.get("wait_seconds") or 0),
         tokens_in=int(s.get("tokens_in") or 0),
         tokens_out=int(s.get("tokens_out") or 0),
         cache_read=int(s.get("cache_read_tokens") or 0),
@@ -124,7 +122,6 @@ def _total(steps: list[StepCost], stage: str = TOTAL) -> StepCost:
         attempt=len(steps),
         route="",
         duration_s=sum(durations, 0.0),
-        wait_s=sum(s.wait_s for s in steps),
         tokens_in=sum(s.tokens_in for s in steps),
         tokens_out=sum(s.tokens_out for s in steps),
         cache_read=sum(s.cache_read for s in steps),
@@ -147,14 +144,13 @@ _RIGHT = "---:"
 
 def _steps_table(steps: list[StepCost]) -> list[str]:
     lines = [
-        _row(["Stage", "Attempt", "Harness / model", "Duration", "Wait", *USAGE_HEADERS, "Cost"]),
-        _row(["---", _RIGHT, "---", _RIGHT, _RIGHT, *[_RIGHT] * len(USAGE_HEADERS), _RIGHT]),
+        _row(["Stage", "Attempt", "Harness / model", "Duration", *USAGE_HEADERS, "Cost"]),
+        _row(["---", _RIGHT, "---", _RIGHT, *[_RIGHT] * len(USAGE_HEADERS), _RIGHT]),
     ]
     for s in [*steps, _total(steps)]:
         attempt = f"{s.attempt} steps" if s.stage == TOTAL else str(s.attempt)
         stage = f"{s.label} (cut short)" if s.partial and s.stage != TOTAL else s.label
-        timing = [format_duration(s.duration_s), format_duration(s.wait_s) if s.wait_s else NONE]
-        lines.append(_row([stage, attempt, s.route, *timing, *_usage_cells(s), _cost(s)]))
+        lines.append(_row([stage, attempt, s.route, format_duration(s.duration_s), *_usage_cells(s), _cost(s)]))
     return lines
 
 
@@ -183,7 +179,7 @@ def _headline(total: StepCost, steps: int) -> str:
 
 
 FOOTNOTE = (
-    "Durations are wall time; wait is time spent on a person. Turns are the model calls of the whole session, "
+    "Durations are wall time, including time spent waiting on a person. Turns are the model calls of the whole session, "
     "including the parts Claude Code woke again. Tokens are summed over every turn of the session, and the four parts "
     "are billed at different rates: uncached input is only a few tokens per turn, because Claude Code caches each "
     "prompt up to its end, so new input is billed as cache write; cache read counts the cached prompt again on every "

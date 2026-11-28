@@ -11,7 +11,8 @@ workflows:
   default: standard
 # Before 1.0 fact makes broad breaking changes all the time (AGENTS.md: no backwards compatibility), so no path
 # forces a review: schema, API, SDK, workflow and CI changes go through the classify session like any other code,
-# and `.fact/prompts/classify.md` tells it they are not high risk or one-way doors. Restore the globs at 1.0.
+# and `.fact/prompts/classify.md` tells it they (and the CLI bootstrapping: `fact dev`, `use`, `--follow`, `shutdown`)
+# are not high risk or one-way doors. Restore the globs and that rule at 1.0.
 classify:
   review_spec_ambiguous: false
 auto_merge: true
