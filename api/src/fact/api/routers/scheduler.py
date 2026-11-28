@@ -8,8 +8,6 @@ The scheduler: run a tick, preview the next one, and (dev only) turn the in-proc
 - `GET /scheduler/active`: runs queued, running or waiting, for the worker's keep-awake.
 - `POST /scheduler/on|off` (`dev_router`, mounted only in dev): flip the loop; the state lives in this process and
   is on at every API start.
-- `POST /scheduler/shutdown` (`dev_router`): turn the loop off and set `shutdown`, which `fact dev` polls to exit once
-  `active` is 0. `POST /scheduler/on` clears it (cancels the shutdown); an API restart drops it.
 """
 
 from datetime import datetime
@@ -34,7 +32,6 @@ class SchedulerState(BaseModel):
     in_process: bool  # dev: this API ticks every `interval_seconds` while `on`; else only `POST /scheduler/tick` ticks
     on: bool | None = None  # dev only: the `fact scheduler on|off` switch; None where there is no switch
     interval_seconds: float | None = None  # dev only
-    shutdown: bool = False  # dev only: `fact shutdown` asked `fact dev` to exit once no run is active
     last_tick_at: datetime | None = None  # since this API started
     last_tick: TickResult | None = None
 
@@ -51,7 +48,6 @@ def _state(request: Request) -> SchedulerState:
         in_process=dev,
         on=runtime.on if dev else None,
         interval_seconds=settings.concurrency.scheduler_interval_seconds if dev else None,
-        shutdown=dev and runtime.shutdown,
         last_tick_at=runtime.last_tick_at,
         last_tick=runtime.last_tick,
     )
@@ -83,20 +79,11 @@ async def scheduler_state(request: Request) -> SchedulerState:
 
 @dev_router.post("/scheduler/on")
 async def scheduler_on(request: Request) -> SchedulerState:
-    runtime: SchedulerRuntime = request.app.state.scheduler
-    runtime.on, runtime.shutdown = True, False
+    request.app.state.scheduler.on = True
     return _state(request)
 
 
 @dev_router.post("/scheduler/off")
 async def scheduler_off(request: Request) -> SchedulerState:
     request.app.state.scheduler.on = False
-    return _state(request)
-
-
-@dev_router.post("/scheduler/shutdown")
-async def scheduler_shutdown(request: Request) -> SchedulerState:
-    """Turn the loop off and ask `fact dev` to exit once no run is active; `POST /scheduler/on` cancels it."""
-    runtime: SchedulerRuntime = request.app.state.scheduler
-    runtime.on, runtime.shutdown = False, True
     return _state(request)

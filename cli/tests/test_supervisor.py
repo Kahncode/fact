@@ -149,14 +149,30 @@ def test_run_all_prefixes_output_and_stops_every_child_on_a_stop_request(
 ) -> None:
     def restarter() -> None:
         if "up" in run_dir.log_path("a").read_text(encoding="utf-8"):
-            msg = "shutdown: no run active, stopping"
+            msg = "upgrade done"
             raise StopRequestedError(msg)
 
     assert run_all([_sleeper("a"), _sleeper("b")], run_dir, restarter) == 0
     assert run_dir.records() == {}
     out = capsys.readouterr().out.splitlines()
     assert "a    | up" in out
-    assert "fact | shutdown: no run active, stopping" in out
+    assert "fact | upgrade done" in out
+
+
+def test_a_stop_file_written_by_fact_shutdown_stops_every_child_and_returns_0(
+    run_dir: RunDir, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def restarter() -> None:  # `fact shutdown`, from another process, once the worker is up
+        log = run_dir.log_path("worker")
+        if log.exists() and "ready" in log.read_text(encoding="utf-8"):
+            run_dir.request_stop("worker")
+
+    assert run_all([_sleeper("temporal"), ChildSpec("worker", GRACEFUL)], run_dir, restarter) == 0
+    assert run_dir.records() == {}
+    out = capsys.readouterr().out.splitlines()
+    assert "worker   | stopped gracefully" in out
+    assert out.count("worker   | ready") == 1  # never started again
+    assert "fact     | stopped; open runs carry on at the next `fact dev`" in out
 
 
 def test_ctrl_c_stops_every_child_and_returns_130(run_dir: RunDir) -> None:

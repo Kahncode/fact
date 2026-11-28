@@ -16,7 +16,6 @@ import typer
 from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
 from fact.cli.follow import Follower
 from fact.cli.processes import SOURCE_BUILD, ChildSpec, RunDir
-from fact.cli.shutdown import ShutdownWatch
 from fact.cli.supervisor import INTERRUPTED, emit, run_all
 from fact.cli.use import PinError, current_pin, pin
 from fact.core.settings import Settings, get_settings
@@ -167,7 +166,7 @@ def _supervise(settings: Settings, temporal_exe: str, follow: str | None, *, pin
     if follow is not None and checkout is not None:
         typer.echo(f"Following {follow}: upgrading once it moves and no run is active")
         return run_all(commands, run_dir(settings), _follower(settings, follow, checkout, log))
-    return run_all(commands, run_dir(settings), ShutdownWatch(log))
+    return run_all(commands, run_dir(settings))
 
 
 def dev(
@@ -187,7 +186,8 @@ def dev(
     """
     Start Temporal, the API and the worker, or adopt those still running; keep them running.
 
-    Ctrl-C stops all three, and so does `fact shutdown` once no run is active. Killing `fact dev` leaves them running.
+    Ctrl-C stops all three, and so does `fact shutdown`; open runs carry on at the next start. Killing `fact dev`
+    leaves them running.
     """
     temporal_exe = shutil.which("temporal")
     if temporal_exe is None:
