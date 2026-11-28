@@ -45,6 +45,21 @@ Runs already going finish on their own generation. A rollback is `fact use <olde
 
 - Budgets per step and per run, a cap on loop iterations, and timeouts on every activity.
 - Agents get only the secrets a step needs; model keys and the GitHub token stay with the worker.
-- Steps that turn agent permission checks off run in the Docker runner (from v1).
+- Agent permission checks are turned off (`bypassPermissions`) only in the `docker` pool; the `local` pool refuses it.
 - The token cannot bypass branch protection; there are no pushes to default branches.
 - fact acts only on people who can already write to the repository: a review or comment from anyone else (on a public repository, any GitHub account) is ignored, so it can neither merge a PR nor steer an agent (`07-reference-workflow.md`, Only maintainers count).
+
+## Trust and known gaps
+
+Decided 28 Nov 2026, holding until 1.0. **The organization is trusted; external input is not** (`05-domain-model.md`). Security work closes every path by which *external* input reaches an agent or a decision, completely, as the maintainers-only rule did for comments and reviews on a public repository. A hole that needs a malicious maintainer, or a second step after a sandbox is already compromised, is written down below and not engineered around: complete protection against every injection would cost more complexity than fact can carry. A gap moves to an issue only when its risk is severe.
+
+**Threat model.** Hostile: the agent and everything it runs (tests, lint, hooks, dependency installs), since external content can steer it. It must not reach the host's disk (`~/.ssh`, `~/.claude`, other repositories), the factory's `.env` and GitHub App key, the pinned checkouts, Temporal, the API or the database, nor any GitHub credential beyond the short-lived tokens a command receives. Accepted: it can read the Claude token it runs with and the repository it works on, and write bad code to its branch; classification and review catch that. The `docker` pool (`09-runners-and-harnesses.md`) is the boundary.
+
+**Known gaps**
+
+- **The host is reachable.** On Docker Desktop a container reaches the host through `host.docker.internal`, and the local Temporal server has no auth, so a compromised sandbox could signal or terminate runs. Fix later: an `--internal` network whose only way out is an egress proxy that refuses host and LAN addresses; auth on Temporal and the API comes with M5.
+- **Open egress.** A sandbox can send data anywhere. Fix later: an allowlist in the same egress proxy (Anthropic API, package registries, GitHub).
+- **The write token is the sandbox's.** For up to an hour after a push, a compromised sandbox holding the `contents: write` token can push to other branches of the repository, including another run's PR branch; the recommended ruleset stops force-pushes, deletions and tags, not that.
+- **Classification reads the run's clone.** `classify_signals` diffs inside the sandbox, whose git state the agent controls.
+- **Sandbox images are project code.** An agent's PR can change a Dockerfile, and an `auto_merge` classification merges it; the next pin builds it.
+- **Project config can loosen the sandbox.** A project's or workflow's `docker run` arguments come after fact's hardening.
