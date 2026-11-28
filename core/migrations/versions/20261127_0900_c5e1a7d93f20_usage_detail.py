@@ -19,6 +19,7 @@ revision: str = "c5e1a7d93f20"  # pragma: allowlist secret
 down_revision: str | None = "b8d4f02c3e51"  # pragma: allowlist secret
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
+breaking = True  # `steps.cost_usd` becomes nullable (`fact.core.migration_rules`)
 
 USD = sa.Numeric(precision=12, scale=6)
 

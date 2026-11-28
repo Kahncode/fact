@@ -4,51 +4,22 @@ from pathlib import Path
 
 import pytest
 from fact.cli import follow
+from fact.cli.breaking import BreakingUpgrade
 from fact.cli.follow import CHECK_INTERVAL_S, Follower
 from fact.cli.generations import Generations
-from fact.cli.processes import ChildSpec, RunDir
+from fact.cli.processes import ChildSpec
 from fact.cli.supervisor import Changes
-from fact.cli.use import factory_checkout
 from fact.core import generations
 from fact.core.settings import ProjectRef, Settings
-
-OLD, NEW = "a" * 40, "b" * 40
-HOME, HOME_2 = "c" * 40, "d" * 40
-
-
-class Clock:
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        return self.now
+from follow_fakes import HOME_2, NEW, OLD, Clock, Remote, make_workers
+from follow_fakes import started as _started
 
 
-def _pin(settings: Settings, sha: str) -> Path:
-    """Pin `sha` as `fact use` does: its checkout, then `current`."""
-    checkout = factory_checkout(settings, sha)
-    checkout.mkdir(parents=True, exist_ok=True)
-    (checkout / "pyproject.toml").write_text("", encoding="utf-8")
-    (settings.pinned_dir / "current").write_text(f"{sha}\n", encoding="utf-8")
-    return checkout
+class NoApi:
+    """An upgrade with no breaking migration never touches the scheduler nor a run."""
 
-
-class Remote:
-    """`origin/main` and the project's home branch as the follower sees them; `pin` pins `main`."""
-
-    def __init__(self, settings: Settings) -> None:
-        self.main, self.home, self.pins, self.broken = OLD, HOME, 0, False
-        self._settings = settings
-
-    def latest(self, _ref: str, _repo: Path) -> str:
-        return self.main
-
-    def pin(self, *_: object) -> Path:
-        if self.broken:
-            msg = "uv sync failed"
-            raise follow.PinError(msg)
-        self.pins += 1
-        return _pin(self._settings, self.main)
+    def __getattr__(self, name: str) -> object:  # noqa: D105
+        pytest.fail(f"the API was called: {name}")
 
 
 @pytest.fixture
@@ -60,33 +31,13 @@ def project_settings(settings: Settings) -> Settings:
 def remote(project_settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Remote:
     fake = Remote(project_settings)
     monkeypatch.setattr(follow, "latest", fake.latest)
-    monkeypatch.setattr(follow, "pin", fake.pin)
+    monkeypatch.setattr(follow, "prepare", fake.prepare)
     return fake
 
 
 @pytest.fixture
 def workers(project_settings: Settings, tmp_path: Path) -> Generations:
-    """Return the generations manager, its first generation of `OLD` up with the project at `HOME`."""
-    manager = Generations(
-        project_settings,
-        worker_spec=lambda checkout, g: ChildSpec(f"worker-{g.id}", [checkout.name, g.id]),
-        api_spec=lambda checkout: ChildSpec("api", [checkout.name]),
-        in_use=lambda _: set(),
-        ready=lambda checkout: checkout.is_dir(),
-        log=lambda _: None,
-    )
-    manager.initial(_pin(project_settings, OLD), RunDir(tmp_path / "run"))
-    _started(manager, {"acme": HOME})
-    return manager
-
-
-def _started(workers: Generations, projects: dict[str, str]) -> generations.Generation:
-    """Record the newest generation's home SHAs and its start, as its worker does."""
-    newest = generations.newest(workers.directory)
-    assert newest is not None
-    generations.write(workers.directory, generations.Generation(newest.id, newest.factory, projects))
-    generations.mark_started(workers.directory, newest.id)
-    return newest
+    return make_workers(project_settings, tmp_path / "run")
 
 
 @pytest.fixture
@@ -101,6 +52,7 @@ def follower(project_settings: Settings, workers: Generations, remote: Remote, c
         "main",
         uv="uv",
         workers=workers,
+        breaking=BreakingUpgrade(project_settings, workers=workers, log=lambda _: None, api=NoApi()),
         log=lambda _: None,
         clock=clock,
         resolve_home=lambda _home: remote.home,

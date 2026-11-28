@@ -166,14 +166,24 @@ def copy_secrets(repo: Path, checkout: Path) -> None:
         shutil.copyfile(source, checkout / DOTENV)
 
 
-def pin(settings: Settings, ref: str, uv: str, repo: Path = REPO_ROOT) -> Path:
-    """Fetch, check `ref` out under `pinned_dir/factory/<sha>`, sync it, point `current` at it; return the checkout."""
+def prepare(settings: Settings, ref: str, uv: str, repo: Path = REPO_ROOT) -> Path:
+    """Fetch, check `ref` out under `pinned_dir/factory/<sha>` and sync it, leaving `current` alone; return it."""
     sha = latest(ref, repo)
     checkout = factory_checkout(settings, sha)
     _checkout(repo, checkout, sha)
     copy_secrets(repo, checkout)
     _run(sync_argv(uv), checkout)
+    return checkout
+
+
+def set_current(settings: Settings, sha: str) -> None:
     current_file(settings).write_text(f"{sha}\n", encoding="utf-8", newline="\n")
+
+
+def pin(settings: Settings, ref: str, uv: str, repo: Path = REPO_ROOT) -> Path:
+    """Prepare `ref`'s checkout and point `current` at it; return the checkout."""
+    checkout = prepare(settings, ref, uv, repo)
+    set_current(settings, checkout.name)
     return checkout
 
 

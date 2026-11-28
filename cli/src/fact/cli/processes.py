@@ -26,6 +26,7 @@ KILL_TIMEOUT_S = 10.0
 START_TIME_TOLERANCE_S = 1.0  # start times are read from the OS clock; a reused pid starts later than this
 POLL_S = 0.2
 SOURCE_BUILD = "source"  # the build of processes run from the source tree; a pinned one is its SHA
+UPGRADE_FILE = "upgrade.json"  # a breaking upgrade in progress (`fact.cli.breaking`), not a process record
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,8 @@ class RunDir:
         """Every readable record by name; an unreadable one is removed."""
         found: dict[str, ProcessRecord] = {}
         for path in sorted(self.path.glob("*.json")):
+            if path.name == UPGRADE_FILE:
+                continue
             try:
                 found[path.stem] = ProcessRecord(**json.loads(path.read_text(encoding="utf-8")))
             except OSError, ValueError, TypeError:

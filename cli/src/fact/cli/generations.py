@@ -118,6 +118,15 @@ class Generations:
         self.running.add(generation.id)
         return specs
 
+    def retire_older(self) -> list[str]:
+        """Forget every generation but the newest and return their workers to stop (a breaking upgrade, no runs left)."""
+        found = generations.all_generations(self.directory)
+        for generation in found[:-1]:
+            self._log(f"generation {generation.id} is retired by the breaking upgrade: stopping its worker")
+            generations.delete(self.directory, generation.id)
+            self.running.discard(generation.id)
+        return [worker_name(g) for g in found[:-1]]
+
     def exited(self, name: str, code: int | None) -> bool:
         """
         Return whether to start a child that exited again: not the newest generation's worker before it started.

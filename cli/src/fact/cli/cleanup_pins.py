@@ -21,7 +21,7 @@ from pathlib import Path
 from fact.cli.dev_lock import running_pin
 from fact.cli.drainage import Version
 from fact.cli.generations import worker_name
-from fact.cli.processes import SOURCE_BUILD, ProcessRecord, RunDir, find_process
+from fact.cli.processes import SOURCE_BUILD, UPGRADE_FILE, ProcessRecord, RunDir, find_process
 from fact.cli.removal import Report, delete, is_trash, remove_checkout
 from fact.cli.use import FACTORY_SUBDIR, current_file
 from fact.core import generations
@@ -57,6 +57,8 @@ def recorded(run_dir: RunDir) -> dict[str, ProcessRecord | None]:
     """Every process record by name, None for an unreadable one (read only: unlike `RunDir.records`)."""
     found: dict[str, ProcessRecord | None] = {}
     for path in sorted(run_dir.path.glob("*.json")):
+        if path.name == UPGRADE_FILE:
+            continue
         try:
             found[path.stem] = ProcessRecord(**json.loads(path.read_text(encoding="utf-8")))
         except OSError, ValueError, TypeError:

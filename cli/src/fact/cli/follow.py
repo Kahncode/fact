@@ -7,27 +7,34 @@ branch (`git ls-remote`), and compares them with the newest generation (`fact.cl
 - `<ref>` moved: it pins it (`fact use`); the API restarts from the new pin and the new generation's worker starts;
 - only a project's home moved: a new generation of the same pin starts, the API untouched.
 
-Either way the old generations keep serving their runs: the scheduler is never turned off and no run is waited for.
+Either way the old generations keep serving their runs: the scheduler is never turned off and no run is waited for,
+unless a migration between the newest generation's pin and the new one says `breaking = True`
+(`fact.core.migration_rules`): the new pin is then prepared but not made current, and `fact.cli.breaking` stops the
+open runs, upgrades and starts their tasks again. No check runs while a breaking upgrade is in progress.
 While the newest generation's worker is not through its start, nothing is added; if it fails to start, `fact dev`
 deletes it (`Generations.exited`), the previous one stays current, and the next check tries again. A project the
 newest generation does not hold (it failed to load) counts as moved once its home moves after the follower's last
-check. A failed check (git, `uv sync`) is printed and retried at the next one.
+check. A failed check (git, `uv sync`, the API) is printed and retried at the next one.
 """
 
 import time
 from collections.abc import Callable
 from pathlib import Path
 
+from fact.cli.breaking import BreakingUpgrade
 from fact.cli.generations import Generations
 from fact.cli.supervisor import Changes
-from fact.cli.use import PinError, current_pin, github_url, latest, pin, remote_head
+from fact.cli.upgrade_api import UpgradeApiError
+from fact.cli.use import PinError, current_pin, factory_checkout, github_url, latest, prepare, remote_head, set_current
 from fact.core import generations
 from fact.core.generations import Generation
+from fact.core.migration_rules import breaking_between
 from fact.core.settings import REPO_ROOT, Settings
 
 CHECK_INTERVAL_S = 60.0
-# what a check can raise: git or uv failing (PinError), a file lock while pinning
-CHECK_ERRORS = (PinError, OSError)
+# what a check can raise: git or uv failing (PinError), a file lock while pinning, the API down as a breaking upgrade
+# begins (UpgradeApiError: it reads the scheduler's state before writing `upgrade.json`)
+CHECK_ERRORS = (PinError, OSError, UpgradeApiError)
 
 HomeResolver = Callable[[str], str]  # a project's home `owner/repo` to its default branch's SHA now
 
@@ -46,13 +53,14 @@ class Follower:
         *,
         uv: str,
         workers: Generations,
+        breaking: BreakingUpgrade,
         log: Callable[[str], None],
         repo: Path = REPO_ROOT,
         clock: Callable[[], float] = time.monotonic,
         resolve_home: HomeResolver | None = None,
     ) -> None:
         self._settings, self._ref, self._uv, self._repo = settings, ref, uv, repo
-        self._workers, self._log, self._clock = workers, log, clock
+        self._workers, self._breaking, self._log, self._clock = workers, breaking, log, clock
         self._resolve_home = resolve_home or (lambda home: remote_head(github_url(home), repo))
         self._seen: dict[str, str] = {}  # each project's home SHA at the last check
         self._waiting: str | None = None  # the generation whose start a check waits for, reported once
@@ -70,6 +78,8 @@ class Follower:
             return None
 
     def _check(self) -> Changes | None:
+        if self._breaking.active:
+            return None  # it upgrades by itself; checks resume once it is done
         sha = latest(self._ref, self._repo)
         homes = {p.name: self._resolve_home(p.home) for p in self._settings.projects}
         seen, self._seen = self._seen, homes
@@ -83,12 +93,20 @@ class Follower:
             return None
         if sha != newest.factory:
             self._log(f"{self._ref} moved {short(newest.factory)} -> {short(sha)}: pinning it")
-            checkout = pin(self._settings, self._ref, self._uv, self._repo)
-            return Changes(self._workers.add(checkout))
+            return self._pin(newest)
         if moved := _moved(newest, homes, seen):
             self._log(f"home of {', '.join(moved)} moved: starting a new generation of {short(sha)}")
             return Changes(self._workers.add(current_pin(self._settings)))
         return None
+
+    def _pin(self, newest: Generation) -> Changes | None:
+        """Pin the ref and start its generation; a breaking upgrade instead starts `fact.cli.breaking`'s steps."""
+        checkout = prepare(self._settings, self._ref, self._uv, self._repo)
+        if reasons := breaking_between(factory_checkout(self._settings, newest.factory), checkout):
+            self._breaking.begin(checkout.name, reasons)
+            return None
+        set_current(self._settings, checkout.name)
+        return Changes(self._workers.add(checkout))
 
 
 def _moved(newest: Generation, homes: dict[str, str], seen: dict[str, str]) -> list[str]:
