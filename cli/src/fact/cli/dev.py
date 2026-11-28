@@ -15,6 +15,7 @@ from typing import Annotated
 
 import typer
 from fact.cli import drainage
+from fact.cli.breaking import BreakingUpgrade
 from fact.cli.console import emit
 from fact.cli.dev_commands import (
     TEMPORAL_UI_PORT,
@@ -64,9 +65,17 @@ def _follow_pin(settings: Settings, ref: str) -> Path:
         raise typer.Exit(1) from exc
 
 
-def _follower(settings: Settings, ref: str, workers: Generations, source: Path, log: Callable[[str], None]) -> Follower:
+def _follower(  # noqa: PLR0913
+    settings: Settings,
+    ref: str,
+    *,
+    workers: Generations,
+    breaking: BreakingUpgrade,
+    source: Path,
+    log: Callable[[str], None],
+) -> Follower:
     uv = shutil.which("uv") or "uv"
-    return Follower(settings, ref, uv=uv, workers=workers, log=log, repo=source)
+    return Follower(settings, ref, uv=uv, workers=workers, breaking=breaking, log=log, repo=source)
 
 
 def pin_ready(checkout: Path) -> bool:
@@ -121,14 +130,15 @@ def _supervise(  # noqa: PLR0913
     commands = build_commands(settings, temporal_exe, checkout, workers=workers.initial(checkout, run_dir(settings)))
     width = max(len(c.name) for c in commands)  # the supervisor's prefix width
     running = REPO_ROOT.name if launcher is not None else None  # a launched `fact dev` runs from its pin
+    breaking = BreakingUpgrade(settings, workers=workers, log=log)  # resumes one a previous `fact dev` left
     restarters: list[Restarter] = [
         SelfRestart(settings, running=running, repo=source, log=log, launcher=launcher),
         retention,
     ]
     if follow is not None:
         typer.echo(f"Following {follow}: a new generation each time it or a project's home branch moves")
-        restarters.append(_follower(settings, follow, workers, source, log))
-    return run_all(commands, run_dir(settings), chain(*restarters, workers), workers.exited)
+        restarters.append(_follower(settings, follow, workers=workers, breaking=breaking, source=source, log=log))
+    return run_all(commands, run_dir(settings), chain(*restarters, breaking, workers), workers.exited)
 
 
 def _locked(settings: Settings, body: Callable[[], int], *, pin: str | None = None) -> int:
