@@ -45,6 +45,38 @@ def check_full_name(full_name: str) -> None:
         raise RunnerError(msg)
 
 
+def check_repos(spec: WorkspaceSpec) -> None:
+    """Refuse repositories sharing a folder name, unsafe names and branch names that git would read as options."""
+    names = [folder(r.full_name) for r in spec.repos]
+    if len(set(names)) != len(names):
+        msg = "two repositories share a folder name; the workspace needs distinct repo names"
+        raise RunnerError(msg)
+    for repo in spec.repos:
+        check_full_name(repo.full_name)
+        for branch in (repo.branch, repo.default_branch):
+            if branch.startswith("-") or not branch.strip():
+                msg = f"invalid branch name {branch!r}"
+                raise RunnerError(msg)
+
+
+def check_run_id(run_id: str) -> None:
+    if not _RUN_ID.match(run_id):
+        msg = f"invalid run id {run_id!r}"
+        raise RunnerError(msg)
+
+
+async def commit_identity(github: GitHubApp | None, settings: Settings) -> tuple[str, str]:
+    """Return the App's bot user (fact[bot]), or the settings' fallback without the App or when the lookup fails."""
+    if github is not None:
+        try:
+            bot = await github.bot_identity()  # cached by the App after the first lookup
+        except (GitHubError, httpx.HTTPError) as exc:
+            log.warning("bot_identity_unavailable", error=str(exc) or type(exc).__name__)
+        else:
+            return bot.name, bot.email
+    return settings.commit_author_name, settings.commit_author_email
+
+
 class LocalRunner:
     """
     Implements `Runner`. `remote_url` maps `owner/repo` to a clone URL; tests point it at a local bare repo.
@@ -89,9 +121,7 @@ class LocalRunner:
 
     def _root(self, run_id: str) -> Path:
         """Return the run folder, derived from the id so a handle can never point teardown elsewhere."""
-        if not _RUN_ID.match(run_id):
-            msg = f"invalid run id {run_id!r}"
-            raise RunnerError(msg)
+        check_run_id(run_id)
         return self._settings.workspaces_dir / run_id
 
     def _refuse_protected(self, root: Path) -> None:
@@ -105,16 +135,7 @@ class LocalRunner:
     def _validate(self, spec: WorkspaceSpec) -> Path:
         root = self._root(spec.run_id)
         self._refuse_protected(root)
-        names = [folder(r.full_name) for r in spec.repos]
-        if len(set(names)) != len(names):
-            msg = "two repositories share a folder name; the workspace needs distinct repo names"
-            raise RunnerError(msg)
-        for repo in spec.repos:
-            check_full_name(repo.full_name)
-            for branch in (repo.branch, repo.default_branch):
-                if branch.startswith("-") or not branch.strip():
-                    msg = f"invalid branch name {branch!r}"
-                    raise RunnerError(msg)
+        check_repos(spec)
         return root
 
     async def prepare(self, spec: WorkspaceSpec) -> WorkspaceHandle:
@@ -181,7 +202,7 @@ class LocalRunner:
         resumed = await self._git_ok("rev-parse", "--verify", "--quiet", remote_branch, cwd=clone)
         start = f"origin/{repo.branch}" if resumed else f"origin/{repo.default_branch}"
         await self._git("checkout", "--no-track", "-B", repo.branch, start, cwd=clone)
-        name, email = await self._commit_identity()
+        name, email = await commit_identity(self._github, self._settings)
         await self._git("config", "user.name", name, cwd=clone)
         await self._git("config", "user.email", email, cwd=clone)
         log.info("repo_cloned", repo=repo.full_name, branch=repo.branch, resumed=resumed)
@@ -195,16 +216,6 @@ class LocalRunner:
             msg = f"{clone} is outside the workspace {root}"
             raise RunnerError(msg)
         await self._git("fetch", "--prune", "origin", cwd=clone)
-
-    async def _commit_identity(self) -> tuple[str, str]:
-        if self._github is not None:
-            try:
-                bot = await self._github.bot_identity()  # cached by the App after the first lookup
-            except (GitHubError, httpx.HTTPError) as exc:
-                log.warning("bot_identity_unavailable", error=str(exc) or type(exc).__name__)
-            else:
-                return bot.name, bot.email
-        return self._settings.commit_author_name, self._settings.commit_author_email
 
     def exec(
         self,

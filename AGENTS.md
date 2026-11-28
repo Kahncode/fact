@@ -147,7 +147,7 @@ See `docs/spec/13-storage-and-stack.md` for the full stack rationale.
   - Settings are frozen; an app may subclass `Settings` via `override_settings_class`.
   - Clients (worker, CLI) reach the API at `settings.api_url`; don't build the URL from `api.host`/`api.port` yourself.
 - Clients retry while the API restarts (`fact.core.http_retry`): every worker call to the API goes through `fact.worker.client.api_http` (connection errors and 502/503/504, with backoff, for 60 s; `StepReporter` also retries a streamed upload on those for as long), and the CLI's `projects.make_client` for 5 s, then prints "Is `fact dev` running?".
-- GitHub access goes through `fact.core.github`: one `GitHubApp` per process from `shared_app(settings)` (its token caches are per instance), tokens from `installation_token(owner/repo)`, HTTP via `github_client`. Never log or print a token.
+- GitHub access goes through `fact.core.github`: one `GitHubApp` per process from `shared_app(settings)` (its token caches are per instance), tokens from `installation_token(owner/repo)` (or `repositories_token(full_names, permissions)` for one token scoped to several repositories and permissions, as `DockerRunner` hands each command), HTTP via `github_client`. Never log or print a token.
 
 ---
 

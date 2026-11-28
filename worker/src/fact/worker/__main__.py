@@ -9,7 +9,8 @@ queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). 
 `heartbeats.HeartbeatInterceptor`.
 Startup deletes a leftover `fact-scheduler` Schedule (`scheduler.py`): the scheduler ticks in the API now. While runs
 are active the worker keeps Windows awake (`keep_awake.py`). Loading a version whose `runner_pool` is `docker` builds
-its sandbox images (`sandboxes.py`); when `docker info` fails the worker exits with a message naming Docker.
+its sandbox images (`sandboxes.py`), and its workspace activities run on a `DockerRunner` with those images (one
+container per run); when `docker info` fails the worker exits with a message naming Docker.
 Started by `fact dev`, it stops once its stop file appears (`fact.core.stop_file`): like Ctrl-C, the main task is
 cancelled and the workers shut down gracefully, so a running agent step ends `AGENT_INTERRUPTED`.
 """
@@ -51,7 +52,7 @@ from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
 from fact.worker.loader import ProjectWorkflows, sandbox_runner
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalRunner
+from fact.worker.runners import DockerRunner, LocalRunner, Runner
 from fact.worker.sandboxes import DockerUnavailableError
 from fact.worker.scheduler import delete_leftover_schedule
 from temporalio.client import Client
@@ -107,10 +108,21 @@ def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
     )
 
 
+def project_runner(
+    settings: Settings, project: ProjectWorkflows, local: LocalRunner, github: GitHubApp | None
+) -> Runner:
+    """Return the runner of a project version: `local` shares the process's `LocalRunner`, `docker` gets its own images."""
+    if project.runner_pool.kind == "docker":
+        return DockerRunner(
+            settings, project.sandbox_images, project.runner_pool, remote_url=local.remote_url, github=github
+        )
+    return local
+
+
 def factory_activities(
     settings: Settings,
     http: httpx.AsyncClient,
-    runner: LocalRunner,
+    runner: Runner,
     github: GitHubApp | None,
     default_sandbox: str | None = None,
 ) -> list[Activity]:
@@ -161,7 +173,7 @@ def _project_workers(
     client: Client,
     project: ProjectWorkflows,
     activities: list[Activity],
-    runner: LocalRunner,
+    runner: Runner,
 ) -> list[Worker]:
     workers = activity_workers(client, project, activities, workspace_queue=runner.task_queue)
     return [*workers, workflow_worker(client, project)]
@@ -180,13 +192,11 @@ async def run(generation: str | None = None) -> None:
     projects = served.projects
     async with api_http(HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         await notify_refused(http, settings.api_url, served.refused)
-        workers = [
-            w
-            for p in projects
-            for w in _project_workers(
-                client, p, factory_activities(settings, http, runner, github, p.runner_pool.default_sandbox), runner
-            )
-        ]
+        workers: list[Worker] = []
+        for p in projects:
+            project_run = project_runner(settings, p, runner, github)
+            activities = factory_activities(settings, http, project_run, github, p.runner_pool.default_sandbox)
+            workers += _project_workers(client, p, activities, project_run)
         for worker in workers:
             await stack.enter_async_context(worker)
         await make_current(client, served)
