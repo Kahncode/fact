@@ -1,82 +1,73 @@
 """
-`fact shutdown`: stop the factory safely, such as before a reboot.
+`fact shutdown`: stop the factory's processes, not its runs, such as before a reboot.
 
-The command turns the scheduler off and sets its `shutdown` flag (`POST /scheduler/shutdown`, dev only), then returns.
-`fact dev`, in every mode, polls `GET /scheduler` and `GET /scheduler/active` every `POLL_INTERVAL_S` with a
-`ShutdownWatch`: once `shutdown` is set and no run is active (human waits included), it stops Temporal, the API and
-the worker and exits 0. `fact scheduler on` clears the flag, which cancels the shutdown. The flag lives in the API
-process only: an API restart drops it. There is no deadline and no forced stop.
+It acts on the records in `<data_dir>/run/` (`fact.cli.processes`), so it works whether or not `fact dev` runs: it
+writes the stop file of every worker and waits for them to exit, then the API's (and any other recorded process's),
+then stops Temporal, last. A process still alive after `STOP_TIMEOUT_S` has its tree killed. A worker's graceful stop
+ends a running agent step `AGENT_INTERRUPTED`, so the next `fact dev` resumes its session; runs stay open in Temporal.
+A running `fact dev` sees a stop file it did not write, or a child exited with its record removed, and stops
+everything itself, then exits 0.
 """
 
-import time
 from collections.abc import Callable
-from typing import Any
 
-import httpx
+import psutil
 import typer
-from fact.cli import projects
-from fact.cli.runs import API, api_error, call_api
-from fact.cli.supervisor import StopRequestedError
+from fact.cli.dev import run_dir
+from fact.cli.processes import STOP_TIMEOUT_S, ProcessRecord, RunDir, find_process, kill_tree
+from fact.core.settings import get_settings
 
-POLL_INTERVAL_S = 5.0
-SCHEDULER = f"{API}/scheduler"
-# what a poll can raise: the API down (starting, restarting) or answering oddly
-POLL_ERRORS = (httpx.HTTPError, KeyError, TypeError, ValueError)
+TEMPORAL = "temporal"
+WORKER = "worker"
 
 
-def call_scheduler(method: str, path: str) -> dict[str, Any]:
-    """Call `/api/v1/scheduler<path>` for `fact dev`; errors are raised for the caller to retry at its next poll."""
-    with projects.make_client() as client:
-        response = client.request(method, f"{SCHEDULER}{path}")
-    response.raise_for_status()
-    return response.json()
+def _phase(name: str, record: ProcessRecord) -> int:
+    """Stop order: the workers first, then the API and the rest, Temporal last."""
+    if TEMPORAL in (record.role, name):
+        return 2
+    return 0 if record.role.startswith(WORKER) else 1
 
 
-class ShutdownWatch:
-    """Polled by `fact dev`; raises `StopRequestedError` once `fact shutdown` was asked and no run is active."""
+def _stop_phase(run_dir: RunDir, procs: dict[str, psutil.Process], timeout: float) -> None:
+    for name in procs:
+        run_dir.request_stop(name)
+    _, alive = psutil.wait_procs(list(procs.values()), timeout=timeout)
+    for proc in alive:
+        kill_tree(proc)
+    for name in procs:
+        run_dir.remove(name)
 
-    def __init__(self, log: Callable[[str], None], clock: Callable[[], float] = time.monotonic) -> None:
-        self._log, self._clock = log, clock
-        self.shutdown = False  # the API's flag at the last poll that answered
-        self._active: int | None = None
-        self._next = clock() + POLL_INTERVAL_S
 
-    def __call__(self) -> None:
-        now = self._clock()
-        if now < self._next:
-            return
-        self._next = now + POLL_INTERVAL_S
-        try:
-            self._poll()
-        except POLL_ERRORS:  # the API is not answering; keep the last state and poll again
-            return
-
-    def _poll(self) -> None:
-        self.shutdown = bool(call_scheduler("GET", "").get("shutdown"))
-        if not self.shutdown:
-            if self._active is not None:
-                self._log("shutdown cancelled")
-            self._active = None
-            return
-        active = int(call_scheduler("GET", "/active")["active"])
-        if not active:
-            msg = "shutdown: no run active, stopping"
-            raise StopRequestedError(msg)
-        if active != self._active:
-            self._log(f"shutdown waits for {active} active run(s) to end")
-        self._active = active
+def stop_recorded(
+    run_dir: RunDir, log: Callable[[str], None], timeout: float = STOP_TIMEOUT_S
+) -> list[tuple[str, int]]:
+    """Stop every recorded live process in order and remove its record; return the (name, pid) of those stopped."""
+    phases: list[dict[str, psutil.Process]] = [{}, {}, {}]
+    for name, record in run_dir.records().items():
+        proc = find_process(record)
+        if proc is None:
+            run_dir.remove(name)
+            continue
+        phases[_phase(name, record)][name] = proc
+    workers, rest, temporal = phases
+    stopped: list[tuple[str, int]] = []
+    for group in (workers, rest):
+        if group:
+            log(f"stopping {', '.join(group)}")
+            _stop_phase(run_dir, group, timeout)
+            stopped += [(n, p.pid) for n, p in group.items()]
+    if temporal:  # it watches no stop file: killed once everything that calls it has exited
+        log(f"stopping {', '.join(temporal)}")
+        _stop_phase(run_dir, temporal, timeout=0)
+        stopped += [(n, p.pid) for n, p in temporal.items()]
+    return stopped
 
 
 def shutdown() -> None:
-    """Stop starting runs and let `fact dev` exit once the active ones end (`fact scheduler on` cancels)."""
-    try:
-        call_api("POST", f"{SCHEDULER}/shutdown")
-        active = int(call_api("GET", f"{SCHEDULER}/active")["active"])
-    except httpx.HTTPStatusError as e:
-        raise api_error(e) from e
-    typer.echo("Shutdown: the scheduler is off, no new run starts.")
-    if active:
-        typer.echo(f"{active} run(s) active: `fact dev` exits once they end.")
-    else:
-        typer.echo("No run active: `fact dev` exits within a few seconds.")
-    typer.echo("`fact scheduler on` cancels the shutdown.")
+    """Stop the workers, the API and Temporal now; open runs carry on at the next `fact dev`."""
+    stopped = stop_recorded(run_dir(get_settings()), typer.echo)
+    if not stopped:
+        typer.echo("No factory process is running; nothing to stop.")
+        return
+    typer.echo("Stopped " + ", ".join(f"{name} (pid {pid})" for name, pid in stopped) + ".")
+    typer.echo("Open runs stay open in Temporal and carry on at the next `fact dev`.")

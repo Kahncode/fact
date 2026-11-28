@@ -6,7 +6,8 @@ import typer
 from fact.cli import dev
 from fact.cli.dev_lock import DevLock
 from fact.cli.main import app
-from fact.cli.shutdown import ShutdownWatch
+from fact.core import generations
+from fact.core.generations import Generation
 from fact.core.settings import Settings
 from typer.testing import CliRunner
 
@@ -39,7 +40,7 @@ def test_dev_creates_data_dir_and_exits_with_the_supervisor_code(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, supervisor_code: int, exit_code: int
 ) -> None:
     monkeypatch.setattr(dev.shutil, "which", lambda _: "temporal")
-    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir, _restarter: supervisor_code)
+    monkeypatch.setattr(dev, "run_all", lambda _specs, _run_dir: supervisor_code)
 
     result = CliRunner().invoke(app, ["dev"])
 
@@ -78,11 +79,14 @@ def test_temporal_endpoint_rejects_missing_port() -> None:
 
 def test_build_commands_from_pinned(settings: Settings, tmp_path: Path) -> None:
     checkout = tmp_path / "pinned" / "abc"
-    temporal, api, worker = dev.build_commands(settings, "temporal", checkout, environ={})
+    generation = Generation(id="2-abcabcabcabc", factory="abc")
+    worker = dev.worker_command(settings, checkout, generation, environ={})
+    temporal, api, _ = dev.build_commands(settings, "temporal", checkout, environ={}, workers=[worker])
 
     python = str(dev.venv_python(checkout))
     assert api.argv == [python, "-m", "fact.api"]
-    assert worker.argv == [python, "-m", "fact.worker"]
+    assert worker.argv == [python, "-m", "fact.worker", "--generation", "2-abcabcabcabc"]
+    assert worker.name == "worker-2-abcabcabcabc"
     assert api.env == worker.env == {}  # the checkout reads its own fact.yaml and .env
     assert api.build == worker.build == "abc"
     assert temporal.env == {}
@@ -111,8 +115,7 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     monkeypatch.setattr(dev.shutil, "which", lambda name: name)
     started: list[list[str]] = []
 
-    def fake_run_all(specs: list, _run_dir: object, restarter: object) -> int:
-        assert isinstance(restarter, ShutdownWatch)  # plain and pinned runs exit on `fact shutdown` too
+    def fake_run_all(specs: list, _run_dir: object, _restarter: object) -> int:
         started.extend(s.argv for s in specs)
         return 130
 
@@ -123,6 +126,10 @@ def test_dev_pinned_runs_current_pin(settings: Settings, monkeypatch: pytest.Mon
     assert result.exit_code == 0, result.output
     assert f"Running pinned {sha}" in result.output
     assert started[1][0] == str(dev.venv_python(checkout))
+    generation = generations.newest(generations.generations_dir(settings.data_dir))
+    assert generation is not None
+    assert generation.factory == sha  # the pin's first start records its generation
+    assert started[2][-2:] == ["--generation", generation.id]
 
 
 def test_children_start_without_the_venv_activation(settings: Settings, tmp_path: Path) -> None:
@@ -178,4 +185,4 @@ def test_dev_follow_pins_when_nothing_is_pinned_and_supervises_with_a_follower(
     result = CliRunner().invoke(app, ["dev", "--follow", "main"])
 
     assert result.exit_code == 0, result.output
-    assert supervised[0].pinned == sha
+    assert supervised[0] is not None

@@ -21,6 +21,7 @@ from pathlib import Path
 from types import ModuleType
 
 from fact.core.activity_contract import workflow_queue
+from fact.core.generations import SHORT_SHA, version_id
 from fact.core.logging import get_logger
 from fact.core.settings import REPO_ROOT
 from fact.sdk.workflow import FactWorkflow
@@ -31,7 +32,6 @@ from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxR
 log = get_logger(__name__)
 
 WORKFLOWS_SUBDIR = Path(".fact") / "workflows"
-SHORT_SHA = 12  # the factory part of a version id; the home SHA stays whole, recorded apart as `home_sha`
 UNKNOWN_FACTORY = "unknown"  # the factory is not a git checkout
 _PROJECT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -61,11 +61,6 @@ class ProjectWorkflows:
     @property
     def deployment_name(self) -> str:
         return self.task_queue
-
-
-def version_id(factory_sha: str, home_sha: str) -> str:
-    """Return `<factory SHA, 12 chars>+<home SHA>`, which fits the 64-char `worker_version` column."""
-    return f"{factory_sha[:SHORT_SHA]}+{home_sha}"
 
 
 def home_sha_of(version: str) -> str | None:
@@ -188,16 +183,24 @@ def load_workflows(project: str, checkout: Path, sha: str) -> tuple[type[FactWor
     return tuple(found)
 
 
-async def load_project(
-    project: str, home: str, remote_url: RemoteUrl, pinned_dir: Path, factory: str
+async def load_project(  # noqa: PLR0913
+    project: str, home: str, remote_url: RemoteUrl, pinned_dir: Path, factory: str, *, sha: str | None = None
 ) -> ProjectWorkflows:
-    """Pin `project` to its home repository's default-branch SHA and load its workflows from that checkout."""
+    """
+    Load `project`'s workflows from a checkout of its home repository at `sha`.
+
+    Without `sha`, the home repository's default-branch SHA now (a generation's first start, or no generation).
+    """
     if not _PROJECT.match(project):
         msg = f"invalid project name {project!r}"
         raise WorkflowLoadError(msg)
+    if sha is not None and not _SHA.match(sha):
+        msg = f"invalid home SHA {sha!r} for project {project!r}"
+        raise WorkflowLoadError(msg)
     url = remote_url(home)
     pinned_dir.mkdir(parents=True, exist_ok=True)  # noqa: ASYNC240 - one directory, instant
-    sha = await default_branch_sha(url, pinned_dir)
+    if sha is None:
+        sha = await default_branch_sha(url, pinned_dir)
     checkout = await pinned_checkout(url, pinned_dir, project, sha)
     workflows = load_workflows(project, checkout, sha)
     names = [cls.__name__ for cls in workflows]

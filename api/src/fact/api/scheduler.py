@@ -64,12 +64,14 @@ log = get_logger(__name__)
 
 @dataclass
 class SchedulerRuntime:
-    """The scheduler's state in the API process (`app.state.scheduler`); losing it on a restart changes nothing else."""
+    """
+    The scheduler's state in the API process (`app.state.scheduler`); losing it on a restart changes nothing else.
+
+    The dev loop's on/off switch is not here: it lives in the database (`fact.api.scheduler_switch`).
+    """
 
     gate: UsageGate
     listings: Listings
-    on: bool = True  # dev only: whether the loop ticks (`fact scheduler on|off`); on at every API start
-    shutdown: bool = False  # dev only: `fact shutdown` asked `fact dev` to exit once no run is active; `on` clears it
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_tick_at: datetime | None = None
     last_tick: TickResult | None = None

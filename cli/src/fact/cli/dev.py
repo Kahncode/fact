@@ -2,7 +2,8 @@
 `fact dev`: Temporal dev server, API and worker in one command.
 
 They run detached, tracked in `<data_dir>/run/` (`fact.cli.processes`), so restarting `fact dev` adopts them and
-touches no running work; `<data_dir>/fact-dev.lock` (`fact.cli.dev_lock`) refuses a second `fact dev`.
+touches no running work; `<data_dir>/fact-dev.lock` (`fact.cli.dev_lock`) refuses a second `fact dev`. Pinned, it runs
+one worker per worker generation that should run (`fact.cli.generations`); from the source tree, one worker.
 """
 
 import os
@@ -13,12 +14,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from fact.cli import drainage
 from fact.cli.dev_lock import LOCK_NAME, AlreadyRunningError, DevLock
 from fact.cli.follow import Follower
+from fact.cli.generations import Generations, worker_name
 from fact.cli.processes import SOURCE_BUILD, ChildSpec, RunDir
-from fact.cli.shutdown import ShutdownWatch
-from fact.cli.supervisor import INTERRUPTED, emit, run_all
+from fact.cli.supervisor import INTERRUPTED, Restarter, chain, emit, port_open, run_all
 from fact.cli.use import PinError, current_pin, pin
+from fact.core.generations import Generation
 from fact.core.settings import Settings, get_settings
 
 TEMPORAL_UI_PORT = 8233
@@ -56,39 +59,50 @@ def deactivated_path(environ: Mapping[str, str]) -> str | None:
     return os.pathsep.join(p for p in environ.get("PATH", "").split(os.pathsep) if p and Path(p) != scripts)
 
 
-def factory_commands(
-    settings: Settings, pinned: Path | None = None, environ: Mapping[str, str] | None = None
-) -> list[ChildSpec]:
-    """
-    Return the API and worker processes; the worker waits for Temporal's port.
-
-    With `pinned`, they run from that checkout's venv and read its own `fact.yaml` and `.env` (copied by `fact use`).
-    Either way they start without the venv activation `fact dev` may have inherited, so the workspaces they create
-    see a plain environment.
-    """
-    python = python_argv(pinned)
+def _child_env(environ: Mapping[str, str] | None) -> dict[str, str]:
     env: dict[str, str] = {}
     path = deactivated_path(os.environ if environ is None else environ)
     if path is not None:
         env["PATH"] = path
+    return env
+
+
+def api_command(settings: Settings, pinned: Path | None = None, environ: Mapping[str, str] | None = None) -> ChildSpec:
+    """
+    Return the API process: from the source tree, or from `pinned`'s venv, reading its own `fact.yaml` and `.env`.
+
+    Every factory process starts without the venv activation `fact dev` may have inherited, so the workspaces they
+    create see a plain environment.
+    """
     build = SOURCE_BUILD if pinned is None else pinned.name
-    return [
-        ChildSpec("api", [*python, "-m", "fact.api"], build=build, port=settings.api.port, env=env, unset=VENV_VARS),
-        ChildSpec(
-            "worker",
-            [*python, "-m", "fact.worker"],
-            build=build,
-            wait_for=temporal_endpoint(settings),
-            env=env,
-            unset=VENV_VARS,
-        ),
-    ]
+    argv = [*python_argv(pinned), "-m", "fact.api"]
+    return ChildSpec("api", argv, build=build, port=settings.api.port, env=_child_env(environ), unset=VENV_VARS)
+
+
+def worker_command(
+    settings: Settings,
+    pinned: Path | None = None,
+    generation: Generation | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> ChildSpec:
+    """Return a worker process, which waits for Temporal's port: the source tree's, or a generation's from its pin."""
+    argv = [*python_argv(pinned), "-m", "fact.worker"]
+    name, build = "worker", SOURCE_BUILD if pinned is None else pinned.name
+    if generation is not None:
+        argv += ["--generation", generation.id]
+        name = worker_name(generation)
+    wait_for = temporal_endpoint(settings)
+    return ChildSpec(name, argv, build=build, wait_for=wait_for, env=_child_env(environ), unset=VENV_VARS)
 
 
 def build_commands(
-    settings: Settings, temporal_exe: str, pinned: Path | None = None, environ: Mapping[str, str] | None = None
+    settings: Settings,
+    temporal_exe: str,
+    pinned: Path | None = None,
+    environ: Mapping[str, str] | None = None,
+    workers: list[ChildSpec] | None = None,
 ) -> list[ChildSpec]:
-    """Return the processes `fact dev` starts, in order: Temporal, then `factory_commands`."""
+    """Return the processes `fact dev` starts, in order: Temporal, the API, then `workers` (the source tree's one)."""
     _, temporal_port = temporal_endpoint(settings)
     temporal = [
         temporal_exe,
@@ -101,9 +115,10 @@ def build_commands(
         "--ui-port",
         str(TEMPORAL_UI_PORT),
     ]
-    factory = factory_commands(settings, pinned, environ)
+    api = api_command(settings, pinned, environ)
+    workers = [worker_command(settings, environ=environ)] if workers is None else workers
     # killed, not stopped gracefully: it has no stop file to watch
-    return [ChildSpec("temporal", temporal, build=factory[0].build, port=temporal_port, graceful=False), *factory]
+    return [ChildSpec("temporal", temporal, build=api.build, port=temporal_port, graceful=False), api, *workers]
 
 
 def _pinned_or_exit(settings: Settings) -> Path:
@@ -137,12 +152,25 @@ def _follow_pin(settings: Settings, ref: str) -> Path:
 
 def _follower(settings: Settings, ref: str, checkout: Path, log: Callable[[str], None]) -> Follower:
     uv = shutil.which("uv") or "uv"
-    return Follower(
+    return Follower(settings, ref, uv=uv, pinned=checkout.name, log=log)
+
+
+def pin_ready(checkout: Path) -> bool:
+    return (checkout / "pyproject.toml").is_file() and venv_python(checkout).exists()
+
+
+def generations(settings: Settings, log: Callable[[str], None]) -> Generations:
+    def in_use(versions: list[drainage.Version]) -> set[drainage.Version] | None:
+        if versions and not port_open(*temporal_endpoint(settings)):
+            return None  # Temporal is not up yet: ask at the next check
+        return drainage.versions_in_use(settings, versions)
+
+    return Generations(
         settings,
-        ref,
-        uv=uv,
-        pinned=checkout.name,
-        commands=lambda c: factory_commands(settings, c),
+        worker_spec=lambda checkout, generation: worker_command(settings, checkout, generation),
+        api_spec=lambda checkout: api_command(settings, checkout),
+        in_use=in_use,
+        ready=pin_ready,
         log=log,
     )
 
@@ -158,16 +186,21 @@ def _supervise(settings: Settings, temporal_exe: str, follow: str | None, *, pin
     if checkout is not None:
         typer.echo(f"Running pinned {checkout.name} from {checkout}")
     typer.echo(f"Temporal UI: http://localhost:{TEMPORAL_UI_PORT}  API: {settings.api_url}")
-    commands = build_commands(settings, temporal_exe, checkout)
-    width = max(len(c.name) for c in [*commands, ChildSpec("fact", [])])  # the supervisor's prefix width
+    width = len("fact")
 
     def log(line: str) -> None:
         emit("fact", width, line)
 
-    if follow is not None and checkout is not None:
+    if checkout is None:
+        return run_all(build_commands(settings, temporal_exe), run_dir(settings))
+    workers = generations(settings, log)
+    commands = build_commands(settings, temporal_exe, checkout, workers=workers.initial(checkout, run_dir(settings)))
+    width = max(len(c.name) for c in commands)  # the supervisor's prefix width
+    restarter: Restarter = workers
+    if follow is not None:
         typer.echo(f"Following {follow}: upgrading once it moves and no run is active")
-        return run_all(commands, run_dir(settings), _follower(settings, follow, checkout, log))
-    return run_all(commands, run_dir(settings), ShutdownWatch(log))
+        restarter = chain(_follower(settings, follow, checkout, log), workers)
+    return run_all(commands, run_dir(settings), restarter)
 
 
 def dev(
@@ -187,7 +220,8 @@ def dev(
     """
     Start Temporal, the API and the worker, or adopt those still running; keep them running.
 
-    Ctrl-C stops all three, and so does `fact shutdown` once no run is active. Killing `fact dev` leaves them running.
+    Ctrl-C stops all three, and so does `fact shutdown`; open runs carry on at the next start. Killing `fact dev`
+    leaves them running.
     """
     temporal_exe = shutil.which("temporal")
     if temporal_exe is None:

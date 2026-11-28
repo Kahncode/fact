@@ -1,7 +1,9 @@
 """
-`python -m fact.worker`: run the workers until interrupted.
+`python -m fact.worker [--generation ID]`: run the workers until interrupted.
 
-One workflow worker per registered project on `wf-<project>` (versioned and pinned, see `deployments.py`), and for
+With `--generation`, it serves that worker generation (`generation.py`): each project at the generation's home SHA,
+and only the newest generation makes its versions current. Without it, every project at its head, made current.
+One workflow worker per served project on `wf-<project>` (versioned and pinned, see `deployments.py`), and for
 each the `control` and workspace activity workers of the same version (`activity_workers.py`): every activity on the
 queue of its spec's zone, the workspace ones on the runner's queue (`sandbox`). Every activity heartbeats through
 `heartbeats.HeartbeatInterceptor`.
@@ -11,6 +13,7 @@ Started by `fact dev`, it stops once its stop file appears (`fact.core.stop_file
 cancelled and the workers shut down gracefully, so a running agent step ends `AGENT_INTERRUPTED`.
 """
 
+import argparse
 import asyncio
 import signal
 import sys
@@ -39,23 +42,20 @@ from fact.worker.activities.shell import ShellActivities
 from fact.worker.activities.task_status import TaskStatusActivities
 from fact.worker.activities.workspace import WorkspaceActivities
 from fact.worker.activity_workers import Activity, activity_workers
-from fact.worker.client import connect
-from fact.worker.deployments import deployment_config, set_current_version
+from fact.worker.client import api_http, connect
+from fact.worker.deployments import deployment_config
+from fact.worker.generation import make_current, serve
 from fact.worker.harnesses import ClaudeCodeHarness
 from fact.worker.keep_awake import KeepAwake, api_active_runs, watch_active_runs
-from fact.worker.loader import ProjectWorkflows, WorkflowLoadError, factory_sha, load_project, sandbox_runner
+from fact.worker.loader import ProjectWorkflows, sandbox_runner
 from fact.worker.reporting import StepReporter
-from fact.worker.runners import LocalRunner, RunnerError
+from fact.worker.runners import LocalRunner
 from fact.worker.scheduler import delete_leftover_schedule
 from temporalio.client import Client
 from temporalio.worker import Worker
 
 HTTP_TIMEOUT_S = 30.0
 _background: set[asyncio.Task[None]] = set()  # keeps the stop-file watch referenced while it runs
-
-
-class DuplicateVersionError(RuntimeError):
-    """Two registered projects share a build id: the process polls for one, so the other's runs would stall."""
 
 
 def _cancel_on_ctrl_break() -> None:
@@ -92,32 +92,6 @@ def _github_app(settings: Settings) -> GitHubApp | None:
     except GitHubAppConfigError as exc:
         get_logger("fact.worker").warning("github_app_unavailable", error=str(exc))
         return None
-
-
-async def load_projects(settings: Settings, runner: LocalRunner) -> list[ProjectWorkflows]:
-    """
-    Load every registered project's workflows; a project that fails to load is logged and skipped.
-
-    Raise `DuplicateVersionError` when two projects share a build id (one home repository at one SHA).
-    """
-    log = get_logger("fact.worker")
-    factory = await factory_sha()
-    loaded: list[ProjectWorkflows] = []
-    for ref in settings.projects:
-        try:
-            project = await load_project(ref.name, ref.home, runner.remote_url, settings.pinned_dir, factory)
-        except (WorkflowLoadError, RunnerError) as exc:
-            log.error("workflow_load_failed", project=ref.name, error=str(exc))  # noqa: TRY400 - the message is enough
-            continue
-        if not project.workflows:
-            log.warning("no_workflows", project=ref.name, checkout=str(project.checkout))
-            continue
-        clash = next((p for p in loaded if p.version == project.version), None)
-        if clash is not None:  # one process polls a queue once per build id
-            msg = f"projects {clash.project!r} and {ref.name!r} share build id {project.version}: register their home once"
-            raise DuplicateVersionError(msg)
-        loaded.append(project)
-    return loaded
 
 
 def workflow_worker(client: Client, project: ProjectWorkflows) -> Worker:
@@ -182,7 +156,7 @@ def _project_workers(
     return [*workers, workflow_worker(client, project)]
 
 
-async def run() -> None:
+async def run(generation: str | None = None) -> None:
     _cancel_on_ctrl_break()
     _cancel_on_stop_file()
     settings = get_settings()
@@ -191,25 +165,38 @@ async def run() -> None:
     log = get_logger("fact.worker")
     github = _github_app(settings)
     runner = LocalRunner(settings, github=github)
-    projects = await load_projects(settings, runner)
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
+    served = await serve(settings, runner, generation)
+    projects = served.projects
+    async with api_http(HTTP_TIMEOUT_S) as http, AsyncExitStack() as stack:
         activities = factory_activities(settings, http, runner, github)
         workers = [w for p in projects for w in _project_workers(client, p, activities, runner)]
         for worker in workers:
             await stack.enter_async_context(worker)
-        for project in projects:
-            await set_current_version(client, project)  # failing here beats runs that never start
+        await make_current(client, served)
         await delete_leftover_schedule(client)
         queues = [CONTROL_QUEUE, runner.task_queue, *(p.task_queue for p in projects)]
-        log.info("worker_started", queues=queues, address=settings.temporal.address)
+        log.info(
+            "worker_started",
+            generation=generation,
+            current=served.current,
+            queues=queues,
+            address=settings.temporal.address,
+        )
         # on this (the event-loop) thread: the keep-awake hold lasts only while its calling thread lives
         keeper = KeepAwake(enabled=settings.worker.keep_awake)
         await watch_active_runs(keeper, api_active_runs(settings.api_url, http))  # until cancelled
 
 
-def main() -> None:
+def _args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="python -m fact.worker")
+    parser.add_argument("--generation", help="the worker generation to serve (`<data_dir>/run/generations/<id>.json`)")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _args(argv)
     try:
-        asyncio.run(run())
+        asyncio.run(run(args.generation))
     except KeyboardInterrupt, asyncio.CancelledError:
         get_logger("fact.worker").info("worker_stopped")
 

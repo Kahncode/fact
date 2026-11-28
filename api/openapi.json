@@ -1260,11 +1260,6 @@
               }
             ],
             "title": "On"
-          },
-          "shutdown": {
-            "default": false,
-            "title": "Shutdown",
-            "type": "boolean"
           }
         },
         "required": [
@@ -1835,6 +1830,11 @@
       },
       "StopIn": {
         "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
           "reason": {
             "default": "",
             "maxLength": 4000,
@@ -1843,6 +1843,29 @@
           }
         },
         "title": "StopIn",
+        "type": "object"
+      },
+      "Stopped": {
+        "properties": {
+          "hold_error": {
+            "default": "",
+            "title": "Hold Error",
+            "type": "string"
+          },
+          "human_touches": {
+            "title": "Human Touches",
+            "type": "integer"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "human_touches"
+        ],
+        "title": "Stopped",
         "type": "object"
       },
       "TickResult": {
@@ -2864,7 +2887,7 @@
     },
     "/api/v1/runs/{run_id}/stop": {
       "post": {
-        "description": "Cancel the run's workflow with a reason; it ends `stopped`, leaving a handoff note, its branch and its PRs.\n\nAccepted, not done: the run's own worker version handles the cancellation, and the run shows `stopped` once its\nnote is written and its workspace is gone. Start the task again then.",
+        "description": "Cancel the run's workflow with a reason; it ends `stopped`, leaving a handoff note, its branch and its PRs.\n\nAccepted, not done: the run's own worker version handles the cancellation, and the run shows `stopped` once its\nnote is written and its workspace is gone. Start the task again then.\n\nWith `force`, the workflow is terminated instead, which needs no worker: the run is recorded `stopped` and the\ntask held here, at once, with no handoff note and the workspace left on disk.",
         "operationId": "stop_api_v1_runs__run_id__stop_post",
         "parameters": [
           {
@@ -2892,7 +2915,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Touched"
+                  "$ref": "#/components/schemas/Stopped"
                 }
               }
             },
@@ -3001,25 +3024,6 @@
           }
         },
         "summary": "Scheduler Preview"
-      }
-    },
-    "/api/v1/scheduler/shutdown": {
-      "post": {
-        "description": "Turn the loop off and ask `fact dev` to exit once no run is active; `POST /scheduler/on` cancels it.",
-        "operationId": "scheduler_shutdown_api_v1_scheduler_shutdown_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchedulerState"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "Scheduler Shutdown"
       }
     },
     "/api/v1/scheduler/tick": {

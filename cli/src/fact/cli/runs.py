@@ -24,7 +24,11 @@ def _fail(message: str) -> typer.Exit:
 
 
 def call_api(method: str, path: str, **kwargs: Any) -> Any:  # noqa: ANN401
-    """Call the API and return its JSON; HTTP errors come back as `httpx.HTTPStatusError` for the caller to read."""
+    """
+    Call the API and return its JSON; HTTP errors come back as `httpx.HTTPStatusError` for the caller to read.
+
+    The client retries for a few seconds while the API restarts (`projects.make_client`); still unreachable, it fails.
+    """
     with projects.make_client() as client:
         try:
             response = client.request(method, path, **kwargs)
@@ -252,13 +256,28 @@ def stop(
     run_ref: Annotated[str, typer.Argument(metavar="RUN", help="Run id or workflow id (run-...).")],
     *,
     reason: Annotated[str, typer.Option(help="Why, for the handoff note the next run gets.")] = "",
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Terminate the workflow now, even with no worker for its version: no handoff note, no teardown.",
+        ),
+    ] = False,
 ) -> None:
     """Stop a run: it ends `stopped`, keeping its branch and PRs; `fact run` then restarts the task on the latest code."""
     try:
         run_id = _find_run(run_ref)["id"]
-        call_api("POST", f"{API}/runs/{quote(run_id, safe='')}/stop", json={"reason": reason})
+        body = {"reason": reason, "force": force}
+        stopped = call_api("POST", f"{API}/runs/{quote(run_id, safe='')}/stop", json=body)
     except httpx.HTTPStatusError as e:
         raise api_error(e) from e
+    if force:
+        typer.echo(f"Stopped {run_ref}: terminated, recorded `stopped` (forced), with no handoff note.")
+        if hold_error := stopped.get("hold_error"):
+            typer.echo(f"warning: the task was not held: {hold_error}", err=True)
+        typer.echo(f"Its workspace is kept: delete {get_settings().workspaces_dir / run_id} by hand.")
+        typer.echo("Then start the task again with `fact run`; the new run reuses the branch and the PR.")
+        return
     typer.echo(
         f"Stopping {run_ref}: it ends `stopped` once its worker writes the handoff note and removes its workspace."
     )
